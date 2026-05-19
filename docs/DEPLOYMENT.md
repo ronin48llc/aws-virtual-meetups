@@ -27,9 +27,13 @@ The platform uses CDK context for configuration. Set values in `cdk.context.json
 
 ```json
 {
-  "account": "911445170957",
+  "account": "123456789012",
   "region": "us-east-1",
   "env": "dev",
+  "domainName": "yourdomain.com",
+  "hostedZoneId": "YOUR_HOSTED_ZONE_ID",
+  "ivsStorageConfigArn": "arn:aws:ivs:us-east-1:123456789012:storage-configuration/xxxxx",
+  "ivsEncoderConfigArn": "arn:aws:ivs:us-east-1:123456789012:encoder-configuration/xxxxx",
   "alarmEmails": ["ops@example.com"]
 }
 ```
@@ -40,8 +44,8 @@ Environment variables used by the frontend are hardcoded in `frontend/index.html
 |----------|-------------|
 | `COGNITO_USER_POOL_ID` | Cognito User Pool ID (from Auth stack output) |
 | `COGNITO_CLIENT_ID` | Cognito App Client ID (from Auth stack output) |
-| `API_BASE_URL` | HTTP API endpoint (e.g., `https://api.awsvirtualmeetups.com`) |
-| `WS_BASE_URL` | WebSocket endpoint (e.g., `wss://ws.awsvirtualmeetups.com`) |
+| `API_BASE_URL` | HTTP API endpoint (e.g., `https://api.yourdomain.com`) |
+| `WS_BASE_URL` | WebSocket endpoint (e.g., `wss://ws.yourdomain.com`) |
 
 ## Deployment Sequence
 

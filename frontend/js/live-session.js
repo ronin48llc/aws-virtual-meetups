@@ -408,12 +408,20 @@ const LiveSession = (() => {
       chatInput.addEventListener('input', handleTypingInput);
     }
 
-    // Show static caption placeholder
+    // Initialize captions
     var captionEl = document.getElementById('caption-text');
     if (captionEl) {
-      captionEl.textContent = 'Live captions are not yet available for this session';
-      captionEl.style.fontStyle = 'italic';
-      captionEl.style.color = '#8b949e';
+      if (userRole === 'presenter') {
+        captionEl.textContent = 'Click "Start Captions" to enable live transcription';
+        captionEl.style.fontStyle = 'italic';
+        captionEl.style.color = '#8b949e';
+        // Add Start Captions button for presenter
+        addCaptionControlButton();
+      } else {
+        captionEl.textContent = 'Waiting for presenter to enable captions...';
+        captionEl.style.fontStyle = 'italic';
+        captionEl.style.color = '#8b949e';
+      }
     }
   }
 
@@ -1246,6 +1254,456 @@ const LiveSession = (() => {
 
   // --- Captions ---
 
+  // Transcription state
+  let transcribeWs = null;
+  let transcriptionActive = false;
+  let audioContext = null;
+  let audioProcessor = null;
+  let captionSourceStream = null;
+
+  /**
+   * Add a "Start Captions" button to the caption area for presenters.
+   */
+  function addCaptionControlButton() {
+    var captionArea = document.getElementById('caption-area');
+    if (!captionArea) return;
+
+    var headerDiv = captionArea.querySelector('div');
+    if (!headerDiv) return;
+
+    var btn = document.createElement('button');
+    btn.id = 'btn-start-captions';
+    btn.textContent = '▶ Start Captions';
+    btn.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; font-size: 12px; cursor: pointer; margin-left: 8px;';
+    btn.onclick = function() {
+      if (transcriptionActive) {
+        stopTranscription();
+      } else {
+        startTranscription();
+      }
+    };
+    headerDiv.appendChild(btn);
+  }
+
+  /**
+   * Start live transcription.
+   * 1. Calls the backend to get a pre-signed Transcribe Streaming URL
+   * 2. Connects to Transcribe via WebSocket
+   * 3. Captures mic audio, encodes as PCM, streams to Transcribe
+   * 4. Receives transcripts and broadcasts to all attendees
+   */
+  async function startTranscription() {
+    var btn = document.getElementById('btn-start-captions');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Starting...';
+    }
+
+    try {
+      var apiBase = window.API_BASE_URL || '/api';
+      var token = Auth.getIdToken();
+
+      // Get the source language from the caption language selector
+      var langSelect = document.getElementById('caption-language-select');
+      var selectedLang = langSelect ? langSelect.value : 'en';
+      // Map short code to Transcribe language code
+      var transcribeLangMap = {
+        'en': 'en-US', 'es': 'es-US', 'fr': 'fr-FR', 'de': 'de-DE',
+        'pt': 'pt-BR', 'ja': 'ja-JP', 'ko': 'ko-KR', 'zh': 'zh-CN'
+      };
+      var sourceLanguage = transcribeLangMap[selectedLang] || 'en-US';
+
+      var res = await fetch(apiBase + '/events/' + encodeURIComponent(eventId) + '/transcription/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token,
+        },
+        body: JSON.stringify({
+          sourceLanguage: sourceLanguage,
+          sampleRate: 16000,
+          mediaEncoding: 'pcm',
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to get transcription URL (' + res.status + ')');
+      }
+
+      var data = await res.json();
+      var presignedUrl = data.presignedUrl;
+
+      // Connect to Amazon Transcribe Streaming via WebSocket
+      await connectToTranscribe(presignedUrl);
+
+      transcriptionActive = true;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '⏹ Stop Captions';
+        btn.style.background = '#e63946';
+        btn.style.borderColor = '#e63946';
+      }
+
+      var captionEl = document.getElementById('caption-text');
+      if (captionEl) {
+        captionEl.textContent = '';
+        captionEl.style.fontStyle = 'normal';
+        captionEl.style.color = '#e6edf3';
+      }
+    } catch (err) {
+      console.error('Failed to start transcription:', err);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '▶ Start Captions';
+      }
+      showNotification('Failed to start captions: ' + (err.message || 'Unknown error'));
+    }
+  }
+
+  /**
+   * Connect to Amazon Transcribe Streaming WebSocket and start audio capture.
+   * @param {string} presignedUrl - The pre-signed WebSocket URL for Transcribe.
+   */
+  async function connectToTranscribe(presignedUrl) {
+    // Set up audio capture from the presenter's microphone
+    var stream;
+    if (localStreams.mic) {
+      // Use the existing mic track
+      stream = new MediaStream([localStreams.mic]);
+    } else {
+      // Request mic access
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
+    }
+    captionSourceStream = stream;
+
+    // Create AudioContext for PCM encoding
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    var source = audioContext.createMediaStreamSource(stream);
+
+    // Use ScriptProcessorNode (widely supported) to capture raw PCM
+    var bufferSize = 4096;
+    audioProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+    // Connect to Transcribe WebSocket
+    transcribeWs = new WebSocket(presignedUrl);
+    transcribeWs.binaryType = 'arraybuffer';
+
+    var partialTranscript = '';
+
+    transcribeWs.onopen = function() {
+      console.log('Transcribe WebSocket connected');
+      // Start sending audio data
+      source.connect(audioProcessor);
+      audioProcessor.connect(audioContext.destination);
+    };
+
+    transcribeWs.onmessage = function(event) {
+      try {
+        // Transcribe Streaming returns event-stream encoded messages
+        var message = decodeTranscribeMessage(event.data);
+        if (message && message.Transcript && message.Transcript.Results) {
+          message.Transcript.Results.forEach(function(result) {
+            if (result.Alternatives && result.Alternatives.length > 0) {
+              var transcript = result.Alternatives[0].Transcript;
+              if (result.IsPartial) {
+                // Show partial transcript locally
+                partialTranscript = transcript;
+                displayCaption(transcript);
+              } else {
+                // Final transcript — broadcast to all attendees
+                partialTranscript = '';
+                displayCaption(transcript);
+                broadcastCaptionToAttendees(transcript, captionLanguage);
+              }
+            }
+          });
+        }
+      } catch (err) {
+        // Some messages may not be JSON (binary event stream)
+        // Try the event-stream binary decoder
+        try {
+          var decoded = decodeEventStreamMessage(event.data);
+          if (decoded) {
+            if (decoded.Transcript && decoded.Transcript.Results) {
+              decoded.Transcript.Results.forEach(function(result) {
+                if (result.Alternatives && result.Alternatives.length > 0) {
+                  var transcript = result.Alternatives[0].Transcript;
+                  if (!result.IsPartial) {
+                    displayCaption(transcript);
+                    broadcastCaptionToAttendees(transcript, captionLanguage);
+                  } else {
+                    displayCaption(transcript);
+                  }
+                }
+              });
+            }
+          }
+        } catch (e2) {
+          // Ignore decode errors for non-transcript messages
+        }
+      }
+    };
+
+    transcribeWs.onerror = function(err) {
+      console.error('Transcribe WebSocket error:', err);
+    };
+
+    transcribeWs.onclose = function() {
+      console.log('Transcribe WebSocket closed');
+    };
+
+    // Send audio frames to Transcribe
+    audioProcessor.onaudioprocess = function(e) {
+      if (!transcribeWs || transcribeWs.readyState !== WebSocket.OPEN) return;
+
+      var inputData = e.inputBuffer.getChannelData(0);
+      // Convert Float32 to Int16 PCM
+      var pcmData = float32ToInt16(inputData);
+      // Wrap in event-stream frame and send
+      var frame = encodeAudioEvent(pcmData);
+      transcribeWs.send(frame);
+    };
+  }
+
+  /**
+   * Stop live transcription and clean up resources.
+   */
+  function stopTranscription() {
+    transcriptionActive = false;
+
+    if (audioProcessor) {
+      audioProcessor.disconnect();
+      audioProcessor = null;
+    }
+    if (audioContext) {
+      audioContext.close().catch(function() {});
+      audioContext = null;
+    }
+    if (transcribeWs) {
+      transcribeWs.close();
+      transcribeWs = null;
+    }
+    // Don't stop captionSourceStream if it's the shared mic track
+    if (captionSourceStream && !localStreams.mic) {
+      captionSourceStream.getTracks().forEach(function(t) { t.stop(); });
+    }
+    captionSourceStream = null;
+
+    var btn = document.getElementById('btn-start-captions');
+    if (btn) {
+      btn.textContent = '▶ Start Captions';
+      btn.style.background = '#21262d';
+      btn.style.borderColor = '#30363d';
+    }
+
+    var captionEl = document.getElementById('caption-text');
+    if (captionEl) {
+      captionEl.textContent = 'Captions stopped';
+      captionEl.style.fontStyle = 'italic';
+      captionEl.style.color = '#8b949e';
+    }
+  }
+
+  /**
+   * Broadcast a caption to all attendees via WebSocket.
+   * @param {string} text - The transcribed text.
+   * @param {string} language - The language code.
+   */
+  function broadcastCaptionToAttendees(text, language) {
+    sendWebSocketMessage('broadcastCaption', {
+      text: text,
+      language: language || 'en',
+      isFinal: true,
+    });
+  }
+
+  /**
+   * Convert Float32Array audio samples to Int16 PCM.
+   * @param {Float32Array} float32Array - Input audio samples (-1.0 to 1.0).
+   * @returns {ArrayBuffer} Int16 PCM encoded audio.
+   */
+  function float32ToInt16(float32Array) {
+    var buffer = new ArrayBuffer(float32Array.length * 2);
+    var view = new DataView(buffer);
+    for (var i = 0; i < float32Array.length; i++) {
+      var s = Math.max(-1, Math.min(1, float32Array[i]));
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    return buffer;
+  }
+
+  /**
+   * Encode audio data into an AWS event-stream frame for Transcribe Streaming.
+   * The event-stream format requires specific headers and framing.
+   * @param {ArrayBuffer} pcmData - The PCM audio data.
+   * @returns {ArrayBuffer} The encoded event-stream frame.
+   */
+  function encodeAudioEvent(pcmData) {
+    // Event stream message format:
+    // [total_length:4][headers_length:4][prelude_crc:4][headers][payload][message_crc:4]
+    var contentType = ':content-type';
+    var contentTypeValue = 'application/octet-stream';
+    var eventType = ':event-type';
+    var eventTypeValue = 'AudioEvent';
+    var messageType = ':message-type';
+    var messageTypeValue = 'event';
+
+    // Build headers
+    var headers = [];
+    headers.push(buildHeader(contentType, 7, contentTypeValue));
+    headers.push(buildHeader(eventType, 7, eventTypeValue));
+    headers.push(buildHeader(messageType, 7, messageTypeValue));
+
+    var headersBuffer = concatArrayBuffers(headers);
+    var headersLength = headersBuffer.byteLength;
+    var payloadLength = pcmData.byteLength;
+    var totalLength = 4 + 4 + 4 + headersLength + payloadLength + 4; // prelude + headers + payload + message_crc
+
+    var message = new ArrayBuffer(totalLength);
+    var view = new DataView(message);
+    var offset = 0;
+
+    // Total byte length
+    view.setUint32(offset, totalLength, false); offset += 4;
+    // Headers byte length
+    view.setUint32(offset, headersLength, false); offset += 4;
+    // Prelude CRC (CRC of first 8 bytes)
+    var preludeCrc = crc32(new Uint8Array(message, 0, 8));
+    view.setUint32(offset, preludeCrc, false); offset += 4;
+
+    // Headers
+    new Uint8Array(message, offset, headersLength).set(new Uint8Array(headersBuffer));
+    offset += headersLength;
+
+    // Payload
+    new Uint8Array(message, offset, payloadLength).set(new Uint8Array(pcmData));
+    offset += payloadLength;
+
+    // Message CRC (CRC of everything except last 4 bytes)
+    var messageCrc = crc32(new Uint8Array(message, 0, offset));
+    view.setUint32(offset, messageCrc, false);
+
+    return message;
+  }
+
+  /**
+   * Build a single event-stream header.
+   * @param {string} name - Header name.
+   * @param {number} type - Header value type (7 = string).
+   * @param {string} value - Header value.
+   * @returns {ArrayBuffer} Encoded header.
+   */
+  function buildHeader(name, type, value) {
+    var nameBytes = new TextEncoder().encode(name);
+    var valueBytes = new TextEncoder().encode(value);
+    var buffer = new ArrayBuffer(1 + nameBytes.length + 1 + 2 + valueBytes.length);
+    var view = new DataView(buffer);
+    var offset = 0;
+
+    // Header name length (1 byte)
+    view.setUint8(offset, nameBytes.length); offset += 1;
+    // Header name
+    new Uint8Array(buffer, offset, nameBytes.length).set(nameBytes); offset += nameBytes.length;
+    // Header value type (1 byte)
+    view.setUint8(offset, type); offset += 1;
+    // Value string length (2 bytes, big-endian)
+    view.setUint16(offset, valueBytes.length, false); offset += 2;
+    // Value string
+    new Uint8Array(buffer, offset, valueBytes.length).set(valueBytes);
+
+    return buffer;
+  }
+
+  /**
+   * Concatenate multiple ArrayBuffers.
+   * @param {ArrayBuffer[]} buffers - Array of buffers to concatenate.
+   * @returns {ArrayBuffer} Combined buffer.
+   */
+  function concatArrayBuffers(buffers) {
+    var totalLength = buffers.reduce(function(sum, buf) { return sum + buf.byteLength; }, 0);
+    var result = new ArrayBuffer(totalLength);
+    var view = new Uint8Array(result);
+    var offset = 0;
+    buffers.forEach(function(buf) {
+      view.set(new Uint8Array(buf), offset);
+      offset += buf.byteLength;
+    });
+    return result;
+  }
+
+  /**
+   * CRC-32 implementation for event-stream framing.
+   * @param {Uint8Array} data - Data to compute CRC for.
+   * @returns {number} CRC-32 value.
+   */
+  function crc32(data) {
+    var table = crc32.table;
+    if (!table) {
+      table = [];
+      for (var i = 0; i < 256; i++) {
+        var c = i;
+        for (var j = 0; j < 8; j++) {
+          if (c & 1) {
+            c = 0xEDB88320 ^ (c >>> 1);
+          } else {
+            c = c >>> 1;
+          }
+        }
+        table.push(c >>> 0);
+      }
+      crc32.table = table;
+    }
+    var crc = 0xFFFFFFFF;
+    for (var k = 0; k < data.length; k++) {
+      crc = table[(crc ^ data[k]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  /**
+   * Decode an event-stream message from Transcribe Streaming.
+   * @param {ArrayBuffer} buffer - The raw WebSocket message.
+   * @returns {Object|null} Parsed transcript message or null.
+   */
+  function decodeEventStreamMessage(buffer) {
+    try {
+      var view = new DataView(buffer);
+      var totalLength = view.getUint32(0, false);
+      var headersLength = view.getUint32(4, false);
+      // Skip prelude CRC (4 bytes at offset 8)
+      var headersStart = 12;
+      var payloadStart = headersStart + headersLength;
+      var payloadEnd = totalLength - 4; // Exclude message CRC
+
+      if (payloadEnd <= payloadStart) return null;
+
+      var payloadBytes = new Uint8Array(buffer, payloadStart, payloadEnd - payloadStart);
+      var payloadStr = new TextDecoder().decode(payloadBytes);
+      return JSON.parse(payloadStr);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Decode a Transcribe message (try JSON first, then event-stream).
+   * @param {*} data - WebSocket message data.
+   * @returns {Object|null} Parsed message or null.
+   */
+  function decodeTranscribeMessage(data) {
+    if (typeof data === 'string') {
+      return JSON.parse(data);
+    }
+    return decodeEventStreamMessage(data);
+  }
+
   /**
    * Set the caption language.
    * Req 19.2: Provide translated captions in selected language.
@@ -1264,6 +1722,8 @@ const LiveSession = (() => {
     var captionEl = document.getElementById('caption-text');
     if (captionEl) {
       captionEl.textContent = text;
+      captionEl.style.fontStyle = 'normal';
+      captionEl.style.color = '#e6edf3';
     }
   }
 
@@ -2035,6 +2495,10 @@ const LiveSession = (() => {
    * Disconnect from stage, chat, and WebSocket.
    */
   function disconnect() {
+    // Stop transcription if active
+    if (transcriptionActive) {
+      stopTranscription();
+    }
     if (stage) {
       stage.leave();
       stage = null;

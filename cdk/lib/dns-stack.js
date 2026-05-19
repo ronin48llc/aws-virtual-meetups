@@ -23,9 +23,12 @@ class DnsStack extends Stack {
     // The domain is registered in Route53, so the hosted zone already exists.
     // Requirements: 1.1, 1.2, 1.3
     // -------------------------------------------------------
+    const hostedZoneId = this.node.tryGetContext('hostedZoneId') || 'YOUR_HOSTED_ZONE_ID';
+    const domainName = this.node.tryGetContext('domainName') || 'yourdomain.com';
+
     this.hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
-      hostedZoneId: 'Z00018001Z0UMQRRSE9U5',
-      zoneName: 'awsvirtualmeetups.com',
+      hostedZoneId: hostedZoneId,
+      zoneName: domainName,
     });
 
     // -------------------------------------------------------
@@ -33,8 +36,8 @@ class DnsStack extends Stack {
     // Requirements: 2.1, 2.2, 2.3, 2.4
     // -------------------------------------------------------
     this.certificate = new acm.Certificate(this, 'Certificate', {
-      domainName: 'awsvirtualmeetups.com',
-      subjectAlternativeNames: ['*.awsvirtualmeetups.com'],
+      domainName: domainName,
+      subjectAlternativeNames: [`*.${domainName}`],
       validation: acm.CertificateValidation.fromDns(this.hostedZone),
     });
 

@@ -24,6 +24,9 @@ const env = {
 const envName = app.node.tryGetContext('env') || 'dev';
 const prefix = `VirtualMeetup-${envName}`;
 
+// Domain configuration from CDK context
+const domainName = app.node.tryGetContext('domainName') || 'yourdomain.com';
+
 // IVS ARNs from CDK context (Fix #9 — parameterized, pass via -c flags)
 const ivsStorageConfigArn = app.node.tryGetContext('ivsStorageConfigArn') || '';
 const ivsEncoderConfigArn = app.node.tryGetContext('ivsEncoderConfigArn') || '';
@@ -89,7 +92,7 @@ const frontendStack = new FrontendStack(app, `${prefix}-Frontend`, {
   description: 'Virtual Meetup Platform - Frontend (S3 + CloudFront SPA hosting)',
   hostedZone: dnsStack.hostedZone,
   certificate: dnsStack.certificate,
-  domainNames: ['awsvirtualmeetups.com', 'www.awsvirtualmeetups.com'],
+  domainNames: [domainName, `www.${domainName}`],
 });
 frontendStack.addDependency(dnsStack);
 
@@ -126,17 +129,20 @@ const apiStack = new ApiStack(app, `${prefix}-Api`, {
   schedulerRole: emailStack.schedulerRole,
   hostedZone: dnsStack.hostedZone,
   certificate: dnsStack.certificate,
+  domainName: domainName,
   ivsCompositionRoleArn: streamingStack.ivsCompositionRole.roleArn,
   ivsStorageConfigArn: ivsStorageConfigArn,
   ivsEncoderConfigArn: ivsEncoderConfigArn,
   recordingBucketName: streamingStack.recordingBucket.bucketName,
   recordingCloudfrontDomain: streamingStack.recordingDistribution.distributionDomainName,
+  transcriptionFunction: transcriptionStack.transcriptionFunction,
 });
 apiStack.addDependency(authStack);
 apiStack.addDependency(dataStack);
 apiStack.addDependency(emailStack);
 apiStack.addDependency(dnsStack);
 apiStack.addDependency(streamingStack);
+apiStack.addDependency(transcriptionStack);
 
 // -------------------------------------------------------
 // Stack 8: Publication (depends on Streaming + Email)

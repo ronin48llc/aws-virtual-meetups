@@ -43,7 +43,7 @@ describe('EmailStack', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
         Environment: {
           Variables: Match.objectLike({
-            SES_SENDER: 'phannah@thenetwerk.net',
+            SES_SENDER: 'noreply@example.com',
           }),
         },
       });
@@ -63,7 +63,7 @@ describe('EmailStack', () => {
   describe('SES Email Identity', () => {
     test('creates SES EmailIdentity resource', () => {
       template.hasResourceProperties('AWS::SES::EmailIdentity', {
-        EmailIdentity: 'phannah@thenetwerk.net',
+        EmailIdentity: 'noreply@example.com',
       });
     });
   });

@@ -17,7 +17,7 @@ class ApiStack extends Stack {
     super(scope, id, props);
 
     const { userPool, userPoolClient, mainTable, connectionsTable, emailSenderFunction, schedulerRole, hostedZone, certificate } = props;
-
+    const domainName = props.domainName || 'yourdomain.com';
     // -------------------------------------------------------
     // Cognito Authorizer for HTTP API
     // -------------------------------------------------------
@@ -31,7 +31,7 @@ class ApiStack extends Stack {
     const httpApi = new HttpApi(this, 'VirtualMeetupHttpApi', {
       apiName: 'VirtualMeetupHttpApi',
       corsPreflight: {
-        allowOrigins: ['https://awsvirtualmeetups.com', 'https://www.awsvirtualmeetups.com'],
+        allowOrigins: [`https://${domainName}`, `https://www.${domainName}`],
         allowMethods: [
           CorsHttpMethod.GET,
           CorsHttpMethod.POST,
@@ -372,6 +372,18 @@ class ApiStack extends Stack {
       authorizer: cognitoAuthorizer,
     });
 
+    // Transcription Lambda (from TranscriptionStack, passed via props)
+    if (props.transcriptionFunction) {
+      const transcriptionIntegration = new HttpLambdaIntegration('TranscriptionIntegration', props.transcriptionFunction);
+
+      httpApi.addRoutes({
+        path: '/events/{id}/transcription/start',
+        methods: [HttpMethod.POST],
+        integration: transcriptionIntegration,
+        authorizer: cognitoAuthorizer,
+      });
+    }
+
     // -------------------------------------------------------
     // WebSocket API
     // -------------------------------------------------------
@@ -418,6 +430,7 @@ class ApiStack extends Stack {
       'getQuestionQueue',
       'getHandsList',
       'typing',
+      'broadcastCaption',
     ];
 
     customRoutes.forEach((routeKey) => {
@@ -429,7 +442,7 @@ class ApiStack extends Stack {
     // WebSocket endpoint for environment variables
     // When custom domain is configured, use it for the Management API endpoint
     const wsEndpoint = (hostedZone && certificate)
-      ? 'https://ws.awsvirtualmeetups.com'
+      ? `https://ws.${domainName}`
       : `https://${webSocketApi.apiId}.execute-api.${this.region}.amazonaws.com/${webSocketStage.stageName}`;
 
     // Update WebSocket Lambda environment variables with the endpoint
@@ -459,9 +472,9 @@ class ApiStack extends Stack {
     // Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.2, 5.3, 5.4, 5.5
     // -------------------------------------------------------
     if (hostedZone && certificate) {
-      // HTTP API Custom Domain (api.awsvirtualmeetups.com)
+      // HTTP API Custom Domain (api.{domainName})
       const httpApiDomainName = new DomainName(this, 'HttpApiDomainName', {
-        domainName: 'api.awsvirtualmeetups.com',
+        domainName: `api.${domainName}`,
         certificate: certificate,
       });
 
@@ -472,7 +485,7 @@ class ApiStack extends Stack {
 
       new route53.ARecord(this, 'HttpApiARecord', {
         zone: hostedZone,
-        recordName: 'api.awsvirtualmeetups.com',
+        recordName: `api.${domainName}`,
         target: route53.RecordTarget.fromAlias(
           new targets.ApiGatewayv2DomainProperties(
             httpApiDomainName.regionalDomainName,
@@ -481,10 +494,10 @@ class ApiStack extends Stack {
         ),
       });
 
-      // WebSocket API Custom Domain (ws.awsvirtualmeetups.com)
+      // WebSocket API Custom Domain (ws.{domainName})
       // Using L1 constructs since L2 WebSocket API doesn't support custom domains
       const wsDomainName = new apigatewayv2.CfnDomainName(this, 'WsApiDomainName', {
-        domainName: 'ws.awsvirtualmeetups.com',
+        domainName: `ws.${domainName}`,
         domainNameConfigurations: [
           {
             endpointType: 'REGIONAL',
@@ -501,7 +514,7 @@ class ApiStack extends Stack {
 
       new route53.ARecord(this, 'WsApiARecord', {
         zone: hostedZone,
-        recordName: 'ws.awsvirtualmeetups.com',
+        recordName: `ws.${domainName}`,
         target: route53.RecordTarget.fromAlias(
           new targets.ApiGatewayv2DomainProperties(
             wsDomainName.attrRegionalDomainName,

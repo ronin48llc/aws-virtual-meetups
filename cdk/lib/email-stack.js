@@ -37,16 +37,18 @@ class EmailStack extends Stack {
         ],
       });
     } else {
+      // Fallback: verify a specific email address when no domain is configured
+      const fallbackEmail = this.node.tryGetContext('sesVerifiedEmail') || 'noreply@example.com';
       const sesIdentity = new ses.EmailIdentity(this, 'SenderEmailIdentity', {
-        identity: ses.Identity.email('phannah@thenetwerk.net'),
+        identity: ses.Identity.email(fallbackEmail),
       });
     }
 
     // Determine sender address based on whether domain identity is configured
     // Requirement: 6.3
     const sesSender = hostedZone
-      ? 'noreply@awsvirtualmeetups.com'
-      : 'phannah@thenetwerk.net';
+      ? `noreply@${hostedZone.zoneName}`
+      : 'noreply@example.com';
 
     // -------------------------------------------------------
     // SQS Dead Letter Queue for failed async Lambda invocations

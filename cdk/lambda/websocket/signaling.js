@@ -130,6 +130,8 @@ async function handler(event) {
         return await handleUnpinQuestion(eventId, body, connectionId);
       case 'typing':
         return await handleTyping(eventId, body, connectionId);
+      case 'broadcastCaption':
+        return await handleBroadcastCaption(eventId, body, connectionId);
       default:
         console.error('Unknown action', { connectionId, action });
         return { statusCode: 400, body: `Unknown action: ${action}` };
@@ -1656,6 +1658,44 @@ async function handleTyping(eventId, body, connectionId) {
   }
 
   return { statusCode: 200, body: 'Typing broadcast' };
+}
+
+/**
+ * Handle broadcastCaption action.
+ * Presenter sends transcribed text to all attendees via WebSocket.
+ * Only presenters/co-presenters can broadcast captions.
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {Object} body - { text, language, isFinal }
+ * @param {string} connectionId - The sender's WebSocket connection ID.
+ */
+async function handleBroadcastCaption(eventId, body, connectionId) {
+  const { text, language, isFinal } = body;
+
+  if (!text || !language) {
+    return { statusCode: 400, body: 'text and language are required' };
+  }
+
+  // Verify sender is a presenter
+  const connections = await getConnectionsForEvent(eventId);
+  const senderConn = connections.find(c => c.connectionId === connectionId);
+  if (!senderConn || (senderConn.role !== 'presenter' && senderConn.role !== 'co-presenter')) {
+    return { statusCode: 403, body: 'Only presenters can broadcast captions' };
+  }
+
+  // Broadcast CAPTION to all connections
+  await broadcast(eventId, {
+    type: 'CAPTION',
+    eventId,
+    data: {
+      text,
+      language: language || 'en',
+      isFinal: isFinal !== false,
+      timestamp: new Date().toISOString(),
+    },
+  });
+
+  return { statusCode: 200, body: 'Caption broadcast' };
 }
 
 module.exports = { handler };
