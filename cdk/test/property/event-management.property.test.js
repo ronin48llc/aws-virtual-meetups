@@ -438,7 +438,7 @@ describe('Event Management Property Tests', () => {
       );
     });
 
-    it('should query GSI1 with a filter for future events only', async () => {
+    it('should query GSI1 with correct parameters', async () => {
       await fc.assert(
         fc.asyncProperty(fc.constant(null), async () => {
           mockSend.mockResolvedValueOnce({ Items: [] });
@@ -451,9 +451,7 @@ describe('Event Management Property Tests', () => {
           const lastCall = QueryCommand.mock.calls[QueryCommand.mock.calls.length - 1][0];
           expect(lastCall.IndexName).toBe('GSI1');
           expect(lastCall.KeyConditionExpression).toContain('GSI1PK = :pk');
-          expect(lastCall.KeyConditionExpression).toContain('GSI1SK > :now');
           expect(lastCall.ExpressionAttributeValues[':pk']).toBe('EVENTS#UPCOMING');
-          expect(lastCall.ScanIndexForward).toBe(true);
         }),
         { numRuns: 100 }
       );

@@ -18,6 +18,7 @@ const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws
 const { IVSRealTimeClient, DisconnectParticipantCommand } = require('@aws-sdk/client-ivs-realtime');
 const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
 const { broadcast, getConnectionsForEvent } = require('./broadcast');
+const { checkRateLimit } = require('./rate-limiter');
 const { buildEventPK, buildHandSK, buildQuestionSK, chunk } = require('../shared/dynamo-utils');
 const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS } = require('../shared/constants');
 
@@ -53,6 +54,16 @@ async function handler(event) {
   if (!eventId) {
     console.error('Missing eventId', { connectionId, action });
     return { statusCode: 400, body: 'Missing eventId' };
+  }
+
+  // -------------------------------------------------------
+  // Rate Limiting: max 60 actions per connection per minute
+  // Uses the connections table with TTL for automatic cleanup.
+  // -------------------------------------------------------
+  const rateCheck = await checkRateLimit(connectionId);
+  if (!rateCheck.allowed) {
+    console.warn('Rate limit exceeded', { connectionId, action, eventId, count: rateCheck.count });
+    return { statusCode: 429, body: 'Rate limit exceeded. Please slow down.' };
   }
 
   try {

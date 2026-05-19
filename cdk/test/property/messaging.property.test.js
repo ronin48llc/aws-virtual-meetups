@@ -36,6 +36,13 @@ jest.mock('../../lambda/websocket/broadcast', () => ({
   getConnectionsForEvent: mockGetConnectionsForEvent,
 }));
 
+// Mock rate limiter — always allow in tests
+jest.mock('../../lambda/websocket/rate-limiter', () => ({
+  checkRateLimit: jest.fn().mockResolvedValue({ allowed: true, count: 1 }),
+  RATE_LIMIT: 60,
+  RATE_WINDOW_SECONDS: 60,
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';

@@ -59,6 +59,7 @@ class ApiStack extends Stack {
       code: lambda.Code.fromAsset(lambdaCodePath),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         TABLE_NAME: mainTable.tableName,
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
@@ -74,6 +75,7 @@ class ApiStack extends Stack {
       code: lambda.Code.fromAsset(lambdaCodePath),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -91,6 +93,7 @@ class ApiStack extends Stack {
       code: lambda.Code.fromAsset(lambdaCodePath),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -105,6 +108,7 @@ class ApiStack extends Stack {
       code: lambda.Code.fromAsset(lambdaCodePath),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         TABLE_NAME: mainTable.tableName,
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
@@ -119,6 +123,7 @@ class ApiStack extends Stack {
       code: lambda.Code.fromAsset(lambdaCodePath),
       timeout: Duration.seconds(10),
       memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -133,6 +138,7 @@ class ApiStack extends Stack {
       code: lambda.Code.fromAsset(lambdaCodePath),
       timeout: Duration.seconds(10),
       memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -147,6 +153,7 @@ class ApiStack extends Stack {
       code: lambda.Code.fromAsset(lambdaCodePath),
       timeout: Duration.seconds(10),
       memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
