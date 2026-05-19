@@ -41,12 +41,13 @@ class AuthStack extends Stack {
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: RemovalPolicy.DESTROY,
-      // Use SES for sending verification emails to avoid spam folder issues
-      email: cognito.UserPoolEmail.withSES({
-        fromEmail: 'noreply@awsvirtualmeetups.com',
-        fromName: 'AWS Virtual Meetups',
-        sesRegion: 'us-east-1',
-      }),
+      // NOTE: Using Cognito default email while SES is in sandbox mode.
+      // Once SES production access is granted, uncomment the SES config below:
+      // email: cognito.UserPoolEmail.withSES({
+      //   fromEmail: 'noreply@awsvirtualmeetups.com',
+      //   fromName: 'AWS Virtual Meetups',
+      //   sesRegion: 'us-east-1',
+      // }),
       // Advanced Security Features — adaptive authentication and compromised credential detection
       // Requirements: 25.1, 25.3
       // Using AUDIT mode to log risks without blocking legitimate logins
