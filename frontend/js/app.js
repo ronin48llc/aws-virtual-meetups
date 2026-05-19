@@ -22,6 +22,7 @@ const App = (() => {
     route('/events/:id/waiting', WaitingRoomPage);
     route('/events/:id/live', LiveSessionPage);
     route('/manage', ManageEventsPage);
+    route('/profile', ProfilePage);
   }
 
   /**
@@ -147,7 +148,7 @@ const App = (() => {
     if (Auth.isAuthenticated()) {
       const user = Auth.getCurrentUser();
       authContainer.innerHTML = `
-        <span class="nav__link" style="cursor: default;">${escapeHtml(user.displayName || user.email)}</span>
+        <a href="#/profile" class="nav__link" style="cursor: pointer; font-size: 13px;">${escapeHtml(user.displayName || user.email)}</a>
         <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3);" onclick="App.handleSignOut()">Sign Out</button>
       `;
     } else {
@@ -233,6 +234,9 @@ const App = (() => {
           </div>
           <button type="submit" class="btn btn--primary" style="width: 100%;">Sign In</button>
         </form>
+        <div class="modal__toggle" style="margin-top: 8px;">
+          <a onclick="App.showForgotPassword()" style="cursor: pointer;">Forgot Password?</a>
+        </div>
         <div class="modal__toggle">
           Don't have an account? <a onclick="App.showAuthModal('signup')">Sign Up</a>
         </div>
@@ -368,6 +372,9 @@ const App = (() => {
             <h1 class="hero__title">AWS Virtual Meetups</h1>
             <p class="hero__subtitle">Join live virtual meetups hosted by AWS user groups. Learn, connect, and grow with the community.</p>
             ${createBtn}
+          </section>
+          <section class="mt-lg">
+            <input type="text" id="event-search" placeholder="Search events..." oninput="App.filterEvents()" style="width: 100%; max-width: 400px; padding: 10px 16px; border: 1px solid #D1D5DB; border-radius: 4px; font-size: 14px; margin-bottom: 16px;">
           </section>
           <section class="mt-lg">
             <h2>Popular Events</h2>
@@ -871,6 +878,177 @@ const App = (() => {
     `;
   }
 
+  /**
+   * Filter events on the homepage by search term (Fix #4).
+   */
+  function filterEvents() {
+    var searchInput = document.getElementById('event-search');
+    if (!searchInput) return;
+    var term = searchInput.value.toLowerCase().trim();
+
+    var containers = [document.getElementById('events-list'), document.getElementById('popular-events-list')];
+    containers.forEach(function(container) {
+      if (!container) return;
+      var cards = container.querySelectorAll('.card');
+      cards.forEach(function(card) {
+        var title = (card.querySelector('.card__title') || {}).textContent || '';
+        var desc = (card.querySelector('.card__description') || {}).textContent || '';
+        var matches = !term || title.toLowerCase().indexOf(term) !== -1 || desc.toLowerCase().indexOf(term) !== -1;
+        card.style.display = matches ? '' : 'none';
+      });
+    });
+  }
+
+  /**
+   * Profile page component (Fix #5).
+   */
+  function ProfilePage() {
+    if (!Auth.isAuthenticated()) {
+      return `
+        <div class="page-content">
+          <div class="container text-center">
+            <h1>Profile</h1>
+            <p class="text-muted mt-md">You need to sign in to view your profile.</p>
+            <button class="btn btn--primary mt-lg" onclick="App.showAuthModal('signin')">Sign In</button>
+          </div>
+        </div>
+      `;
+    }
+
+    var user = Auth.getCurrentUser();
+    var email = user.email || '';
+    var displayName = user.displayName || email;
+    var role = 'attendee';
+    var memberSince = '';
+
+    if (user.idToken) {
+      try {
+        var payload = JSON.parse(atob(user.idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        role = payload['custom:role'] || 'attendee';
+        if (payload.auth_time) {
+          memberSince = new Date(payload.auth_time * 1000).toLocaleDateString();
+        }
+      } catch (e) {}
+    }
+
+    return `
+      <div class="page-content">
+        <div class="container">
+          <div class="card" style="max-width: 500px; margin: 0 auto;">
+            <h1 class="card__title">Profile</h1>
+            <div class="mt-lg">
+              <div class="form-group">
+                <label>Display Name</label>
+                <p style="padding: 8px 0; font-size: 16px;">${escapeHtml(displayName)}</p>
+              </div>
+              <div class="form-group">
+                <label>Email</label>
+                <p style="padding: 8px 0; font-size: 16px;">${escapeHtml(email)}</p>
+              </div>
+              <div class="form-group">
+                <label>Role</label>
+                <p style="padding: 8px 0; font-size: 16px; text-transform: capitalize;">${escapeHtml(role)}</p>
+              </div>
+              ${memberSince ? '<div class="form-group"><label>Member Since</label><p style="padding: 8px 0; font-size: 16px;">' + escapeHtml(memberSince) + '</p></div>' : ''}
+            </div>
+            <div class="mt-lg">
+              <a href="#/" class="btn btn--outline">Back to Events</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Show forgot password form (Fix #6).
+   */
+  function showForgotPassword() {
+    var modal = document.getElementById('auth-modal');
+    if (!modal) return;
+
+    modal.innerHTML = `
+      <h2 class="modal__title">Reset Password</h2>
+      <div class="modal__error" id="auth-error"></div>
+      <p class="text-center mb-md" style="font-size: 14px; color: #5A6B7B;">Enter your email and we'll send you a reset code.</p>
+      <form id="auth-form" onsubmit="App.handleForgotPassword(event)">
+        <div class="form-group">
+          <label for="auth-email">Email</label>
+          <input type="email" id="auth-email" class="form-input" placeholder="you@example.com" required>
+        </div>
+        <button type="submit" class="btn btn--primary" style="width: 100%;">Send Reset Code</button>
+      </form>
+      <div class="modal__toggle">
+        <a onclick="App.showAuthModal('signin')" style="cursor: pointer;">Back to Sign In</a>
+      </div>
+      <div class="mt-md text-center">
+        <button class="btn btn--sm" onclick="App.hideAuthModal()">Cancel</button>
+      </div>
+    `;
+  }
+
+  /**
+   * Handle forgot password form submission (Fix #6).
+   */
+  async function handleForgotPassword(event) {
+    event.preventDefault();
+    var email = document.getElementById('auth-email').value;
+    var errorEl = document.getElementById('auth-error');
+
+    try {
+      await Auth.forgotPassword(email);
+      // Show code + new password form
+      var modal = document.getElementById('auth-modal');
+      if (modal) {
+        modal.innerHTML = `
+          <h2 class="modal__title">Enter Reset Code</h2>
+          <div class="modal__error" id="auth-error"></div>
+          <p class="text-center mb-md" style="font-size: 14px; color: #5A6B7B;">Check your email for the verification code.</p>
+          <form onsubmit="App.handleResetPassword(event, '${escapeHtml(email)}')">
+            <div class="form-group">
+              <label for="auth-code">Verification Code</label>
+              <input type="text" id="auth-code" class="form-input" placeholder="123456" required>
+            </div>
+            <div class="form-group">
+              <label for="auth-new-password">New Password</label>
+              <input type="password" id="auth-new-password" class="form-input" placeholder="Min 8 characters" required minlength="8">
+            </div>
+            <button type="submit" class="btn btn--primary" style="width: 100%;">Reset Password</button>
+          </form>
+          <div class="mt-md text-center">
+            <button class="btn btn--sm" onclick="App.hideAuthModal()">Cancel</button>
+          </div>
+        `;
+      }
+    } catch (err) {
+      if (errorEl) {
+        errorEl.textContent = err.message || 'Failed to send reset code';
+        errorEl.style.display = 'block';
+      }
+    }
+  }
+
+  /**
+   * Handle reset password with code (Fix #6).
+   */
+  async function handleResetPassword(event, email) {
+    event.preventDefault();
+    var code = document.getElementById('auth-code').value;
+    var newPassword = document.getElementById('auth-new-password').value;
+    var errorEl = document.getElementById('auth-error');
+
+    try {
+      await Auth.confirmForgotPassword(email, code, newPassword);
+      hideAuthModal();
+      showAuthModal('signin');
+    } catch (err) {
+      if (errorEl) {
+        errorEl.textContent = err.message || 'Password reset failed';
+        errorEl.style.display = 'block';
+      }
+    }
+  }
+
   function NotFoundPage() {
     return `
       <div class="page-content">
@@ -943,6 +1121,10 @@ const App = (() => {
     handleConfirm,
     handleSignOut,
     handleEventSignup,
+    filterEvents,
+    showForgotPassword,
+    handleForgotPassword,
+    handleResetPassword,
   };
 })();
 

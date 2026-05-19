@@ -2,3 +2,4 @@ node_modules/
 cdk.out/
 *.js.map
 .DS_Store
+cdk.context.json

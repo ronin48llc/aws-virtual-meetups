@@ -308,6 +308,62 @@ const Auth = (() => {
     });
   }
 
+  /**
+   * Initiate forgot password flow (Fix #6).
+   * @param {string} email
+   * @returns {Promise<void>}
+   */
+  function forgotPassword(email) {
+    return new Promise((resolve, reject) => {
+      if (!userPool) {
+        return reject(new Error('Auth not initialized'));
+      }
+
+      const cognitoUser = new AmazonCognitoIdentity.CognitoUser({
+        Username: email,
+        Pool: userPool,
+      });
+
+      cognitoUser.forgotPassword({
+        onSuccess: (result) => {
+          resolve(result);
+        },
+        onFailure: (err) => {
+          reject(err);
+        },
+      });
+    });
+  }
+
+  /**
+   * Confirm forgot password with code and new password (Fix #6).
+   * @param {string} email
+   * @param {string} code
+   * @param {string} newPassword
+   * @returns {Promise<void>}
+   */
+  function confirmForgotPassword(email, code, newPassword) {
+    return new Promise((resolve, reject) => {
+      if (!userPool) {
+        return reject(new Error('Auth not initialized'));
+      }
+
+      const cognitoUser = new AmazonCognitoIdentity.CognitoUser({
+        Username: email,
+        Pool: userPool,
+      });
+
+      cognitoUser.confirmPassword(code, newPassword, {
+        onSuccess: () => {
+          resolve();
+        },
+        onFailure: (err) => {
+          reject(err);
+        },
+      });
+    });
+  }
+
   // Public API
   return {
     init,
@@ -321,5 +377,7 @@ const Auth = (() => {
     getAccessToken,
     onAuthStateChange,
     offAuthStateChange,
+    forgotPassword,
+    confirmForgotPassword,
   };
 })();

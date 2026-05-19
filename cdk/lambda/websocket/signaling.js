@@ -128,6 +128,8 @@ async function handler(event) {
         return await handlePinQuestion(eventId, body, connectionId);
       case 'unpinQuestion':
         return await handleUnpinQuestion(eventId, body, connectionId);
+      case 'typing':
+        return await handleTyping(eventId, body, connectionId);
       default:
         console.error('Unknown action', { connectionId, action });
         return { statusCode: 400, body: `Unknown action: ${action}` };
@@ -1601,6 +1603,59 @@ async function handleUnpinQuestion(eventId, body, connectionId) {
 
   console.info('Question unpinned', { eventId, questionId });
   return { statusCode: 200, body: 'Question unpinned' };
+}
+
+/**
+ * Handle typing action.
+ * Broadcasts TYPING to all connections for the event (excluding sender).
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {Object} body - The parsed message body.
+ * @param {string} connectionId - The WebSocket connection ID of the sender.
+ * @returns {Object} Response with statusCode 200.
+ */
+async function handleTyping(eventId, body, connectionId) {
+  const userId = body.data?.userId || body.userId || '';
+  const displayName = body.data?.displayName || body.displayName || '';
+
+  // Get sender info from connection record if not provided
+  let senderDisplayName = displayName;
+  let senderUserId = userId;
+  if (!senderDisplayName || !senderUserId) {
+    try {
+      const senderConn = await docClient.send(new GetCommand({
+        TableName: CONNECTIONS_TABLE_NAME,
+        Key: { connectionId },
+      }));
+      senderDisplayName = senderDisplayName || senderConn.Item?.displayName || senderConn.Item?.email || 'Someone';
+      senderUserId = senderUserId || senderConn.Item?.userId || '';
+    } catch (e) {
+      senderDisplayName = senderDisplayName || 'Someone';
+    }
+  }
+
+  // Broadcast to all connections except sender
+  const connections = await getConnectionsForEvent(eventId);
+  const otherConnections = connections.filter(c => c.connectionId !== connectionId);
+
+  const message = {
+    type: 'TYPING',
+    eventId,
+    data: {
+      userId: senderUserId,
+      displayName: senderDisplayName,
+    },
+  };
+
+  for (const conn of otherConnections) {
+    try {
+      await sendToConnection(conn.connectionId, message);
+    } catch (error) {
+      // Ignore stale connections
+    }
+  }
+
+  return { statusCode: 200, body: 'Typing broadcast' };
 }
 
 module.exports = { handler };

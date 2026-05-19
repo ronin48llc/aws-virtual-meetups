@@ -417,6 +417,7 @@ class ApiStack extends Stack {
       'getAttendeeList',
       'getQuestionQueue',
       'getHandsList',
+      'typing',
     ];
 
     customRoutes.forEach((routeKey) => {

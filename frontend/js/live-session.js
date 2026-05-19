@@ -37,6 +37,17 @@ const LiveSession = (() => {
   let countdownInterval = null;
   let eventStatus = null;
 
+  // --- My Questions State (Fix #1) ---
+  let mySubmittedQuestions = [];
+
+  // --- Notification Sound State (Fix #2) ---
+  let unreadMessageCount = 0;
+  let chatPanelFocused = true;
+
+  // --- Typing Indicator State (Fix #3) ---
+  let typingTimeout = null;
+  let lastTypingSent = 0;
+
   // --- Presenter Dashboard State ---
   let dashboardAttendees = [];
   let dashboardQuestions = [];
@@ -60,6 +71,21 @@ const LiveSession = (() => {
     { code: 'zh', label: 'Chinese' }
   ];
 
+
+  // --- Notification Sound (Fix #2) ---
+  function playNotificationSound() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 800;
+      gain.gain.value = 0.1;
+      osc.start();
+      osc.stop(ctx.currentTime + 0.1);
+    } catch(e) {}
+  }
 
   // --- Device Selection State ---
   let selectedVideoDeviceId = null;
@@ -374,6 +400,12 @@ const LiveSession = (() => {
       hideElement('presenter-controls');
       hideElement('presenter-dashboard');
       showElement('attendee-controls');
+    }
+
+    // Attach typing indicator listener to chat input (Fix #3)
+    var chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+      chatInput.addEventListener('input', handleTypingInput);
     }
 
     // Show static caption placeholder
@@ -877,6 +909,10 @@ const LiveSession = (() => {
     var questionText = input.value.trim();
     sendWebSocketMessage('submitQuestion', { text: questionText, userId: currentUserId, displayName: currentUserEmail });
 
+    // Track in mySubmittedQuestions (Fix #1)
+    mySubmittedQuestions.push({ text: questionText, status: 'queued', timestamp: new Date().toISOString() });
+    renderMyQuestions();
+
     input.value = '';
     var confirmation = document.getElementById('question-confirmation');
     if (confirmation) {
@@ -885,6 +921,42 @@ const LiveSession = (() => {
         confirmation.style.display = 'none';
       }, 3000);
     }
+  }
+
+  /**
+   * Render the "My Questions" section below the question form (Fix #1).
+   */
+  function renderMyQuestions() {
+    var container = document.getElementById('my-questions-section');
+    if (!container) {
+      // Create the section if it doesn't exist
+      var formContainer = document.getElementById('question-form-container');
+      if (!formContainer) return;
+      container = document.createElement('div');
+      container.id = 'my-questions-section';
+      container.style.cssText = 'margin-top: 12px; padding: 8px 12px; background: #0d1117; border-radius: 6px; border: 1px solid #30363d;';
+      formContainer.parentNode.insertBefore(container, formContainer.nextSibling);
+    }
+
+    if (mySubmittedQuestions.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = 'block';
+    var html = '<div style="font-size: 12px; font-weight: 600; color: #8b949e; margin-bottom: 6px;">My Questions</div>';
+    mySubmittedQuestions.forEach(function(q) {
+      var statusColor = q.status === 'answered' ? '#7AA116' : (q.status === 'dismissed' ? '#6e7681' : '#FF9900');
+      var statusLabel = q.status.charAt(0).toUpperCase() + q.status.slice(1);
+      html += '<div style="padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 12px;">'
+        + '<span style="color: #e6edf3;">' + escapeHtml(q.text) + '</span>'
+        + ' <span style="color: ' + statusColor + '; font-weight: 500;">(' + statusLabel + ')</span>';
+      if (q.answer) {
+        html += '<div style="color: #7AA116; margin-top: 2px; font-size: 11px;">A: ' + escapeHtml(q.answer) + '</div>';
+      }
+      html += '</div>';
+    });
+    container.innerHTML = html;
   }
 
   // --- IVS Chat Integration ---
@@ -1079,6 +1151,17 @@ const LiveSession = (() => {
     msgDiv.innerHTML = '<span style="color: ' + AWS_ORANGE + '; font-weight: 600;">' + prefix + escapeHtml(sender) + '</span>: ' + escapeHtml(text);
     messagesEl.appendChild(msgDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Notification sound for messages not from self (Fix #2)
+    var isSelf = (sender === currentUserEmail || sender === currentUserId || sender === 'You (DM)');
+    if (!isSelf) {
+      playNotificationSound();
+      // Show unread badge if document is hidden
+      if (document.hidden) {
+        unreadMessageCount++;
+        showUnreadBadge();
+      }
+    }
   }
 
   /**
@@ -1093,6 +1176,72 @@ const LiveSession = (() => {
     msgDiv.textContent = text;
     messagesEl.appendChild(msgDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  /**
+   * Show/hide unread message badge on chat panel header (Fix #2).
+   */
+  function showUnreadBadge() {
+    var chatPanel = document.getElementById('chat-panel');
+    if (!chatPanel) return;
+    var badge = document.getElementById('chat-unread-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.id = 'chat-unread-badge';
+      badge.style.cssText = 'display: inline-block; width: 10px; height: 10px; background: #e63946; border-radius: 50%; margin-left: 8px;';
+      var header = chatPanel.querySelector('div');
+      if (header) header.appendChild(badge);
+    }
+    badge.style.display = 'inline-block';
+  }
+
+  function hideUnreadBadge() {
+    var badge = document.getElementById('chat-unread-badge');
+    if (badge) badge.style.display = 'none';
+    unreadMessageCount = 0;
+  }
+
+  // Clear unread badge when page becomes visible (Fix #2)
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden) {
+        hideUnreadBadge();
+      }
+    });
+  }
+
+  /**
+   * Handle typing indicator — send typing event debounced (Fix #3).
+   */
+  function handleTypingInput() {
+    var now = Date.now();
+    if (now - lastTypingSent > 3000) {
+      lastTypingSent = now;
+      sendWebSocketMessage('typing', {});
+    }
+  }
+
+  /**
+   * Show "Someone is typing..." indicator (Fix #3).
+   */
+  function showTypingIndicator(displayName) {
+    var messagesEl = document.getElementById('chat-messages');
+    if (!messagesEl) return;
+
+    var indicator = document.getElementById('typing-indicator');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.id = 'typing-indicator';
+      indicator.style.cssText = 'color: #8b949e; font-style: italic; font-size: 12px; padding: 4px 0;';
+      messagesEl.parentNode.insertBefore(indicator, messagesEl.nextSibling);
+    }
+    indicator.textContent = (displayName || 'Someone') + ' is typing...';
+    indicator.style.display = 'block';
+
+    if (typingTimeout) clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(function() {
+      indicator.style.display = 'none';
+    }, 3000);
   }
 
   // --- Captions ---
@@ -1639,6 +1788,13 @@ const LiveSession = (() => {
             }
             renderDashboardQuestions();
           } else {
+            // Update mySubmittedQuestions if this is our question (Fix #1)
+            var myQ = mySubmittedQuestions.find(function(q) { return q.status === 'queued'; });
+            if (myQ) {
+              myQ.status = 'answered';
+              myQ.answer = msg.data.answer || '';
+              renderMyQuestions();
+            }
             var answerText = msg.data.answer ? ': ' + msg.data.answer : '';
             showNotification('Your question has been answered' + answerText);
           }
@@ -1650,6 +1806,12 @@ const LiveSession = (() => {
             });
             renderDashboardQuestions();
           } else {
+            // Update mySubmittedQuestions (Fix #1)
+            var myDismissedQ = mySubmittedQuestions.find(function(q) { return q.status === 'queued'; });
+            if (myDismissedQ) {
+              myDismissedQ.status = 'dismissed';
+              renderMyQuestions();
+            }
             showNotification('Your question was dismissed.');
           }
           break;
@@ -1742,6 +1904,11 @@ const LiveSession = (() => {
         case 'KICKED':
           showNotification('You have been removed from this session.');
           disconnect();
+          break;
+        case 'TYPING':
+          if (msg.data && msg.data.userId !== currentUserId) {
+            showTypingIndicator(msg.data.displayName);
+          }
           break;
         default:
           break;

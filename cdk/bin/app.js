@@ -24,6 +24,15 @@ const env = {
 const envName = app.node.tryGetContext('env') || 'dev';
 const prefix = `VirtualMeetup-${envName}`;
 
+// IVS ARNs from CDK context (Fix #9 — parameterized, pass via -c flags)
+const ivsStorageConfigArn = app.node.tryGetContext('ivsStorageConfigArn') || '';
+const ivsEncoderConfigArn = app.node.tryGetContext('ivsEncoderConfigArn') || '';
+
+// Cost Allocation Tags (Fix #8)
+cdk.Tags.of(app).add('Project', 'VirtualMeetups');
+cdk.Tags.of(app).add('Environment', envName);
+cdk.Tags.of(app).add('ManagedBy', 'CDK');
+
 // -------------------------------------------------------
 // Stack 0: DNS (no dependencies)
 // Route53 Hosted Zone + ACM Certificate for awsvirtualmeetups.com
@@ -118,8 +127,8 @@ const apiStack = new ApiStack(app, `${prefix}-Api`, {
   hostedZone: dnsStack.hostedZone,
   certificate: dnsStack.certificate,
   ivsCompositionRoleArn: streamingStack.ivsCompositionRole.roleArn,
-  ivsStorageConfigArn: 'arn:aws:ivs:us-east-1:911445170957:storage-configuration/wfvIRejdx1JQ',
-  ivsEncoderConfigArn: 'arn:aws:ivs:us-east-1:911445170957:encoder-configuration/TRr01HHq0udK',
+  ivsStorageConfigArn: ivsStorageConfigArn,
+  ivsEncoderConfigArn: ivsEncoderConfigArn,
   recordingBucketName: streamingStack.recordingBucket.bucketName,
   recordingCloudfrontDomain: streamingStack.recordingDistribution.distributionDomainName,
 });

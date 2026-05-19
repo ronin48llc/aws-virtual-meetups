@@ -550,3 +550,18 @@ h4 { font-size: var(--font-size-lg); }
     padding: 0 var(--space-2xl);
   }
 }
+
+/* ==========================================================================
+   Mobile Responsiveness (Fix #7)
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .live-session__body { grid-template-columns: 1fr !important; }
+  .live-session__sidebar { min-height: 300px !important; }
+  .hero__title { font-size: 1.5rem !important; }
+  .grid--events { grid-template-columns: 1fr !important; }
+  .nav__inner { flex-wrap: wrap; }
+  .nav__links { display: none; }
+  .nav__auth { width: 100%; justify-content: center; margin-top: 8px; }
+  .btn { min-height: 44px; }
+}
