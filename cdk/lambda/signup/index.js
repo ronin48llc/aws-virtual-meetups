@@ -1,0 +1,225 @@
+'use strict';
+
+/**
+ * Sign-Up Lambda handler.
+ * Handles POST /events/{id}/signup and GET /events/{id}/signups.
+ * @module signup
+ */
+
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  QueryCommand,
+} = require('@aws-sdk/lib-dynamodb');
+const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+
+const { KEY_PREFIX, SK } = require('../shared/constants');
+const { buildEventPK, buildSignupSK } = require('../shared/dynamo-utils');
+const { success, created, badRequest, unauthorized, forbidden, notFound, serverError } = require('../shared/response');
+const { validateRequiredFields, isValidEmail, parseBody, sanitize } = require('../shared/validation');
+
+const client = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(client);
+const lambdaClient = new LambdaClient({});
+const TABLE_NAME = process.env.TABLE_NAME;
+const EMAIL_LAMBDA_ARN = process.env.EMAIL_LAMBDA_ARN;
+
+/**
+ * Extract authenticated user claims from the request context.
+ * @param {Object} event - API Gateway event.
+ * @returns {Object|null} User claims or null if unauthenticated.
+ */
+function getAuthClaims(event) {
+  const authorizer = event.requestContext && event.requestContext.authorizer;
+  const claims = authorizer && (authorizer.claims || (authorizer.jwt && authorizer.jwt.claims));
+  if (!claims || !claims.sub) {
+    return null;
+  }
+  return {
+    userId: claims.sub,
+    email: claims.email || '',
+    displayName: claims.email || '',
+  };
+}
+
+/**
+ * Asynchronously invoke the Email Lambda (fire-and-forget).
+ * @param {Object} payload - The email invocation payload.
+ */
+async function invokeEmailLambda(payload) {
+  if (!EMAIL_LAMBDA_ARN) {
+    return;
+  }
+  try {
+    await lambdaClient.send(new InvokeCommand({
+      FunctionName: EMAIL_LAMBDA_ARN,
+      InvocationType: 'Event',
+      Payload: JSON.stringify(payload),
+    }));
+  } catch (err) {
+    console.error('Failed to invoke email Lambda:', {
+      error: err.message,
+      type: payload.type,
+      eventId: payload.eventId,
+      recipientEmail: payload.recipientEmail,
+    });
+  }
+}
+
+/**
+ * Register a user for an event (POST /events/{id}/signup).
+ * Requires authentication.
+ */
+async function signUpForEvent(event, eventId) {
+  const claims = getAuthClaims(event);
+  if (!claims) {
+    return unauthorized();
+  }
+
+  // Verify the event exists
+  const eventResult = await docClient.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: {
+      PK: buildEventPK(eventId),
+      SK: SK.METADATA,
+    },
+  }));
+
+  if (!eventResult.Item) {
+    return notFound('Event not found');
+  }
+
+  const { valid, data, error } = parseBody(event.body);
+  if (!valid) {
+    return badRequest(error);
+  }
+
+  const { valid: fieldsValid, missing } = validateRequiredFields(data, ['displayName', 'email']);
+  if (!fieldsValid) {
+    return badRequest(`Missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (!isValidEmail(data.email)) {
+    return badRequest('Invalid email format');
+  }
+
+  const displayName = sanitize(data.displayName);
+  const email = data.email.trim();
+  const now = new Date().toISOString();
+
+  const item = {
+    PK: buildEventPK(eventId),
+    SK: buildSignupSK(claims.userId),
+    userId: claims.userId,
+    displayName,
+    email,
+    registeredAt: now,
+  };
+
+  await docClient.send(new PutCommand({
+    TableName: TABLE_NAME,
+    Item: item,
+  }));
+
+  // Async invoke email Lambda for sign-up confirmation (fire-and-forget)
+  await invokeEmailLambda({
+    type: 'signup-confirmation',
+    eventId,
+    recipientEmail: email,
+    recipientName: displayName,
+    eventTitle: eventResult.Item.title,
+    scheduledStart: eventResult.Item.scheduledStart,
+    eventUrl: `/events/${eventId}`,
+  });
+
+  return created({
+    message: 'Successfully registered for event',
+    eventId,
+    userId: claims.userId,
+    displayName,
+    email,
+    registeredAt: now,
+  });
+}
+
+/**
+ * List sign-ups for an event (GET /events/{id}/signups).
+ * Requires authentication and event ownership.
+ */
+async function listSignups(event, eventId) {
+  const claims = getAuthClaims(event);
+  if (!claims) {
+    return unauthorized();
+  }
+
+  // Verify the event exists and check ownership
+  const eventResult = await docClient.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: {
+      PK: buildEventPK(eventId),
+      SK: SK.METADATA,
+    },
+  }));
+
+  if (!eventResult.Item) {
+    return notFound('Event not found');
+  }
+
+  if (eventResult.Item.ownerUserId !== claims.userId) {
+    return forbidden('Only the event owner can view sign-ups');
+  }
+
+  // Query all sign-ups for this event
+  const result = await docClient.send(new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
+    ExpressionAttributeValues: {
+      ':pk': buildEventPK(eventId),
+      ':skPrefix': KEY_PREFIX.SIGNUP,
+    },
+  }));
+
+  const signups = (result.Items || []).map((item) => ({
+    userId: item.userId,
+    displayName: item.displayName,
+    email: item.email,
+    registeredAt: item.registeredAt,
+  }));
+
+  return success({ eventId, signups, count: signups.length });
+}
+
+/**
+ * Main Lambda handler.
+ * Routes requests based on HTTP method and resource.
+ */
+exports.handler = async (event) => {
+  try {
+    const method = event.httpMethod || (event.requestContext && event.requestContext.http && event.requestContext.http.method);
+    const resource = event.resource || event.routeKey || '';
+    const normalizedResource = resource.includes(' ') ? resource.split(' ')[1] : resource;
+    const pathParams = event.pathParameters;
+
+    const eventId = pathParams && pathParams.id;
+    if (!eventId) {
+      return badRequest('Event ID is required');
+    }
+
+    // Route: POST /events/{id}/signup
+    if (method === 'POST' && normalizedResource === '/events/{id}/signup') {
+      return await signUpForEvent(event, eventId);
+    }
+
+    // Route: GET /events/{id}/signups
+    if (method === 'GET' && normalizedResource === '/events/{id}/signups') {
+      return await listSignups(event, eventId);
+    }
+
+    return badRequest(`Unsupported route: ${method} ${normalizedResource}`);
+  } catch (err) {
+    console.error('Sign-up handler error:', err);
+    return serverError('An unexpected error occurred');
+  }
+};

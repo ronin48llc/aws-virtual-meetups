@@ -1,0 +1,155 @@
+name: CD - Deploy on Merge
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: cdk
+
+      - name: Run tests
+        run: npm test
+        working-directory: cdk
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: set-env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: cdk
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: CDK synth
+        run: npx cdk synth -c env=${{ steps.set-env.outputs.environment }}
+        working-directory: cdk
+
+      - name: CDK deploy
+        run: npx cdk deploy --all --require-approval never -c env=${{ steps.set-env.outputs.environment }}
+        working-directory: cdk
+
+      - name: Export stack outputs to smoke-config.json
+        run: |
+          aws cloudformation describe-stacks --query 'Stacks[].Outputs[]' --output json | \
+          node -e "
+            const data = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+            const config = {};
+            (data || []).forEach(o => {
+              if (o.OutputKey.includes('ApiUrl')) config.apiUrl = o.OutputValue;
+              if (o.OutputKey.includes('WebSocketUrl')) config.wsUrl = o.OutputValue;
+              if (o.OutputKey.includes('CloudFrontUrl')) config.cloudFrontUrl = o.OutputValue;
+              if (o.OutputKey.includes('UserPoolId')) config.cognitoUserPoolId = o.OutputValue;
+              if (o.OutputKey.includes('UserPoolClientId')) config.cognitoClientId = o.OutputValue;
+            });
+            require('fs').writeFileSync('smoke-config.json', JSON.stringify(config, null, 2));
+          "
+        working-directory: cdk
+
+      - name: Upload smoke config artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-config
+          path: cdk/smoke-config.json
+
+  smoke-test:
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: cdk
+
+      - name: Download smoke config
+        uses: actions/download-artifact@v4
+        with:
+          name: smoke-config
+
+      - name: Move smoke config
+        run: mv smoke-config.json ../smoke-config.json || true
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run smoke tests
+        run: node scripts/smoke-test.js
+        env:
+          SMOKE_TEST_USERNAME: ${{ secrets.SMOKE_TEST_USERNAME }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+
+      - name: Post failure comment
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: '❌ Smoke tests failed after deployment. Please investigate.'
+            });

@@ -1,0 +1,136 @@
+const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
+const s3 = require('aws-cdk-lib/aws-s3');
+const iam = require('aws-cdk-lib/aws-iam');
+const cloudfront = require('aws-cdk-lib/aws-cloudfront');
+const origins = require('aws-cdk-lib/aws-cloudfront-origins');
+
+class StreamingStack extends Stack {
+  constructor(scope, id, props) {
+    super(scope, id, props);
+
+    // S3 bucket for IVS recordings with lifecycle rules
+    const recordingBucket = new s3.Bucket(this, 'RecordingBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      versioned: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      lifecycleRules: [
+        {
+          id: 'IntelligentTiering',
+          enabled: true,
+          transitions: [
+            {
+              storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+              transitionAfter: Duration.days(30),
+            },
+            {
+              storageClass: s3.StorageClass.GLACIER,
+              transitionAfter: Duration.days(90),
+            },
+          ],
+        },
+      ],
+    });
+
+    // IAM role for IVS Composition to write recordings to S3
+    const ivsCompositionRole = new iam.Role(this, 'IvsCompositionRole', {
+      assumedBy: new iam.ServicePrincipal('ivs.amazonaws.com'),
+      description: 'Role for IVS Server-Side Composition to write recordings to S3',
+    });
+
+    recordingBucket.grantReadWrite(ivsCompositionRole);
+
+    // CloudFront Origin Access Identity for the recording bucket
+    const recordingOAI = new cloudfront.OriginAccessIdentity(this, 'RecordingOAI', {
+      comment: 'OAI for Virtual Meetup Platform recording bucket',
+    });
+
+    recordingBucket.grantRead(recordingOAI);
+
+    // CloudFront distribution for serving recordings via HTTPS with CORS
+    const recordingDistribution = new cloudfront.Distribution(this, 'RecordingDistribution', {
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessIdentity(recordingBucket, {
+          originAccessIdentity: recordingOAI,
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS_WITH_PREFLIGHT,
+      },
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+    });
+
+    // IVS Storage Configuration — links the S3 bucket for composition recording
+    // Note: StorageConfiguration is not yet available as an L2 CDK construct,
+    // so we use CfnResource or create it manually via CLI/console.
+    // The ARN will be passed as an environment variable to the session-manager Lambda.
+    // For now, export the bucket name so it can be configured.
+
+    // IAM policy for Lambda functions to manage IVS stages and chat rooms
+    const ivsManagementPolicy = new iam.ManagedPolicy(this, 'IvsManagementPolicy', {
+      description: 'Policy granting Lambda functions permissions to manage IVS stages and chat rooms',
+      statements: [
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'ivs:CreateStage',
+            'ivs:DeleteStage',
+            'ivs:GetStage',
+            'ivs:ListStages',
+            'ivs:CreateParticipantToken',
+            'ivs:StartComposition',
+            'ivs:StopComposition',
+            'ivs:GetComposition',
+            'ivs:ListCompositions',
+          ],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'ivschat:CreateRoom',
+            'ivschat:DeleteRoom',
+            'ivschat:GetRoom',
+            'ivschat:ListRooms',
+            'ivschat:CreateChatToken',
+            'ivschat:SendEvent',
+            'ivschat:DisconnectUser',
+          ],
+          resources: ['*'],
+        }),
+      ],
+    });
+
+    // CloudFormation outputs
+    new CfnOutput(this, 'RecordingBucketName', {
+      value: recordingBucket.bucketName,
+      description: 'S3 bucket name for IVS recordings',
+      exportName: 'RecordingBucketName',
+    });
+
+    new CfnOutput(this, 'RecordingBucketArn', {
+      value: recordingBucket.bucketArn,
+      description: 'S3 bucket ARN for IVS recordings',
+      exportName: 'RecordingBucketArn',
+    });
+
+    new CfnOutput(this, 'IvsCompositionRoleArn', {
+      value: ivsCompositionRole.roleArn,
+      description: 'IAM role ARN for IVS Composition to write to S3',
+      exportName: 'IvsCompositionRoleArn',
+    });
+
+    new CfnOutput(this, 'RecordingDistributionDomain', {
+      value: recordingDistribution.distributionDomainName,
+      description: 'CloudFront distribution domain for recording playback',
+      exportName: 'RecordingDistributionDomain',
+    });
+
+    // Expose references for cross-stack use
+    this.recordingBucket = recordingBucket;
+    this.ivsCompositionRole = ivsCompositionRole;
+    this.ivsManagementPolicy = ivsManagementPolicy;
+    this.recordingDistribution = recordingDistribution;
+  }
+}
+
+module.exports = { StreamingStack };

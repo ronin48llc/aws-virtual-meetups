@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="AWS Virtual Meetups — Live virtual meetups hosted by AWS user groups">
+  <title>AWS Virtual Meetups</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="nav" role="navigation" aria-label="Main navigation">
+    <div class="nav__inner">
+      <a href="#/" class="nav__brand" aria-label="AWS Virtual Meetups Home">
+        <span class="nav__brand-icon" aria-hidden="true">☁</span>
+        <span>AWS Virtual Meetups</span>
+      </a>
+      <ul class="nav__links">
+        <li><a href="#/" class="nav__link" data-route="/">Events</a></li>
+        <li><a href="#/manage" class="nav__link" data-route="/manage">Manage Events</a></li>
+      </ul>
+      <div class="nav__auth" id="nav-auth">
+        <button class="btn btn--primary" onclick="App.showAuthModal('signin')">Sign In</button>
+        <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3); margin-left: 8px;" onclick="App.showAuthModal('signup')">Sign Up</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content (rendered by router) -->
+  <main id="app" role="main"></main>
+
+  <!-- Footer -->
+  <footer class="footer" role="contentinfo">
+    <div class="footer__inner">
+      <div class="footer__badge">
+        <span class="footer__badge-icon" aria-hidden="true"></span>
+        <span>Powered by AWS</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Auth Modal -->
+  <div class="modal-overlay" id="auth-modal-overlay" role="dialog" aria-modal="true" aria-label="Authentication">
+    <div class="modal" id="auth-modal"></div>
+  </div>
+
+  <!-- IVS Web Broadcast SDK -->
+  <script src="https://web-broadcast.live-video.net/1.6.0/amazon-ivs-web-broadcast.js"></script>
+
+  <!-- HLS.js for recording playback -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+
+  <!-- IVS Chat Messaging SDK (assigns window.IVSChat) -->
+  <script>
+    (async function() {
+      try {
+        const module = await import('https://cdn.jsdelivr.net/npm/amazon-ivs-chat-messaging@1/+esm');
+        window.IVSChat = module;
+      } catch(e) {
+        console.warn('Failed to load IVS Chat SDK:', e);
+      }
+    })();
+  </script>
+
+  <!-- Cognito SDK (loaded via CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/amazon-cognito-identity-js@6/dist/amazon-cognito-identity.min.js"></script>
+
+  <!-- Cognito Configuration -->
+  <script>
+    window.COGNITO_USER_POOL_ID = 'us-east-1_Z8YDS0abS';
+    window.COGNITO_CLIENT_ID = '47dpjhd7jii6u0d73krcuf26vm';
+    window.API_BASE_URL = 'https://api.awsvirtualmeetups.com';
+    window.WS_BASE_URL = 'wss://ws.awsvirtualmeetups.com';
+  </script>
+
+  <!-- Application Scripts -->
+  <script src="js/auth.js"></script>
+  <script src="js/manage.js"></script>
+  <script src="js/live-session.js"></script>
+  <script src="js/playback.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
