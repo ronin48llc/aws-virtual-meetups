@@ -2,8 +2,8 @@
 
 // Set env before requiring handler
 process.env.AWS_REGION = 'us-east-1';
-process.env.AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE';
-process.env.AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+process.env.AWS_ACCESS_KEY_ID = 'fake-test-access-key-id';
+process.env.AWS_SECRET_ACCESS_KEY = 'fake-test-secret-access-key';
 process.env.AWS_SESSION_TOKEN = 'FwoGZXIvYXdzEBYaDHqa0AP';
 
 const { handler, _internals } = require('../../lambda/transcription/index');
@@ -314,8 +314,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('generates a valid WebSocket URL with correct endpoint', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-US',
       sampleRate: 16000,
       mediaEncoding: 'pcm',
@@ -328,8 +328,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('includes required query parameters', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-west-2',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'es-US',
       sampleRate: 44100,
       mediaEncoding: 'ogg-opus',
@@ -349,8 +349,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('includes session token when provided', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       sessionToken: 'FwoGZXIvYXdzEBYaDHqa0AP',
       languageCode: 'en-US',
     });
@@ -361,8 +361,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('does not include session token when not provided', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-US',
     });
 
@@ -372,8 +372,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('uses correct region in endpoint', () => {
     const url = generateTranscribePresignedUrl({
       region: 'eu-west-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-GB',
     });
 
@@ -383,8 +383,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('uses default sampleRate and mediaEncoding', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-US',
     });
 
