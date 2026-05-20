@@ -18,10 +18,10 @@ const {
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const crypto = require('crypto');
 
-const { EVENT_STATUS, GSI, SK } = require('../shared/constants');
+const { EVENT_STATUS, GSI, SK, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } = require('../shared/constants');
 const { buildEventPK, buildGSI1SK, buildGSI2PK } = require('../shared/dynamo-utils');
 const { success, created, badRequest, unauthorized, notFound, serverError, forbidden } = require('../shared/response');
-const { validateRequiredFields, isFutureDate, isValidDate, parseBody, sanitize, computeDurationFields, validateDurationFields } = require('../shared/validation');
+const { validateRequiredFields, isFutureDate, isValidDate, isValidLength, parseBody, sanitize, computeDurationFields, validateDurationFields } = require('../shared/validation');
 const { createLogger } = require('../shared/logger');
 const { createReminderSchedules, deleteReminderSchedules, deleteAutoStopSchedule, deleteWarningSchedules } = require('../shared/scheduler-utils');
 const { getMetrics } = require('../shared/engagement-metrics');
@@ -111,6 +111,14 @@ async function createEvent(event) {
   const { valid: fieldsValid, missing } = validateRequiredFields(data, ['title', 'description', 'scheduledStart']);
   if (!fieldsValid) {
     return badRequest(`Missing required fields: ${missing.join(', ')}`);
+  }
+
+  if (!isValidLength(data.title, 1, MAX_TITLE_LENGTH)) {
+    return badRequest(`title must be 1-${MAX_TITLE_LENGTH} characters`);
+  }
+
+  if (!isValidLength(data.description, 1, MAX_DESCRIPTION_LENGTH)) {
+    return badRequest(`description must be 1-${MAX_DESCRIPTION_LENGTH} characters`);
   }
 
   if (!isValidDate(data.scheduledStart)) {
@@ -432,12 +440,18 @@ async function updateEvent(event, eventId) {
   const expressionValues = { ':updatedAt': now };
 
   if (data.title !== undefined) {
+    if (!isValidLength(data.title, 1, MAX_TITLE_LENGTH)) {
+      return badRequest(`title must be 1-${MAX_TITLE_LENGTH} characters`);
+    }
     updateExpressions.push('#title = :title');
     expressionNames['#title'] = 'title';
     expressionValues[':title'] = sanitize(data.title);
   }
 
   if (data.description !== undefined) {
+    if (!isValidLength(data.description, 1, MAX_DESCRIPTION_LENGTH)) {
+      return badRequest(`description must be 1-${MAX_DESCRIPTION_LENGTH} characters`);
+    }
     updateExpressions.push('#description = :description');
     expressionNames['#description'] = 'description';
     expressionValues[':description'] = sanitize(data.description);

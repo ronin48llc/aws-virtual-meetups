@@ -93,6 +93,15 @@ const CORS_HEADERS = Object.freeze({
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
 });
 
+/**
+ * Length bounds for user-supplied event text fields. DDB's 400 KB
+ * per-item cap is the upstream limit; these caps keep GSI projections
+ * (which include the full attributes) from being silently bloated by
+ * a single oversized event. See issue #32.
+ */
+const MAX_TITLE_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 5000;
+
 module.exports = {
   EVENT_STATUS,
   KEY_PREFIX,
@@ -103,4 +112,6 @@ module.exports = {
   SESSION_ROLE,
   QUESTION_STATUS,
   CORS_HEADERS,
+  MAX_TITLE_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
 };
