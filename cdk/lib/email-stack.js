@@ -86,10 +86,13 @@ class EmailStack extends Stack {
 
     // -------------------------------------------------------
     // Email Lambda Permissions — SES SendEmail/SendRawEmail
-    // Scoped to the verified sender identity ARN only, so a compromised
-    // Lambda role cannot send email from arbitrary SES identities in the
-    // account. The identity itself is created above (domain identity when
-    // hostedZone is provided, email-address identity otherwise).
+    //
+    // Scoped to the verified sender identity ARN only (the identity is
+    // created above — domain identity when hostedZone is provided, email-
+    // address identity otherwise). Issue #111 also adds the
+    // ses:FromAddress condition so even within that identity a compromised
+    // Lambda can only send mail with the platform's exact From address —
+    // defense-in-depth against any sub-identity / address-aliasing leak.
     // -------------------------------------------------------
     emailSenderFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -98,6 +101,11 @@ class EmailStack extends Stack {
         'ses:SendRawEmail',
       ],
       resources: [sesIdentity.emailIdentityArn],
+      conditions: {
+        StringEquals: {
+          'ses:FromAddress': sesSender,
+        },
+      },
     }));
 
     // -------------------------------------------------------
