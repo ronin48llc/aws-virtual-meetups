@@ -153,11 +153,14 @@ describe('Sign-Up Lambda handler', () => {
     it('returns 400 when required fields are missing', async () => {
       mockSend.mockResolvedValueOnce({ Item: existingEvent });
 
+      // Issue #77: only displayName is required from the body now;
+      // email comes from the JWT claims. So missing-displayName is the
+      // single body-required-field case.
       const event = buildEvent({
         method: 'POST',
         resource: '/events/{id}/signup',
         pathParameters: { id: 'evt_abc123' },
-        body: { displayName: 'Test User' },
+        body: {},
         claims: validClaims,
       });
 
@@ -166,25 +169,45 @@ describe('Sign-Up Lambda handler', () => {
 
       const body = JSON.parse(result.body);
       expect(body.message).toContain('Missing required fields');
-      expect(body.message).toContain('email');
+      expect(body.message).toContain('displayName');
     });
 
-    it('returns 400 when email is invalid', async () => {
+    it('returns 400 when authenticated user has no email claim (issue #77)', async () => {
       mockSend.mockResolvedValueOnce({ Item: existingEvent });
 
       const event = buildEvent({
         method: 'POST',
         resource: '/events/{id}/signup',
         pathParameters: { id: 'evt_abc123' },
-        body: { displayName: 'Test User', email: 'not-an-email' },
-        claims: validClaims,
+        body: { displayName: 'Test User' },
+        // Claims without email — shouldn't happen with Cognito, but guard anyway.
+        claims: { sub: 'user-123', 'custom:role': 'organizer' },
       });
 
       const result = await handler(event);
       expect(result.statusCode).toBe(400);
+      expect(JSON.parse(result.body).message).toMatch(/email claim/);
+    });
 
+    it('uses claims.email even when body.email differs (issue #77 — email-spam fix)', async () => {
+      mockSend.mockResolvedValueOnce({ Item: existingEvent });
+      mockSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        method: 'POST',
+        resource: '/events/{id}/signup',
+        pathParameters: { id: 'evt_abc123' },
+        body: { displayName: 'Test User', email: 'victim@example.com' }, // attacker
+        claims: validClaims, // claims.email = 'user@example.com'
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(201);
       const body = JSON.parse(result.body);
-      expect(body.message).toContain('Invalid email');
+      // The response (and downstream DDB write + email invocation) uses the
+      // claim email, NOT the body email.
+      expect(body.email).toBe('user@example.com');
+      expect(body.email).not.toBe('victim@example.com');
     });
 
     it('returns 400 when body is empty', async () => {

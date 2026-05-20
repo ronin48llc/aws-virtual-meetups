@@ -96,17 +96,21 @@ async function signUpForEvent(event, eventId) {
     return badRequest(error);
   }
 
-  const { valid: fieldsValid, missing } = validateRequiredFields(data, ['displayName', 'email']);
+  const { valid: fieldsValid, missing } = validateRequiredFields(data, ['displayName']);
   if (!fieldsValid) {
     return badRequest(`Missing required fields: ${missing.join(', ')}`);
   }
 
-  if (!isValidEmail(data.email)) {
-    return badRequest('Invalid email format');
+  // Issue #77: use the authenticated user's email from the JWT — NOT
+  // the body. Without this, any logged-in user could submit a body
+  // with someone else's email and trigger a branded confirmation email
+  // to that victim, turning the platform into an email-spam relay.
+  const email = (claims.email || '').trim();
+  if (!isValidEmail(email)) {
+    return badRequest('Authenticated user has no valid email claim');
   }
 
   const displayName = sanitize(data.displayName);
-  const email = data.email.trim();
   const now = new Date().toISOString();
 
   const item = {
