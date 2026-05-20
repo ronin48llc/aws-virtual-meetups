@@ -1,6 +1,7 @@
 const path = require('path');
 const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 
 class TranscriptionStack extends Stack {
@@ -43,6 +44,7 @@ class TranscriptionStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/transcription/')),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       role: transcriptionRole,
     });
 

@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { Stack, Duration, CfnOutput, RemovalPolicy } = require('aws-cdk-lib');
+const { Stack, Duration, CfnOutput } = require('aws-cdk-lib');
 const cloudwatch = require('aws-cdk-lib/aws-cloudwatch');
 const cloudwatchActions = require('aws-cdk-lib/aws-cloudwatch-actions');
 const sns = require('aws-cdk-lib/aws-sns');
@@ -27,9 +27,13 @@ class ObservabilityStack extends Stack {
     const envName = this.node.tryGetContext('env') || 'dev';
     const alarmEmails = this.node.tryGetContext('alarmEmails') || [];
 
-    // -------------------------------------------------------
-    // Lambda function names (must match api-stack.js)
-    // -------------------------------------------------------
+    // Lambda function names — used below to build dashboard widgets and
+    // Logs Insights query definitions. Log RETENTION on these groups is
+    // now configured per-Lambda via the canonical `logRetention:` prop on
+    // each lambda.Function across the other stacks; the previous pattern
+    // of pre-creating LogGroup constructs here raced with Lambda's
+    // auto-create-on-first-invoke behavior on fresh deploys (CFN cannot
+    // adopt an already-existing log group). See issue #30.
     const lambdaFunctionNames = [
       'VirtualMeetup-EventCrud',
       'VirtualMeetup-SessionManager',
@@ -39,17 +43,6 @@ class ObservabilityStack extends Stack {
       'VirtualMeetup-WsDisconnect',
       'VirtualMeetup-WsSignaling',
     ];
-
-    // -------------------------------------------------------
-    // Log Retention — 30 days for all Lambda Log Groups
-    // -------------------------------------------------------
-    const logGroups = lambdaFunctionNames.map((fnName) => {
-      return new logs.LogGroup(this, `LogGroup-${fnName}`, {
-        logGroupName: `/aws/lambda/${fnName}`,
-        retention: logs.RetentionDays.ONE_MONTH,
-        removalPolicy: RemovalPolicy.RETAIN,
-      });
-    });
 
     // -------------------------------------------------------
     // SNS Topic for Alarms
@@ -386,17 +379,13 @@ class ObservabilityStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/ivs-metrics/')),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         ENVIRONMENT: envName,
       },
     });
 
-    // Log group for IVS metrics Lambda
-    new logs.LogGroup(this, 'IvsMetricsLogGroup', {
-      logGroupName: `/aws/lambda/VirtualMeetup-IvsMetrics-${envName}`,
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: RemovalPolicy.RETAIN,
-    });
+    // (Lambda log retention is set via logRetention: on the function above.)
 
     // EventBridge rule to capture IVS stage participant events
     const ivsEventRule = new events.Rule(this, 'IvsStageEventRule', {

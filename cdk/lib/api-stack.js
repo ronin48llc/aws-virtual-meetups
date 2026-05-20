@@ -7,6 +7,7 @@ const { WebSocketApi, WebSocketStage } = require('aws-cdk-lib/aws-apigatewayv2')
 const { WebSocketLambdaIntegration } = require('aws-cdk-lib/aws-apigatewayv2-integrations');
 const apigatewayv2 = require('aws-cdk-lib/aws-apigatewayv2');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 const route53 = require('aws-cdk-lib/aws-route53');
 const targets = require('aws-cdk-lib/aws-route53-targets');
@@ -77,6 +78,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
@@ -93,6 +95,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -111,6 +114,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -126,6 +130,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
@@ -143,6 +148,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(10),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -160,6 +166,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(10),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -178,6 +185,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(10),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
