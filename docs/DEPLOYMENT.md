@@ -38,7 +38,8 @@ The platform uses CDK context for configuration. Set values in `cdk.context.json
 }
 ```
 
-Environment variables used by the frontend are hardcoded in `frontend/index.html`:
+Environment variables used by the frontend are hardcoded in `frontend/js/config.js`
+(moved out of `index.html` so the CloudFront CSP can disallow inline scripts):
 
 | Variable | Description |
 |----------|-------------|
