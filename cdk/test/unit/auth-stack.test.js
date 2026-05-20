@@ -107,11 +107,24 @@ describe('AuthStack', () => {
           Match.objectLike({
             Name: 'role',
             AttributeDataType: 'String',
-            Mutable: true,
             StringAttributeConstraints: {
               MinLength: '4',
               MaxLength: '9',
             },
+          }),
+        ]),
+      });
+    });
+
+    // Issue #91: custom:role is the authorization claim. If it is
+    // writable by the user, anyone who signs up can call
+    // UpdateUserAttributes and promote themselves to organizer.
+    test('custom:role attribute is NOT user-mutable (privilege escalation guard)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        Schema: Match.arrayWith([
+          Match.objectLike({
+            Name: 'role',
+            Mutable: false,
           }),
         ]),
       });
