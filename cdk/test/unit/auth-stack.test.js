@@ -199,4 +199,28 @@ describe('AuthStack', () => {
       });
     });
   });
+
+  describe('Password policy (issue #34)', () => {
+    test('User Pool MinimumLength is 12 (NIST SP 800-63B)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        Policies: Match.objectLike({
+          PasswordPolicy: Match.objectLike({
+            MinimumLength: 12,
+          }),
+        }),
+      });
+    });
+
+    test('User Pool requires lowercase + uppercase + digits', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        Policies: Match.objectLike({
+          PasswordPolicy: Match.objectLike({
+            RequireLowercase: true,
+            RequireUppercase: true,
+            RequireNumbers: true,
+          }),
+        }),
+      });
+    });
+  });
 });

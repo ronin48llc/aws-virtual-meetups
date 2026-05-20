@@ -33,8 +33,12 @@ class AuthStack extends Stack {
           maxLen: 9,
         }),
       },
+      // NIST SP 800-63B recommends >=12 chars for user-chosen passwords on
+      // pools without enforced MFA. This pool has no `mfa:` prop configured,
+      // so 12 is the floor. Existing users keep their current passwords;
+      // the new minimum applies on next signup / change / reset. See #34.
       passwordPolicy: {
-        minLength: 8,
+        minLength: 12,
         requireLowercase: true,
         requireUppercase: true,
         requireDigits: true,
