@@ -121,6 +121,30 @@ describe('EmailStack', () => {
       });
     });
 
+    test('SES Send* permissions are scoped to the verified identity, not Resource "*" (issue #2)', () => {
+      const policies = template.findResources('AWS::IAM::Policy');
+      let foundScopedStatement = false;
+      for (const [, policy] of Object.entries(policies)) {
+        const statements = policy.Properties.PolicyDocument.Statement || [];
+        for (const stmt of statements) {
+          const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+          if (!actions.includes('ses:SendEmail') && !actions.includes('ses:SendRawEmail')) continue;
+
+          const resources = Array.isArray(stmt.Resource) ? stmt.Resource : [stmt.Resource];
+          for (const r of resources) {
+            // Must not be the wildcard
+            expect(r).not.toBe('*');
+            // Must reference an SES identity ARN — CDK serializes this as
+            // an Fn::Join of arn parts; the literal "identity/" segment
+            // appears in the joined string.
+            expect(JSON.stringify(r)).toMatch(/identity/);
+            foundScopedStatement = true;
+          }
+        }
+      }
+      expect(foundScopedStatement).toBe(true);
+    });
+
     test('Email Lambda has DynamoDB GetItem and Query permissions', () => {
       template.hasResourceProperties('AWS::IAM::Policy', {
         PolicyDocument: {
