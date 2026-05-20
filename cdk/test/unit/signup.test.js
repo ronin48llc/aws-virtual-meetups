@@ -25,12 +25,13 @@ process.env.EMAIL_LAMBDA_ARN = 'arn:aws:lambda:us-east-1:123456789012:function:V
 
 const { handler } = require('../../lambda/signup/index');
 
-function buildEvent({ method, resource, body, pathParameters, claims }) {
+function buildEvent({ method, resource, body, pathParameters, queryStringParameters, claims }) {
   const event = {
     httpMethod: method,
     resource,
     body: body ? JSON.stringify(body) : null,
     pathParameters: pathParameters || null,
+    queryStringParameters: queryStringParameters || null,
     requestContext: {},
   };
   if (claims) {
@@ -403,6 +404,124 @@ describe('Sign-Up Lambda handler', () => {
           },
         })
       );
+    });
+
+    describe('pagination (issue #56)', () => {
+      function lastQueryParams() {
+        for (let i = mockSend.mock.calls.length - 1; i >= 0; i--) {
+          const cmd = mockSend.mock.calls[i][0];
+          if (cmd && cmd.type === 'Query') return cmd.params;
+        }
+        throw new Error('no QueryCommand was issued');
+      }
+
+      it('applies a default Limit of 100 when none is supplied', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [] });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        expect(lastQueryParams().Limit).toBe(100);
+      });
+
+      it('honors an explicit ?limit within the cap', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [] });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { limit: '25' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        expect(lastQueryParams().Limit).toBe(25);
+      });
+
+      it('rejects ?limit above the cap with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { limit: '99999' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+      });
+
+      it('rejects non-positive-integer ?limit with 400', async () => {
+        for (const bad of ['0', 'abc', '-1', '1.5']) {
+          mockSend.mockClear();
+          mockSend.mockResolvedValueOnce({ Item: existingEvent });
+          const event = buildEvent({
+            method: 'GET',
+            resource: '/events/{id}/signups',
+            pathParameters: { id: 'evt_abc123' },
+            queryStringParameters: { limit: bad },
+            claims: ownerClaims,
+          });
+          const result = await handler(event);
+          expect(result.statusCode).toBe(400);
+        }
+      });
+
+      it('returns nextCursor when DynamoDB returns a LastEvaluatedKey', async () => {
+        const lastKey = { PK: 'EVENT#evt_abc123', SK: 'SIGNUP#user-100' };
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [], LastEvaluatedKey: lastKey });
+
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        const body = JSON.parse(result.body);
+        expect(typeof body.nextCursor).toBe('string');
+        const decoded = JSON.parse(Buffer.from(body.nextCursor, 'base64url').toString('utf8'));
+        expect(decoded).toEqual(lastKey);
+      });
+
+      it('forwards a valid ?cursor as ExclusiveStartKey on the Query', async () => {
+        const startKey = { PK: 'EVENT#evt_abc123', SK: 'SIGNUP#user-050' };
+        const cursor = Buffer.from(JSON.stringify(startKey), 'utf8').toString('base64url');
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [] });
+
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { cursor },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        expect(lastQueryParams().ExclusiveStartKey).toEqual(startKey);
+      });
+
+      it('rejects a malformed ?cursor with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { cursor: 'not-valid!!!' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+      });
     });
   });
 

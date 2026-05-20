@@ -144,9 +144,56 @@ async function signUpForEvent(event, eventId) {
   });
 }
 
+const LIST_SIGNUPS_DEFAULT_LIMIT = 100;
+const LIST_SIGNUPS_MAX_LIMIT = 500;
+
+/**
+ * Decode an opaque pagination cursor (base64url JSON) into a DynamoDB
+ * ExclusiveStartKey. Returns null for missing input; throws on malformed
+ * input so the caller can surface a 400. Mirrors PR #21's pattern in
+ * event-crud.
+ */
+function decodeCursor(cursor) {
+  if (!cursor) {
+    return null;
+  }
+  const json = Buffer.from(cursor, 'base64url').toString('utf8');
+  const parsed = JSON.parse(json);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('cursor must decode to an object');
+  }
+  return parsed;
+}
+
+function encodeCursor(key) {
+  return Buffer.from(JSON.stringify(key), 'utf8').toString('base64url');
+}
+
+function parseLimit(raw) {
+  if (raw === undefined || raw === null || raw === '') {
+    return { value: LIST_SIGNUPS_DEFAULT_LIMIT, error: null };
+  }
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    return { value: 0, error: 'limit must be a positive integer' };
+  }
+  const n = Number(raw);
+  if (n > LIST_SIGNUPS_MAX_LIMIT) {
+    return { value: 0, error: `limit must be <= ${LIST_SIGNUPS_MAX_LIMIT}` };
+  }
+  return { value: n, error: null };
+}
+
 /**
  * List sign-ups for an event (GET /events/{id}/signups).
  * Requires authentication and event ownership.
+ *
+ * Query params:
+ *   - limit:  optional, 1..LIST_SIGNUPS_MAX_LIMIT, defaults to 100.
+ *   - cursor: optional opaque cursor returned from a prior page as `nextCursor`.
+ *
+ * Response: { eventId, signups: [...], count, nextCursor? }.
+ * `count` is the size of THIS page, not the total — see #56 for why and the
+ * out-of-scope note on adding a true count endpoint.
  */
 async function listSignups(event, eventId) {
   const claims = getAuthClaims(event);
@@ -171,15 +218,34 @@ async function listSignups(event, eventId) {
     return forbidden('Only the event owner can view sign-ups');
   }
 
-  // Query all sign-ups for this event
-  const result = await docClient.send(new QueryCommand({
+  const qs = (event && event.queryStringParameters) || {};
+
+  const { value: limit, error: limitError } = parseLimit(qs.limit);
+  if (limitError) {
+    return badRequest(limitError);
+  }
+
+  let exclusiveStartKey = null;
+  try {
+    exclusiveStartKey = decodeCursor(qs.cursor);
+  } catch (_err) {
+    return badRequest('cursor is malformed');
+  }
+
+  const queryParams = {
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
     ExpressionAttributeValues: {
       ':pk': buildEventPK(eventId),
       ':skPrefix': KEY_PREFIX.SIGNUP,
     },
-  }));
+    Limit: limit,
+  };
+  if (exclusiveStartKey) {
+    queryParams.ExclusiveStartKey = exclusiveStartKey;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
 
   const signups = (result.Items || []).map((item) => ({
     userId: item.userId,
@@ -188,7 +254,11 @@ async function listSignups(event, eventId) {
     registeredAt: item.registeredAt,
   }));
 
-  return success({ eventId, signups, count: signups.length });
+  const response = { eventId, signups, count: signups.length };
+  if (result.LastEvaluatedKey) {
+    response.nextCursor = encodeCursor(result.LastEvaluatedKey);
+  }
+  return success(response);
 }
 
 /**
