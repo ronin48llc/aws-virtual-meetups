@@ -347,6 +347,58 @@ describe('WebSocket Connect Handler', () => {
     expect(result.statusCode).toBe(500);
     expect(result.body).toContain('Internal server error');
   });
+
+  it('paginates the existing-connections dedup query — finds and deletes a stale connection on page 2 (issue #68)', async () => {
+    // 1. Ban check
+    mockSend.mockResolvedValueOnce({ Item: undefined });
+    // 2. Query page 1 — different user's connection + LastEvaluatedKey
+    mockSend.mockResolvedValueOnce({
+      Items: [
+        { connectionId: 'conn-other-1', userId: 'other-user', eventId: 'evt_abc123' },
+      ],
+      LastEvaluatedKey: { connectionId: 'conn-other-1', eventId: 'evt_abc123' },
+    });
+    // 3. Query page 2 — our user's stale connection, no LastEvaluatedKey (terminates)
+    mockSend.mockResolvedValueOnce({
+      Items: [
+        { connectionId: 'conn-stale', userId: 'user-456', eventId: 'evt_abc123' },
+      ],
+    });
+    // 4. DeleteCommand for the stale connection
+    mockSend.mockResolvedValueOnce({});
+    // 5. PutCommand for the new connection
+    mockSend.mockResolvedValueOnce({});
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token-123',
+        eventId: 'evt_abc123',
+        userId: 'user-456',
+      },
+    });
+
+    const result = await connectHandler(event);
+    expect(result.statusCode).toBe(200);
+
+    // Verify DeleteCommand was issued for the page-2 stale connection.
+    const { DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+    expect(DeleteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        TableName: 'TestConnectionsTable',
+        Key: { connectionId: 'conn-stale' },
+      }),
+    );
+
+    // First two QueryCommands against EventConnections are the dedup loop:
+    // page 1 with no ExclusiveStartKey, page 2 with the first page's LEK.
+    // (A third QueryCommand is fired later by the ATTENDEE_JOINED broadcast
+    // for the same GSI; not part of the dedup loop, so don't assert on it.)
+    const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
+    const queryCalls = QueryCommand.mock.calls.filter((c) => c[0] && c[0].IndexName === 'EventConnections');
+    expect(queryCalls.length).toBeGreaterThanOrEqual(2);
+    expect(queryCalls[0][0].ExclusiveStartKey).toBeUndefined();
+    expect(queryCalls[1][0].ExclusiveStartKey).toEqual({ connectionId: 'conn-other-1', eventId: 'evt_abc123' });
+  });
 });
 
 describe('WebSocket Disconnect Handler', () => {

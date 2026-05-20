@@ -77,15 +77,29 @@ async function handler(event) {
       }
     }
 
-    // Remove stale connections for the same user+event (prevent duplicates)
-    const existingConnections = await docClient.send(new QueryCommand({
-      TableName: CONNECTIONS_TABLE_NAME,
-      IndexName: 'EventConnections',
-      KeyConditionExpression: 'eventId = :eventId',
-      ExpressionAttributeValues: { ':eventId': eventId },
-    }));
+    // Remove stale connections for the same user+event (prevent duplicates).
+    // Loop through DDB Query pages — single-page reads silently miss any
+    // stale connection past the 1 MB page cap, so on large events the
+    // reconnecting user accumulates duplicate connections and receives
+    // every broadcast twice. See issue #68.
+    const existingConnectionItems = [];
+    let dedupExclusiveStartKey;
+    do {
+      const dedupParams = {
+        TableName: CONNECTIONS_TABLE_NAME,
+        IndexName: 'EventConnections',
+        KeyConditionExpression: 'eventId = :eventId',
+        ExpressionAttributeValues: { ':eventId': eventId },
+      };
+      if (dedupExclusiveStartKey) {
+        dedupParams.ExclusiveStartKey = dedupExclusiveStartKey;
+      }
+      const dedupResult = await docClient.send(new QueryCommand(dedupParams));
+      existingConnectionItems.push(...(dedupResult.Items || []));
+      dedupExclusiveStartKey = dedupResult.LastEvaluatedKey;
+    } while (dedupExclusiveStartKey);
 
-    const staleConnections = (existingConnections.Items || []).filter(
+    const staleConnections = existingConnectionItems.filter(
       (conn) => conn.userId === userId && conn.connectionId !== connectionId
     );
 
