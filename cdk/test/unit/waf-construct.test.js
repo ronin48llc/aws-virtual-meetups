@@ -139,6 +139,23 @@ describe('WafConstruct', () => {
       });
     });
 
+    test('includes AWS Managed Rules Amazon IP Reputation List (issue #40)', () => {
+      template.hasResourceProperties('AWS::WAFv2::WebACL', {
+        Rules: Match.arrayWith([
+          Match.objectLike({
+            Name: 'AWSManagedRulesAmazonIpReputationList',
+            Priority: 35,
+            Statement: {
+              ManagedRuleGroupStatement: {
+                Name: 'AWSManagedRulesAmazonIpReputationList',
+                VendorName: 'AWS',
+              },
+            },
+          }),
+        ]),
+      });
+    });
+
     test('includes size restriction rule (4KB max body)', () => {
       template.hasResourceProperties('AWS::WAFv2::WebACL', {
         Rules: Match.arrayWith([
@@ -178,7 +195,7 @@ describe('WafConstruct', () => {
       });
     });
 
-    test('has exactly 6 rules', () => {
+    test('has exactly 7 rules', () => {
       template.hasResourceProperties('AWS::WAFv2::WebACL', {
         Rules: Match.arrayWith([
           Match.objectLike({ Name: 'RateLimitUnauthenticated' }),
@@ -186,6 +203,7 @@ describe('WafConstruct', () => {
           Match.objectLike({ Name: 'AWSManagedRulesCommonRuleSet' }),
           Match.objectLike({ Name: 'AWSManagedRulesSQLiRuleSet' }),
           Match.objectLike({ Name: 'AWSManagedRulesKnownBadInputsRuleSet' }),
+          Match.objectLike({ Name: 'AWSManagedRulesAmazonIpReputationList' }),
           Match.objectLike({ Name: 'SizeRestriction4KB' }),
         ]),
       });
