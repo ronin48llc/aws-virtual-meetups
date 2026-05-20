@@ -21,9 +21,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: test/smoke/package-lock.json
+
+      - name: Install smoke-test dependencies
+        # `ws` is required by websocket.smoke.js. Without this step, that
+        # smoke file silently skips itself and the WebSocket layer goes
+        # untested — exactly the "looks healthy in CI but actually broken"
+        # gap this PR was meant to close.
+        run: npm ci
+        working-directory: test/smoke
 
       - name: Run smoke tests
-        run: node test/smoke/run.js
+        run: node run.js
+        working-directory: test/smoke
         env:
           # Each smoke file skips itself if its required config is absent,
           # so partial configurations still produce useful output.
