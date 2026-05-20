@@ -138,12 +138,15 @@ async function handler(event) {
 
     console.info('Connection stored', { connectionId, eventId, userId, role });
 
-    // Broadcast ATTENDEE_JOINED to all connections for this event (exclude self — connection not fully established yet)
+    // Broadcast ATTENDEE_JOINED to all connections for this event (exclude
+    // self — connection not fully established yet). Issue #85: do NOT
+    // include email in the broadcast — every attendee receives this, and
+    // emails would be harvestable by any participant.
     try {
       await broadcast(eventId, {
         type: 'ATTENDEE_JOINED',
         eventId,
-        data: { userId, displayName, email, role, connectionId },
+        data: { userId, displayName, role, connectionId },
       }, { excludeConnectionId: connectionId });
     } catch (broadcastError) {
       console.error('Failed to broadcast ATTENDEE_JOINED', { connectionId, eventId, error: broadcastError.message });

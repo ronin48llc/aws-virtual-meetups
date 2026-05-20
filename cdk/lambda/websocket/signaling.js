@@ -1489,10 +1489,13 @@ async function handleDismissHand(eventId, body, connectionId) {
  */
 async function handleGetAttendeeList(eventId, body, connectionId) {
   const connections = await getConnectionsForEvent(eventId);
+  // Issue #85: do not include email in the WS response. Every attendee can
+  // call this action, so emails would be harvested by any participant. The
+  // presenter's auth-gated GET /events/{id}/signups endpoint is the place
+  // for email visibility.
   const attendees = connections.map(c => ({
     userId: c.userId,
     displayName: c.displayName || '',
-    email: c.email || '',
     role: c.role,
     connectionId: c.connectionId,
   }));
