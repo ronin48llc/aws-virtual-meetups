@@ -43,11 +43,18 @@ const SUPPORTED_TARGET_LANGUAGES = [
 
 /**
  * Extract authenticated user claims from the request context.
+ *
+ * Issue #123: api-stack mounts the route on an HttpApi (API Gateway v2),
+ * which passes claims under `authorizer.jwt.claims`, not the v1
+ * `authorizer.claims`. Handle both shapes so the Lambda also works
+ * against v1 (REST API) integrations and test mocks.
+ *
  * @param {Object} event - API Gateway event.
  * @returns {Object|null} User claims or null if unauthenticated.
  */
 function getAuthClaims(event) {
-  const claims = event.requestContext && event.requestContext.authorizer && event.requestContext.authorizer.claims;
+  const authorizer = event.requestContext && event.requestContext.authorizer;
+  const claims = authorizer && (authorizer.claims || (authorizer.jwt && authorizer.jwt.claims));
   if (!claims || !claims.sub) {
     return null;
   }
@@ -306,18 +313,26 @@ async function startTranscription(event) {
 /**
  * Main Lambda handler.
  * Routes requests based on HTTP method and path.
+ *
+ * Issue #123: api-stack uses HttpApi (API Gateway v2), which sends
+ *   - method as event.requestContext.http.method (not event.httpMethod)
+ *   - resource as event.routeKey ("POST /events/{id}/...") (not event.resource)
+ * Other handlers in this codebase (event-crud, signup, session-manager,
+ * token-generator) already dual-route; transcription was the only outlier
+ * and every production request returned `Unsupported route: undefined undefined`.
  */
 exports.handler = async (event) => {
   try {
-    const method = event.httpMethod;
-    const resource = event.resource;
+    const method = event.httpMethod || (event.requestContext && event.requestContext.http && event.requestContext.http.method);
+    const resource = event.resource || event.routeKey || '';
+    const normalizedResource = resource.includes(' ') ? resource.split(' ')[1] : resource;
 
     // Route: POST /events/{id}/transcription/start
-    if (method === 'POST' && resource === '/events/{id}/transcription/start') {
+    if (method === 'POST' && normalizedResource === '/events/{id}/transcription/start') {
       return await startTranscription(event);
     }
 
-    return badRequest(`Unsupported route: ${method} ${resource}`);
+    return badRequest(`Unsupported route: ${method} ${normalizedResource}`);
   } catch (err) {
     console.error('Transcription orchestrator error:', err);
     return serverError('An unexpected error occurred');
