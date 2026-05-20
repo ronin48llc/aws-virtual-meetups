@@ -157,6 +157,73 @@ describe('Event CRUD Lambda handler', () => {
       const result = await handler(event);
       expect(result.statusCode).toBe(400);
     });
+
+    describe('length bounds (issue #32)', () => {
+      it('rejects title longer than 200 chars with 400', async () => {
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events',
+          body: {
+            title: 'x'.repeat(201),
+            description: 'ok',
+            scheduledStart: futureDate,
+          },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+        expect(JSON.parse(result.body).message).toMatch(/title/);
+        expect(mockSend).not.toHaveBeenCalled();
+      });
+
+      it('accepts title exactly at the 200-char cap', async () => {
+        mockSend.mockResolvedValueOnce({});
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events',
+          body: {
+            title: 'x'.repeat(200),
+            description: 'ok',
+            scheduledStart: futureDate,
+          },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(201);
+      });
+
+      it('rejects description longer than 5000 chars with 400', async () => {
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events',
+          body: {
+            title: 'ok',
+            description: 'x'.repeat(5001),
+            scheduledStart: futureDate,
+          },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+        expect(JSON.parse(result.body).message).toMatch(/description/);
+        expect(mockSend).not.toHaveBeenCalled();
+      });
+
+      it('rejects empty title (zero-length after trim) with 400', async () => {
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events',
+          body: {
+            title: '   ',
+            description: 'ok',
+            scheduledStart: futureDate,
+          },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+      });
+    });
   });
 
   describe('GET /events - List Events', () => {
@@ -716,6 +783,56 @@ describe('Event CRUD Lambda handler', () => {
       const updateCall = UpdateCommand.mock.calls[0][0];
       expect(updateCall.UpdateExpression).toContain('GSI1SK');
       expect(updateCall.UpdateExpression).toContain('GSI2SK');
+    });
+
+    describe('length bounds (issue #32)', () => {
+      it('rejects too-long title on PUT with 400', async () => {
+        mockSend.mockResolvedValueOnce({
+          Item: { eventId: 'evt_abc', ownerUserId: 'user-123', status: 'scheduled' },
+        });
+        const event = buildEvent({
+          method: 'PUT',
+          resource: '/events/{id}',
+          pathParameters: { id: 'evt_abc' },
+          body: { title: 'x'.repeat(201) },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+        expect(JSON.parse(result.body).message).toMatch(/title/);
+      });
+
+      it('rejects too-long description on PUT with 400', async () => {
+        mockSend.mockResolvedValueOnce({
+          Item: { eventId: 'evt_abc', ownerUserId: 'user-123', status: 'scheduled' },
+        });
+        const event = buildEvent({
+          method: 'PUT',
+          resource: '/events/{id}',
+          pathParameters: { id: 'evt_abc' },
+          body: { description: 'x'.repeat(5001) },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+        expect(JSON.parse(result.body).message).toMatch(/description/);
+      });
+
+      it('skips length validation when title/description are absent on PUT', async () => {
+        mockSend.mockResolvedValueOnce({
+          Item: { eventId: 'evt_abc', ownerUserId: 'user-123', status: 'scheduled', scheduledStart: futureDate },
+        });
+        mockSend.mockResolvedValueOnce({ Attributes: {} });
+        const event = buildEvent({
+          method: 'PUT',
+          resource: '/events/{id}',
+          pathParameters: { id: 'evt_abc' },
+          body: { scheduledStart: futureDate },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+      });
     });
   });
 
