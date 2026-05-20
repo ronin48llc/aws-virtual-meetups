@@ -34,7 +34,7 @@ async function handler(event) {
 
   const token = queryParams.token;
   const eventId = queryParams.eventId;
-  const role = queryParams.role || 'attendee';
+  const claimedRole = queryParams.role || 'attendee';
   const displayName = queryParams.displayName || '';
 
   // Required parameters
@@ -45,7 +45,7 @@ async function handler(event) {
 
   // Verify the Cognito ID token. Identity (userId, email) comes from the
   // verified claims, never the query string — the client cannot lie about
-  // who they are.
+  // who they are. (issue #4)
   const claims = await verifyIdToken(token);
   if (!claims) {
     console.error('Token verification failed', { connectionId, eventId });
@@ -55,15 +55,53 @@ async function handler(event) {
   const email = claims.email || '';
   const tokenExp = typeof claims.exp === 'number' ? claims.exp : null;
 
-  // Validate role (session-level, not a Cognito claim — it's the role the
-  // user is *requesting* for this event session)
+  // Validate the claimed role is one of the known values. The query string is
+  // client-controlled, so we still re-verify the actual role against event
+  // ownership below (issue #83).
   const validRoles = ['presenter', 'co-presenter', 'attendee'];
-  if (!validRoles.includes(role)) {
-    console.error('Invalid role', { connectionId, role });
+  if (!validRoles.includes(claimedRole)) {
+    console.error('Invalid role', { connectionId, claimedRole });
     return { statusCode: 401, body: 'Unauthorized: invalid role' };
   }
 
   try {
+    // Issue #83: verify the claimed role against the event's ownership data.
+    // The query string is client-controlled, so trusting `claimedRole` as-is
+    // means any attendee can connect with role=presenter and bypass every
+    // downstream connection.role check (PR #71, #80, token-generator).
+    // Minimum viable rule: owner -> presenter, everyone else -> attendee.
+    // Co-presenter persistence across reconnects is intentionally NOT
+    // supported here; promotion must be re-issued by the presenter via the
+    // `promoteUser` WS action each session.
+    let verifiedRole = 'attendee';
+    if (TABLE_NAME) {
+      const eventResult = await docClient.send(new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: `EVENT#${eventId}`, SK: 'METADATA' },
+      }));
+
+      if (!eventResult.Item) {
+        console.error('Event not found at $connect', { connectionId, eventId });
+        return { statusCode: 401, body: 'Unauthorized: event not found' };
+      }
+
+      if (eventResult.Item.ownerUserId === userId) {
+        verifiedRole = 'presenter';
+      }
+      // else: stays 'attendee' — co-presenter promotions must come from the
+      // server-mediated `promoteUser` action during the session.
+    } else {
+      // Test / pre-deploy environments without TABLE_NAME fall through with
+      // attendee role. Production stack ALWAYS sets TABLE_NAME.
+      verifiedRole = 'attendee';
+    }
+
+    if (claimedRole !== verifiedRole) {
+      console.warn('Role downgraded at $connect', {
+        connectionId, eventId, userId, claimedRole, verifiedRole,
+      });
+    }
+
     // Check if user is banned from this event
     if (TABLE_NAME) {
       const banRecord = await docClient.send(new GetCommand({
@@ -124,7 +162,7 @@ async function handler(event) {
         connectionId,
         eventId,
         userId,
-        role,
+        role: verifiedRole,
         displayName,
         email,
         connectedAt: now.toISOString(),
@@ -136,7 +174,7 @@ async function handler(event) {
       },
     }));
 
-    console.info('Connection stored', { connectionId, eventId, userId, role });
+    console.info('Connection stored', { connectionId, eventId, userId, role: verifiedRole });
 
     // Broadcast ATTENDEE_JOINED to all connections for this event (exclude
     // self — connection not fully established yet). Issue #85: do NOT
@@ -146,7 +184,8 @@ async function handler(event) {
       await broadcast(eventId, {
         type: 'ATTENDEE_JOINED',
         eventId,
-        data: { userId, displayName, role, connectionId },
+        // Issue #85: do not include `email` in the broadcast payload.
+        data: { userId, displayName, role: verifiedRole, connectionId },
       }, { excludeConnectionId: connectionId });
     } catch (broadcastError) {
       console.error('Failed to broadcast ATTENDEE_JOINED', { connectionId, eventId, error: broadcastError.message });
