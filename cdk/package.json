@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1047.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1050.0",
     "@aws-sdk/client-dynamodb": "^3.1047.0",
     "@aws-sdk/client-ivs-realtime": "^3.1047.0",
     "@aws-sdk/client-ivschat": "^3.1047.0",
