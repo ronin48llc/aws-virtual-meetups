@@ -1,0 +1,9 @@
+{
+  "name": "virtual-meetup-smoke-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Smoke-test runtime dependencies. Kept separate from cdk/package.json so the smoke job's install footprint doesn't drag into the unit-test CI job.",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
