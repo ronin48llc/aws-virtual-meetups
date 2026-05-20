@@ -154,6 +154,46 @@ class ObservabilityStack extends Stack {
     });
     lambdaDurationAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
+    // Alarm: Lambda Throttles > 0 — distinct from Errors; fires when
+    // concurrent invocations hit a reserved or account-wide cap. Throttles
+    // surface to clients as 502/503 at API GW but don't bump LambdaErrors
+    // since the underlying Lambda was never invoked. See #50.
+    const lambdaThrottleAlarm = new cloudwatch.Alarm(this, 'LambdaThrottleAlarm', {
+      alarmName: `VirtualMeetup-${envName}-LambdaThrottles`,
+      alarmDescription: 'Lambda throttling events detected — concurrent invocations hit a cap',
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/Lambda',
+        metricName: 'Throttles',
+        statistic: 'Sum',
+        period: Duration.minutes(1),
+      }),
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    lambdaThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+
+    // Alarm: API 4xx rate > 50 per 5 min (~10/min). Catches scanning + broken
+    // client deploys + systemic authz issues that don't trip the 5xx alarm.
+    // Two eval periods so a single press-surge of wrong emails doesn't page.
+    const api4xxAlarm = new cloudwatch.Alarm(this, 'Api4xxRateAlarm', {
+      alarmName: `VirtualMeetup-${envName}-Api4xxRate`,
+      alarmDescription: 'API 4xx error rate elevated — possible client breakage or scanning',
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/ApiGateway',
+        metricName: '4xx',
+        dimensionsMap: { ApiId: httpApi ? httpApi.apiId : 'placeholder' },
+        statistic: 'Sum',
+        period: Duration.minutes(5),
+      }),
+      threshold: 50,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    api4xxAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+
     // -------------------------------------------------------
     // CloudWatch Dashboard
     // -------------------------------------------------------
