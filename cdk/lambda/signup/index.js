@@ -15,10 +15,10 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 
-const { KEY_PREFIX, SK } = require('../shared/constants');
+const { KEY_PREFIX, SK, MAX_DISPLAY_NAME_LENGTH } = require('../shared/constants');
 const { buildEventPK, buildSignupSK } = require('../shared/dynamo-utils');
 const { success, created, badRequest, unauthorized, forbidden, notFound, serverError } = require('../shared/response');
-const { validateRequiredFields, isValidEmail, parseBody, sanitize } = require('../shared/validation');
+const { validateRequiredFields, isValidEmail, isValidLength, parseBody, sanitize } = require('../shared/validation');
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -108,6 +108,10 @@ async function signUpForEvent(event, eventId) {
   const email = (claims.email || '').trim();
   if (!isValidEmail(email)) {
     return badRequest('Authenticated user has no valid email claim');
+  }
+
+  if (!isValidLength(data.displayName, 1, MAX_DISPLAY_NAME_LENGTH)) {
+    return badRequest(`displayName must be 1-${MAX_DISPLAY_NAME_LENGTH} characters`);
   }
 
   const displayName = sanitize(data.displayName);

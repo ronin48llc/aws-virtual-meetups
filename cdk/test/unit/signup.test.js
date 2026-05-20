@@ -238,6 +238,49 @@ describe('Sign-Up Lambda handler', () => {
       const body = JSON.parse(result.body);
       expect(body.message).toContain('Event ID is required');
     });
+
+    describe('displayName length bounds (issue #46)', () => {
+      it('rejects displayName longer than 100 chars with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: { eventId: 'evt_abc', ownerUserId: 'owner', title: 'T' } });
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/signup',
+          pathParameters: { id: 'evt_abc' },
+          body: { displayName: 'x'.repeat(101), email: 'user@example.com' },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+        expect(JSON.parse(result.body).message).toMatch(/displayName/);
+      });
+
+      it('accepts displayName exactly at the 100-char cap', async () => {
+        mockSend.mockResolvedValueOnce({ Item: { eventId: 'evt_abc', ownerUserId: 'owner', title: 'T' } });
+        mockSend.mockResolvedValueOnce({});
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/signup',
+          pathParameters: { id: 'evt_abc' },
+          body: { displayName: 'x'.repeat(100), email: 'user@example.com' },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(201);
+      });
+
+      it('rejects whitespace-only displayName with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: { eventId: 'evt_abc', ownerUserId: 'owner', title: 'T' } });
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/signup',
+          pathParameters: { id: 'evt_abc' },
+          body: { displayName: '   ', email: 'user@example.com' },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+      });
+    });
   });
 
   describe('POST /events/{id}/signup - Email Integration', () => {

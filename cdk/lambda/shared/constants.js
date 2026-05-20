@@ -94,13 +94,13 @@ const CORS_HEADERS = Object.freeze({
 });
 
 /**
- * Length bounds for user-supplied event text fields. DDB's 400 KB
- * per-item cap is the upstream limit; these caps keep GSI projections
- * (which include the full attributes) from being silently bloated by
- * a single oversized event. See issue #32.
+ * Length bounds for user-supplied text fields. DDB's 400 KB per-item
+ * cap is the upstream limit; these caps keep items + GSI projections
+ * from being silently bloated by a single oversized record. See #32, #46.
  */
 const MAX_TITLE_LENGTH = 200;
 const MAX_DESCRIPTION_LENGTH = 5000;
+const MAX_DISPLAY_NAME_LENGTH = 100;
 
 module.exports = {
   EVENT_STATUS,
@@ -114,4 +114,5 @@ module.exports = {
   CORS_HEADERS,
   MAX_TITLE_LENGTH,
   MAX_DESCRIPTION_LENGTH,
+  MAX_DISPLAY_NAME_LENGTH,
 };
