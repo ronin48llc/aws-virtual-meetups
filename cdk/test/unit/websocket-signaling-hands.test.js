@@ -13,6 +13,9 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   DeleteCommand: jest.fn((params) => ({ type: 'Delete', params })),
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
   BatchWriteCommand: jest.fn((params) => ({ type: 'BatchWrite', params })),
+  // GetCommand needed for the issue #70 dispatcher authz check on
+  // lowerAllHands / acknowledgeHand / dismissHand.
+  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
 }));
 
 // Mock broadcast
@@ -44,6 +47,13 @@ function buildEvent({ action, eventId, data, userId, timestamp, connectionId = '
     requestContext: { connectionId },
     body: JSON.stringify(body),
   };
+}
+
+// Issue #70: prepend a presenter Item to satisfy the dispatcher's authz
+// check on presenter-only actions (lowerAllHands, acknowledgeHand,
+// dismissHand). Tests for non-presenter actions don't call this.
+function presenterAuth() {
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter' } });
 }
 
 describe('WebSocket Signaling Handler — Hand Raising', () => {
@@ -290,6 +300,12 @@ describe('WebSocket Signaling Handler — Hand Raising', () => {
   });
 
   describe('lowerAllHands', () => {
+    beforeEach(() => {
+      // lowerAllHands is in PRESENTER_ONLY_ACTIONS (issue #70). Each test
+      // here needs the dispatcher's authz GET satisfied first.
+      presenterAuth();
+    });
+
     it('queries all HAND# items, batch deletes them, and broadcasts HANDS_CLEARED', async () => {
       // Mock query returning 2 hand items
       mockSend.mockResolvedValueOnce({

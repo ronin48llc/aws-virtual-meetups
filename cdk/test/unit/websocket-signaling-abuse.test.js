@@ -72,6 +72,12 @@ function buildEvent({ action, eventId, data, userId, targetConnectionId, connect
   };
 }
 
+// Issue #70: prepend a presenter Item to satisfy dispatcher authz on
+// kickUser / banUser / unbanUser / listBans.
+function presenterAuth() {
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-presenter', role: 'presenter' } });
+}
+
 describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -81,6 +87,7 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
   });
 
   describe('kickUser', () => {
+    beforeEach(presenterAuth);
     it('disconnects user from IVS Stage, IVS Chat, sends USER_KICKED, deletes connection, and broadcasts', async () => {
       // GetCommand for event metadata
       mockSend.mockResolvedValueOnce({
@@ -217,6 +224,7 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
   });
 
   describe('banUser', () => {
+    beforeEach(presenterAuth);
     it('executes kick flow and writes BAN item to DynamoDB', async () => {
       // GetCommand for event metadata (kick flow)
       mockSend.mockResolvedValueOnce({
@@ -315,6 +323,7 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
   });
 
   describe('unbanUser', () => {
+    beforeEach(presenterAuth);
     it('deletes BAN item from DynamoDB', async () => {
       mockSend.mockResolvedValueOnce({}); // DeleteCommand
 
@@ -383,6 +392,7 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
   });
 
   describe('listBans', () => {
+    beforeEach(presenterAuth);
     it('queries all BAN items and sends list to requester', async () => {
       // QueryCommand returns ban items
       mockSend.mockResolvedValueOnce({

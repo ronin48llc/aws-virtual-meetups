@@ -31,6 +31,31 @@ const TABLE_NAME = process.env.TABLE_NAME;
 const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
 const WEBSOCKET_ENDPOINT = process.env.WEBSOCKET_ENDPOINT;
 
+// Moderation actions that require the sender to be a presenter or
+// co-presenter. Centralized in the dispatcher so the per-handler check
+// can't be forgotten on future additions. See #70.
+const PRESENTER_ONLY_ACTIONS = new Set([
+  'promoteUser',
+  'demoteUser',
+  'grantSpeak',
+  'revokeSpeak',
+  'toggleChat',
+  'restrictChat',
+  'restrictQuestions',
+  'globalMuteAudio',
+  'globalMuteVideo',
+  'kickUser',
+  'banUser',
+  'unbanUser',
+  'listBans',
+  'acknowledgeHand',
+  'dismissHand',
+  'lowerAllHands',
+  'pinQuestion',
+  'unpinQuestion',
+  'dismissQuestion',
+]);
+
 /**
  * Main handler — routes WebSocket messages by action.
  *
@@ -64,6 +89,31 @@ async function handler(event) {
   if (!rateCheck.allowed) {
     console.warn('Rate limit exceeded', { connectionId, action, eventId, count: rateCheck.count });
     return { statusCode: 429, body: 'Rate limit exceeded. Please slow down.' };
+  }
+
+  // -------------------------------------------------------
+  // Authorization: 19 moderation actions require presenter or
+  // co-presenter role. Without this centralized check, any
+  // authenticated attendee can promote themselves to co-presenter,
+  // kick the actual presenter, globally mute everyone, etc. See #70.
+  // -------------------------------------------------------
+  if (PRESENTER_ONLY_ACTIONS.has(action)) {
+    let senderConn;
+    try {
+      const senderResult = await docClient.send(new GetCommand({
+        TableName: CONNECTIONS_TABLE_NAME,
+        Key: { connectionId },
+      }));
+      senderConn = senderResult.Item || null;
+    } catch (authErr) {
+      console.error('Failed to fetch connection for authz', { connectionId, action, error: authErr.message });
+      return { statusCode: 500, body: 'Internal server error' };
+    }
+    const role = senderConn && senderConn.role;
+    if (role !== SESSION_ROLE.PRESENTER && role !== SESSION_ROLE.CO_PRESENTER) {
+      console.warn('Presenter-only action denied', { connectionId, action, eventId, role });
+      return { statusCode: 403, body: 'Only presenters can perform this action' };
+    }
   }
 
   try {

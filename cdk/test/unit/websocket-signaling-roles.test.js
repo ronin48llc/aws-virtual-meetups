@@ -14,6 +14,8 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
   UpdateCommand: jest.fn((params) => ({ type: 'Update', params })),
   BatchWriteCommand: jest.fn((params) => ({ type: 'BatchWrite', params })),
+  // GetCommand needed for the issue #70 dispatcher authz check.
+  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
 }));
 
 // Mock broadcast
@@ -50,6 +52,57 @@ function buildEvent({ action, eventId, data, userId, targetConnectionId, connect
 describe('WebSocket Signaling Handler — Role Management and Chat Control', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Issue #70: dispatcher now does a sender-connection GET to enforce
+    // presenter-only authz on every moderation action in this file.
+    // Prepend a presenter Item so each test's existing mockResolvedValueOnce
+    // chain continues to satisfy its own assertions for the action-specific
+    // calls that follow.
+    mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter' } });
+  });
+
+  describe('presenter-only authz (issue #70)', () => {
+    const PRESENTER_ONLY = [
+      'promoteUser', 'demoteUser', 'grantSpeak', 'revokeSpeak',
+      'toggleChat', 'kickUser', 'banUser',
+    ];
+
+    for (const action of PRESENTER_ONLY) {
+      it(`returns 403 when ${action} is called by a non-presenter connection`, async () => {
+        // Drop the outer beforeEach's prepended presenter Item so the
+        // attendee mock is the FIRST thing the authz Get sees.
+        mockSend.mockReset();
+        mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-attacker', role: 'attendee' } });
+
+        const event = {
+          requestContext: { connectionId: 'conn-attacker' },
+          body: JSON.stringify({
+            action,
+            eventId: 'evt_abc123',
+            data: { targetConnectionId: 'conn-victim', userId: 'user-victim', enabled: true },
+          }),
+        };
+        const result = await handler(event);
+        expect(result.statusCode).toBe(403);
+        // No DDB write/update for the action itself — only the authz Get fired.
+        expect(mockSend).toHaveBeenCalledTimes(1);
+      });
+    }
+
+    it('returns 403 when senderConn record is missing entirely', async () => {
+      mockSend.mockReset();
+      mockSend.mockResolvedValueOnce({ Item: undefined });
+
+      const event = {
+        requestContext: { connectionId: 'conn-ghost' },
+        body: JSON.stringify({
+          action: 'promoteUser',
+          eventId: 'evt_abc123',
+          data: { targetConnectionId: 'conn-victim', userId: 'user-victim' },
+        }),
+      };
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+    });
   });
 
   describe('promoteUser', () => {

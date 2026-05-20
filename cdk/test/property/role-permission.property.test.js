@@ -16,6 +16,8 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
   UpdateCommand: jest.fn((params) => ({ type: 'Update', params })),
   BatchWriteCommand: jest.fn((params) => ({ type: 'BatchWrite', params })),
+  // GetCommand needed for issue #70 dispatcher authz on presenter-only actions.
+  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
 }));
 
 // Mock broadcast
@@ -95,6 +97,7 @@ describe('Role and Permission Management Property Tests', () => {
             mockBroadcast.mockResolvedValue({ sent: 2, failed: 0, cleaned: 0 });
 
             // Step 1: Promote user to co-presenter
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand for promote
 
             const promoteEvent = buildWebSocketEvent({
@@ -112,6 +115,7 @@ describe('Role and Permission Management Property Tests', () => {
             expect(promoteCall.ExpressionAttributeValues[':role']).toBe('co-presenter');
 
             // Step 2: Demote user back to attendee
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand for demote
 
             const demoteEvent = buildWebSocketEvent({
@@ -159,6 +163,7 @@ describe('Role and Permission Management Property Tests', () => {
             mockBroadcast.mockResolvedValue({ sent: 2, failed: 0, cleaned: 0 });
 
             // Toggle chat with the given enabled value
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
             const toggleEvent = buildWebSocketEvent({
@@ -225,6 +230,7 @@ describe('Role and Permission Management Property Tests', () => {
             const action = shouldGrant ? 'grantSpeak' : 'revokeSpeak';
 
             // Execute the speak permission action
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
             const speakEvent = buildWebSocketEvent({
