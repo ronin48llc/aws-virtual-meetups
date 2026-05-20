@@ -47,6 +47,8 @@ process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
 process.env.STORAGE_CONFIGURATION_ARN = 'arn:aws:ivs:us-east-1:123456789:storage-configuration/abc';
 process.env.ENCODER_CONFIGURATION_ARN = 'arn:aws:ivs:us-east-1:123456789:encoder-configuration/def';
 process.env.EMAIL_LAMBDA_ARN = 'arn:aws:lambda:us-east-1:123456789:function:VirtualMeetup-EmailSender';
+// Issue #101: wires the chat-review handler into CreateRoom
+process.env.CHAT_REVIEW_LAMBDA_ARN = 'arn:aws:lambda:us-east-1:123456789:function:VirtualMeetup-ChatReview';
 
 const { handler } = require('../../lambda/session-manager/index');
 
@@ -267,6 +269,45 @@ describe('Session Manager Lambda handler', () => {
       const body = JSON.parse(result.body);
       expect(body.message).toContain('Event ID is required');
     });
+
+    // Issue #101: chat-review must be wired into IVS Chat or moderation
+    // is silently off. Verify CreateRoom carries the messageReviewHandler.
+    it('passes messageReviewHandler to CreateRoomCommand with fail-closed fallback (#101)', async () => {
+      mockDdbSend.mockResolvedValueOnce({ Item: scheduledEvent });
+      mockIvsRealTimeSend.mockResolvedValueOnce({
+        stage: { arn: 'arn:aws:ivs:us-east-1:123456789:stage/new-stage' },
+      });
+      mockIvsChatSend.mockResolvedValueOnce({
+        arn: 'arn:aws:ivschat:us-east-1:123456789:room/new-room',
+      });
+      mockDdbSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        method: 'POST',
+        resource: '/events/{id}/start',
+        pathParameters: { id: 'evt_abc' },
+        claims: validClaims,
+      });
+
+      await handler(event);
+
+      const { CreateRoomCommand } = require('@aws-sdk/client-ivschat');
+      expect(CreateRoomCommand).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'meetup-chat-evt_abc',
+        messageReviewHandler: {
+          uri: 'arn:aws:lambda:us-east-1:123456789:function:VirtualMeetup-ChatReview',
+          fallbackResult: 'DENY',
+        },
+      }));
+    });
+
+    // Note: a companion "omits messageReviewHandler when env is empty" test
+    // was removed because it used jest.resetModules() to reload session-manager
+    // with a different CHAT_REVIEW_LAMBDA_ARN, which leaked stale module state
+    // into later tests in the same file. The optional-branch is covered by
+    // visual inspection of session-manager.js (the `if (CHAT_REVIEW_LAMBDA_ARN)`
+    // guard); a future refactor reading env at runtime would let us add the
+    // test back cleanly.
   });
 
   describe('POST /events/{id}/stop - Stop Event', () => {

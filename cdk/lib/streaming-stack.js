@@ -1,6 +1,8 @@
+const path = require('path');
 const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
 const s3 = require('aws-cdk-lib/aws-s3');
 const iam = require('aws-cdk-lib/aws-iam');
+const lambda = require('aws-cdk-lib/aws-lambda');
 const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
 
@@ -164,7 +166,47 @@ class StreamingStack extends Stack {
       ],
     });
 
+    // -------------------------------------------------------
+    // Chat Review Lambda (Issue #101)
+    //
+    // The chat-review handler enforces length, base64, and URL-blocklist
+    // moderation rules on every IVS Chat message. Before #101 the source
+    // existed but no CDK code deployed it and no chat room referenced it
+    // as a messageReviewHandler — live meetups shipped with zero moderation.
+    //
+    // The blocklist is sourced from CDK context (-c urlBlocklist=...) with
+    // a conservative default targeting common phishing/file-share domains.
+    // -------------------------------------------------------
+    const urlBlocklist = this.node.tryGetContext('urlBlocklist')
+      || 'drive.google.com,dropbox.com,wetransfer.com,mega.nz';
+
+    const chatReviewFunction = new lambda.Function(this, 'ChatReviewFunction', {
+      functionName: 'VirtualMeetup-ChatReview',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/chat-review/')),
+      timeout: Duration.seconds(5),
+      memorySize: 128,
+      environment: {
+        URL_BLOCKLIST: urlBlocklist,
+      },
+    });
+
+    // IVS Chat must be able to invoke the review handler for every message.
+    // Without this resource-based permission, CreateRoom with
+    // messageReviewHandler fails synchronously.
+    chatReviewFunction.addPermission('AllowIvsChatInvoke', {
+      principal: new iam.ServicePrincipal('ivschat.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+    });
+
     // CloudFormation outputs
+    new CfnOutput(this, 'ChatReviewFunctionArn', {
+      value: chatReviewFunction.functionArn,
+      description: 'ARN of the IVS Chat message-review Lambda',
+      exportName: 'ChatReviewFunctionArn',
+    });
+
     new CfnOutput(this, 'RecordingBucketName', {
       value: recordingBucket.bucketName,
       description: 'S3 bucket name for IVS recordings',
@@ -194,6 +236,7 @@ class StreamingStack extends Stack {
     this.ivsCompositionRole = ivsCompositionRole;
     this.ivsManagementPolicy = ivsManagementPolicy;
     this.recordingDistribution = recordingDistribution;
+    this.chatReviewFunction = chatReviewFunction;
   }
 }
 
