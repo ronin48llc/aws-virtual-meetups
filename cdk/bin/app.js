@@ -74,13 +74,15 @@ const streamingStack = new StreamingStack(app, `${prefix}-Streaming`, {
 });
 
 // -------------------------------------------------------
-// Stack 5: Transcription (no dependencies)
+// Stack 5: Transcription (depends on Data for event-ownership lookup)
 // Transcription Lambda with Transcribe + Translate permissions
 // -------------------------------------------------------
 const transcriptionStack = new TranscriptionStack(app, `${prefix}-Transcription`, {
   env,
   description: 'Virtual Meetup Platform - Transcription (Amazon Transcribe + Translate)',
+  mainTable: dataStack.mainTable,
 });
+transcriptionStack.addDependency(dataStack);
 
 // -------------------------------------------------------
 // Stack 6: Frontend (depends on DNS)

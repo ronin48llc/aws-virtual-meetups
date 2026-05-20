@@ -7,6 +7,8 @@ class TranscriptionStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
+    const { mainTable } = props;
+
     // -------------------------------------------------------
     // IAM Role for Transcription Lambda
     // Grants access to Transcribe Streaming and Translate
@@ -44,7 +46,18 @@ class TranscriptionStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       role: transcriptionRole,
+      environment: {
+        // Issue #81: the Lambda checks event ownership against the main
+        // table before issuing Transcribe presigned URLs.
+        TABLE_NAME: mainTable ? mainTable.tableName : '',
+      },
     });
+
+    // Grant the Lambda permission to read the event metadata for the
+    // ownership check.
+    if (mainTable) {
+      mainTable.grantReadData(transcriptionFunction);
+    }
 
     // -------------------------------------------------------
     // CloudFormation Outputs
