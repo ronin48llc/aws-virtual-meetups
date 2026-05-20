@@ -44,34 +44,33 @@
     <div class="modal" id="auth-modal"></div>
   </div>
 
+  <!--
+    External SDK <script> tags are pinned to specific versions and carry
+    Subresource Integrity (SRI) hashes. When upgrading any of these, the
+    integrity hash MUST be recomputed:
+        openssl dgst -sha384 -binary <file> | openssl base64 -A
+  -->
+
   <!-- IVS Web Broadcast SDK -->
-  <script src="https://web-broadcast.live-video.net/1.6.0/amazon-ivs-web-broadcast.js"></script>
+  <script src="https://web-broadcast.live-video.net/1.6.0/amazon-ivs-web-broadcast.js"
+          integrity="sha384-oj22v/UhkUON3VmdD+QnPt9VbchbM9senoTNR52X53QMEIpvuOhAPvMWCEndijGe"
+          crossorigin="anonymous"></script>
 
   <!-- HLS.js for recording playback -->
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"
+          integrity="sha384-5E8B0pTlZZJMabWpC0fyYf6OUpe15jJij34BqBAh4NXoHAlLNOjCPRrwtOXOQFAn"
+          crossorigin="anonymous"></script>
 
-  <!-- IVS Chat Messaging SDK (assigns window.IVSChat) -->
-  <script>
-    (async function() {
-      try {
-        const module = await import('https://cdn.jsdelivr.net/npm/amazon-ivs-chat-messaging@1/+esm');
-        window.IVSChat = module;
-      } catch(e) {
-        console.warn('Failed to load IVS Chat SDK:', e);
-      }
-    })();
-  </script>
+  <!-- IVS Chat Messaging SDK loader (dynamic import; assigns window.IVSChat) -->
+  <script src="js/vendor-loader.js"></script>
 
   <!-- Cognito SDK (loaded via CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/amazon-cognito-identity-js@6/dist/amazon-cognito-identity.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/amazon-cognito-identity-js@6.3.15/dist/amazon-cognito-identity.min.js"
+          integrity="sha384-tmLe+My/drouBT8LDBDX54/GtvpwceGWUwRKXHJfWra2DlJ/598zVtizduWyMqz5"
+          crossorigin="anonymous"></script>
 
-  <!-- Cognito Configuration -->
-  <script>
-    window.COGNITO_USER_POOL_ID = 'YOUR_USER_POOL_ID';
-    window.COGNITO_CLIENT_ID = 'YOUR_CLIENT_ID';
-    window.API_BASE_URL = 'https://api.yourdomain.com';
-    window.WS_BASE_URL = 'wss://ws.yourdomain.com';
-  </script>
+  <!-- Runtime configuration (operators edit frontend/js/config.js post-deploy) -->
+  <script src="js/config.js"></script>
 
   <!-- Application Scripts -->
   <script src="js/auth.js"></script>
