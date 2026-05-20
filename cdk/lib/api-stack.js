@@ -269,6 +269,24 @@ class ApiStack extends Stack {
         actions: ['iam:PassRole'],
         resources: [schedulerRole.roleArn],
       }));
+
+      // Issue #119: the EventBridge Scheduler role (defined in
+      // email-stack.js) was only granted lambda:InvokeFunction on the
+      // email Lambda. Auto-stop and time-warning schedules that
+      // session-manager creates pointing at itself failed at firing time
+      // because the role couldn't invoke session-manager. Add the grant
+      // here via an explicit iam.Policy resource owned by ApiStack so it
+      // doesn't create a cross-stack cycle (the role lives in EmailStack,
+      // the function lives in ApiStack — putting the policy in ApiStack
+      // means the dependency runs ApiStack → EmailStack only).
+      new iam.Policy(this, 'SchedulerInvokeSessionManagerPolicy', {
+        roles: [schedulerRole],
+        statements: [new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['lambda:InvokeFunction'],
+          resources: [sessionManagerFn.functionArn],
+        })],
+      });
     }
 
     tokenGeneratorFn.addToRolePolicy(new iam.PolicyStatement({
