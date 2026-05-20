@@ -5,7 +5,7 @@ const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 
 class TranscriptionStack extends Stack {
-  constructor(scope, id, props) {
+  constructor(scope, id, props = {}) {
     super(scope, id, props);
 
     const { mainTable } = props;
