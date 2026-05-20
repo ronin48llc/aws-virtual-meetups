@@ -171,6 +171,10 @@ const observabilityStack = new ObservabilityStack(app, `${prefix}-Observability`
   webSocketApi: apiStack.webSocketApi,
   mainTable: dataStack.mainTable,
   connectionsTable: dataStack.connectionsTable,
+  publicationDlq: publicationStack.publicationDlq,
+  emailDlq: emailStack.emailDlq,
 });
 observabilityStack.addDependency(apiStack);
 observabilityStack.addDependency(dataStack);
+observabilityStack.addDependency(publicationStack);
+observabilityStack.addDependency(emailStack);
