@@ -303,6 +303,9 @@ describe('Abuse Prevention Property Tests', () => {
             const stageArn = 'arn:aws:ivs:us-east-1:123456789:stage/test-stage';
             const chatRoomArn = 'arn:aws:ivschat:us-east-1:123456789:room/test-room';
 
+            // Issue #70: dispatcher authz GET on the connections table.
+            mockDdbSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
+
             // Mock: GetCommand returns event metadata with IVS ARNs
             mockDdbSend.mockResolvedValueOnce({
               Item: {

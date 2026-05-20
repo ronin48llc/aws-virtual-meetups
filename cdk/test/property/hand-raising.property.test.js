@@ -14,6 +14,8 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   PutCommand: jest.fn((params) => ({ type: 'Put', params })),
   DeleteCommand: jest.fn((params) => ({ type: 'Delete', params })),
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
+  // GetCommand needed for issue #70 dispatcher authz on lowerAllHands.
+  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
   BatchWriteCommand: jest.fn((params) => ({ type: 'BatchWrite', params })),
 }));
 
@@ -208,6 +210,8 @@ describe('Hand-Raising Property Tests', () => {
               type: 'HAND',
             }));
 
+            // Issue #70: dispatcher authz GET on the connections table.
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
             // Mock QueryCommand returning all hands
             mockSend.mockResolvedValueOnce({ Items: items });
 
@@ -234,14 +238,16 @@ describe('Hand-Raising Property Tests', () => {
               data: { count: handCount },
             });
 
-            // Verify that the correct number of batch delete calls were made
+            // Verify that the correct number of calls were made.
+            // Issue #70: the dispatcher now adds one authz GET on every
+            // PRESENTER_ONLY_ACTIONS call, so the totals are offset by 1.
             if (handCount > 0) {
               const expectedBatches = Math.ceil(handCount / 25);
-              // mockSend was called: 1 (query) + expectedBatches (deletes)
-              expect(mockSend).toHaveBeenCalledTimes(1 + expectedBatches);
+              // mockSend: 1 (authz) + 1 (query) + expectedBatches (deletes)
+              expect(mockSend).toHaveBeenCalledTimes(2 + expectedBatches);
             } else {
-              // Only the query call, no batch deletes
-              expect(mockSend).toHaveBeenCalledTimes(1);
+              // 1 (authz) + 1 (query), no batch deletes
+              expect(mockSend).toHaveBeenCalledTimes(2);
             }
           }
         ),

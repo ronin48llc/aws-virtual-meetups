@@ -76,6 +76,12 @@ function buildEvent({ action, eventId, data, userId, targetConnectionId, connect
   };
 }
 
+// Issue #70: prepend a presenter Item to satisfy dispatcher authz on
+// presenter-only actions (restrictChat, restrictQuestions, globalMute*).
+function presenterAuth() {
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-presenter', role: 'presenter' } });
+}
+
 describe('WebSocket Signaling Handler — Mute and Participation Controls', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -251,6 +257,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('restrictChat', () => {
+    beforeEach(presenterAuth);
     it('updates connection record with chatRestricted flag and notifies the user', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
@@ -293,6 +300,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('restrictQuestions', () => {
+    beforeEach(presenterAuth);
     it('updates connection record with questionsRestricted flag and notifies the user', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
@@ -334,6 +342,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('globalMuteAudio', () => {
+    beforeEach(presenterAuth);
     it('updates event metadata with globalAudioMute flag and broadcasts to all', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
@@ -413,6 +422,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('globalMuteVideo', () => {
+    beforeEach(presenterAuth);
     it('updates event metadata with globalVideoMute flag and broadcasts to all', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
