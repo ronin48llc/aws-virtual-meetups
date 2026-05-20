@@ -136,16 +136,25 @@ class ObservabilityStack extends Stack {
       throttleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
 
-    // Alarm: WebSocket Failures > 10/min
-    const wsFailureAlarm = new cloudwatch.Alarm(this, 'WebSocketFailureAlarm', {
-      alarmName: `VirtualMeetup-${envName}-WebSocketFailures`,
-      alarmDescription: 'WebSocket connection errors exceed 10 per minute',
+    // Issue #113: the previous WebSocketFailureAlarm referenced
+    // `ConnectError`, which is NOT a real CloudWatch metric for API
+    // Gateway v2 WebSocket APIs. The actual metric names are
+    // ClientError (4xx, e.g. auth failures on $connect) and
+    // ExecutionError (5xx, integration / Lambda failures). The old
+    // alarm sat in INSUFFICIENT_DATA forever, giving the operator a
+    // false sense that WS failures were being monitored.
+    //
+    // 'prod' must match the WebSocketStage stageName in api-stack.js.
+    const wsStageName = 'prod';
+    const wsApiId = webSocketApi ? webSocketApi.apiId : 'placeholder';
+
+    const wsClientErrorAlarm = new cloudwatch.Alarm(this, 'WebSocketClientErrorAlarm', {
+      alarmName: `VirtualMeetup-${envName}-WebSocketClientErrors`,
+      alarmDescription: 'WebSocket API client errors (4xx — auth failures, bad messages) exceed 10/min',
       metric: new cloudwatch.Metric({
         namespace: 'AWS/ApiGateway',
-        metricName: 'ConnectError',
-        dimensionsMap: {
-          ApiId: webSocketApi ? webSocketApi.apiId : 'placeholder',
-        },
+        metricName: 'ClientError',
+        dimensionsMap: { ApiId: wsApiId, Stage: wsStageName },
         statistic: 'Sum',
         period: Duration.minutes(1),
       }),
@@ -154,7 +163,24 @@ class ObservabilityStack extends Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    wsFailureAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+    wsClientErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+
+    const wsExecutionErrorAlarm = new cloudwatch.Alarm(this, 'WebSocketExecutionErrorAlarm', {
+      alarmName: `VirtualMeetup-${envName}-WebSocketExecutionErrors`,
+      alarmDescription: 'WebSocket API execution errors (5xx — integration/Lambda failures) exceed 5/min',
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/ApiGateway',
+        metricName: 'ExecutionError',
+        dimensionsMap: { ApiId: wsApiId, Stage: wsStageName },
+        statistic: 'Sum',
+        period: Duration.minutes(1),
+      }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    wsExecutionErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
     // Issue #109: per-function p99 duration alarms. Same dimension fix as
     // the error alarms above — without FunctionName, this aggregated p99
