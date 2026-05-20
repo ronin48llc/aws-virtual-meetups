@@ -187,6 +187,7 @@ describe('Messaging Property Tests', () => {
             ];
 
             // Mock getConnectionsForEvent to return all connections
+            mockSend.mockResolvedValueOnce({ Item: { connectionId: senderConnId, userId: senderUserId, displayName } }); // issue #79
             mockGetConnectionsForEvent.mockResolvedValueOnce(allConnections);
 
             const event = buildWebSocketEvent({
@@ -267,6 +268,7 @@ describe('Messaging Property Tests', () => {
               { connectionId: 'conn_att_3', userId: 'user_att_3', eventId, role: 'attendee' },
             ];
 
+            mockSend.mockResolvedValueOnce({ Item: { connectionId: senderConnId, userId: senderUserId, displayName } }); // issue #79
             mockGetConnectionsForEvent.mockResolvedValueOnce(connections);
 
             const event = buildWebSocketEvent({
@@ -390,6 +392,9 @@ describe('Messaging Property Tests', () => {
             const timestamps = [];
 
             for (const msg of messages) {
+              // Issue #79: senderConn drives displayed identity. Use the
+              // message's userId/displayName so the broadcast carries them.
+              mockSend.mockResolvedValueOnce({ Item: { connectionId: senderConnId, userId: msg.userId, displayName: msg.displayName } });
               mockGetConnectionsForEvent.mockResolvedValueOnce(connections);
 
               const event = buildWebSocketEvent({

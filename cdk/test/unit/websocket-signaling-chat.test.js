@@ -68,6 +68,14 @@ function buildEvent({ action, eventId, data, userId, message, displayName, conne
 describe('WebSocket Signaling Handler — Chat Messaging', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // mockReset (not just mockClear via clearAllMocks) drops any queued
+    // mockResolvedValueOnce/mockRejectedValueOnce chains leaked from
+    // prior tests — important now that issue #79 added an extra mockSend
+    // GET in both sendGroupMessage and sendDirectMessage paths, which can
+    // re-order which mock-once chain consumes which queued response.
+    mockSend.mockReset();
+    mockApiSend.mockReset();
+    mockGetConnectionsForEvent.mockReset();
     mockApiSend.mockResolvedValue({});
   });
 
@@ -75,7 +83,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     it('broadcasts message to all participants when chat is enabled', async () => {
       // Mock GetCommand for connection record — no restrictions
       mockSend.mockResolvedValueOnce({
-        Item: { connectionId: 'conn-sender' },
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' },
       });
       // Mock GetCommand for event metadata — chatEnabled: true
       mockSend.mockResolvedValueOnce({
@@ -114,7 +122,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     it('includes timestamp in broadcast message for chronological ordering', async () => {
       // Mock GetCommand for connection record — no restrictions
       mockSend.mockResolvedValueOnce({
-        Item: { connectionId: 'conn-sender' },
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' },
       });
       mockSend.mockResolvedValueOnce({
         Item: { PK: 'EVENT#evt_abc123', SK: 'METADATA', chatEnabled: true },
@@ -140,7 +148,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     it('rejects message with CHAT_DISABLED notification when chat is disabled', async () => {
       // Mock GetCommand for connection record — no restrictions
       mockSend.mockResolvedValueOnce({
-        Item: { connectionId: 'conn-sender' },
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' },
       });
       // Mock GetCommand for event metadata — chatEnabled: false
       mockSend.mockResolvedValueOnce({
@@ -177,7 +185,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     it('defaults chatEnabled to true when metadata has no chatEnabled field', async () => {
       // Mock GetCommand for connection record — no restrictions
       mockSend.mockResolvedValueOnce({
-        Item: { connectionId: 'conn-sender' },
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' },
       });
       // Mock GetCommand — metadata without chatEnabled field
       mockSend.mockResolvedValueOnce({
@@ -199,9 +207,12 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
 
     it('accepts userId and message from top-level body fields', async () => {
-      // Mock GetCommand for connection record — no restrictions
+      // Issue #79: senderConn drives the displayed identity. The body's
+      // userId/displayName are now IGNORED — that's the whole point of #79
+      // (anti-spoofing). The test still asserts top-level body.message is
+      // accepted; userId/displayName come from the senderConn mock.
       mockSend.mockResolvedValueOnce({
-        Item: { connectionId: 'conn-sender' },
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' },
       });
       mockSend.mockResolvedValueOnce({
         Item: { PK: 'EVENT#evt_abc123', SK: 'METADATA', chatEnabled: true },
@@ -210,9 +221,9 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
       const event = buildEvent({
         action: 'sendGroupMessage',
         eventId: 'evt_abc123',
-        userId: 'user_top',
+        userId: 'user_top',     // ignored
         message: 'Top-level message',
-        displayName: 'TopUser',
+        displayName: 'TopUser', // ignored
       });
 
       const result = await handler(event);
@@ -221,24 +232,26 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
       expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123',
         expect.objectContaining({
           data: expect.objectContaining({
-            userId: 'user_top',
+            userId: 'user_xyz',         // from senderConn, NOT body
+            displayName: 'Jane',        // from senderConn, NOT body
             message: 'Top-level message',
-            displayName: 'TopUser',
           }),
         })
       );
     });
 
-    it('returns 400 when userId is missing', async () => {
+    it('returns 403 when senderConn record is missing (issue #79)', async () => {
+      mockSend.mockResolvedValueOnce({ Item: undefined });
+
       const event = buildEvent({
         action: 'sendGroupMessage',
         eventId: 'evt_abc123',
-        data: { message: 'Hello!' },
+        data: { userId: 'user_xyz', message: 'Hello!' },
       });
 
       const result = await handler(event);
-      expect(result.statusCode).toBe(400);
-      expect(result.body).toBe('Missing userId');
+      expect(result.statusCode).toBe(403);
+      expect(result.body).toBe('Connection not found');
     });
 
     it('returns 400 when message is missing', async () => {
@@ -271,6 +284,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
   describe('sendDirectMessage', () => {
     it('routes message only to presenter connections and confirms delivery', async () => {
       // Mock getConnectionsForEvent returning multiple connections
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-presenter-1', role: 'presenter', eventId: 'evt_abc123' },
         { connectionId: 'conn-attendee-1', role: 'attendee', eventId: 'evt_abc123' },
@@ -311,6 +325,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
 
     it('includes timestamp in direct message for chronological ordering', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-presenter-1', role: 'presenter', eventId: 'evt_abc123' },
       ]);
@@ -333,6 +348,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
 
     it('sends to multiple presenter connections', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-presenter-1', role: 'presenter', eventId: 'evt_abc123' },
         { connectionId: 'conn-presenter-2', role: 'presenter', eventId: 'evt_abc123' },
@@ -361,6 +377,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
 
     it('does not send message to attendee connections', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-presenter-1', role: 'presenter', eventId: 'evt_abc123' },
         { connectionId: 'conn-attendee-1', role: 'attendee', eventId: 'evt_abc123' },
@@ -388,6 +405,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
 
     it('still sends confirmation even when no presenter connections found', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-attendee-1', role: 'attendee', eventId: 'evt_abc123' },
       ]);
@@ -409,6 +427,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
 
     it('accepts userId and message from top-level body fields', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-presenter-1', role: 'presenter', eventId: 'evt_abc123' },
       ]);
@@ -425,14 +444,18 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
       const result = await handler(event);
       expect(result.statusCode).toBe(200);
 
+      // Issue #79: senderConn drives the displayed identity. body.userId
+      // and body.displayName are ignored (anti-spoofing). Only the message
+      // text comes from the body.
       const { PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
       const presenterMsg = JSON.parse(PostToConnectionCommand.mock.calls[0][0].Data);
-      expect(presenterMsg.data.userId).toBe('user_top');
+      expect(presenterMsg.data.userId).toBe('user_xyz');     // from senderConn
       expect(presenterMsg.data.message).toBe('Top-level DM');
-      expect(presenterMsg.data.displayName).toBe('TopUser');
+      expect(presenterMsg.data.displayName).toBe('Jane');    // from senderConn
     });
 
     it('sends message successfully when userId is not provided (uses connectionId as fallback)', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-presenter-1', role: 'presenter', eventId: 'evt_abc123' },
       ]);
@@ -476,6 +499,7 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
 
     it('continues sending to other presenters if one fails', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane' } }); // issue #79 senderConn
       mockGetConnectionsForEvent.mockResolvedValueOnce([
         { connectionId: 'conn-presenter-1', role: 'presenter', eventId: 'evt_abc123' },
         { connectionId: 'conn-presenter-2', role: 'presenter', eventId: 'evt_abc123' },
