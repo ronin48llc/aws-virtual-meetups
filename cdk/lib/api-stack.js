@@ -12,6 +12,14 @@ const route53 = require('aws-cdk-lib/aws-route53');
 const targets = require('aws-cdk-lib/aws-route53-targets');
 const { WafConstruct } = require('./waf-construct');
 
+/**
+ * Name of the EventBridge Scheduler group all virtual-meetup schedules live
+ * in. The group itself is created by EmailStack (see lib/email-stack.js); we
+ * only reference its name here to build a resource ARN pattern for IAM
+ * scoping. Must match `SCHEDULER_GROUP` in lambda/shared/scheduler-utils.js.
+ */
+const SCHEDULER_GROUP_NAME = 'VirtualMeetup-Reminders';
+
 class ApiStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
@@ -186,13 +194,21 @@ class ApiStack extends Stack {
       emailSenderFunction.grantInvoke(sessionManagerFn);
     }
 
+    // -------------------------------------------------------
+    // Scope scheduler:Create/DeleteSchedule actions to schedules inside the
+    // VirtualMeetup-Reminders group only. The group itself is created by
+    // EmailStack; we just build the ARN pattern that scopes IAM here.
+    // -------------------------------------------------------
+    const scopedScheduleArn =
+      `arn:aws:scheduler:${this.region}:${this.account}:schedule/${SCHEDULER_GROUP_NAME}/*`;
+
     eventCrudFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
         'scheduler:CreateSchedule',
         'scheduler:DeleteSchedule',
       ],
-      resources: ['*'],
+      resources: [scopedScheduleArn],
     }));
 
     // Allow Event CRUD Lambda to pass the scheduler role
@@ -259,7 +275,7 @@ class ApiStack extends Stack {
     sessionManagerFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule'],
-      resources: ['*'],
+      resources: [scopedScheduleArn],
     }));
 
     // Session Manager needs iam:PassRole for the scheduler execution role
