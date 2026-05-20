@@ -23,7 +23,7 @@ class ObservabilityStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    const { httpApi, webSocketApi, mainTable, connectionsTable } = props;
+    const { httpApi, webSocketApi, mainTable, connectionsTable, publicationDlq, emailDlq } = props;
     const envName = this.node.tryGetContext('env') || 'dev';
     const alarmEmails = this.node.tryGetContext('alarmEmails') || [];
 
@@ -160,6 +160,41 @@ class ObservabilityStack extends Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
     lambdaDurationAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+
+    // -------------------------------------------------------
+    // Issue #121: DLQ alarms — publication + email
+    //
+    // Both DLQs have 14-day retention but no alarms. Messages that land
+    // there expire silently — the operator finds out a meetup never
+    // published or a reminder email never went out only when a user
+    // reports it. With these alarms, ANY message visible in either DLQ
+    // pages the operator within 5 minutes.
+    //
+    // The DLQ refs come from PublicationStack / EmailStack via props.
+    // When the stack is constructed without them (e.g., in isolated unit
+    // tests) the loop is a no-op so synth still succeeds.
+    // -------------------------------------------------------
+    [
+      { queue: publicationDlq, label: 'PublicationDLQ' },
+      { queue: emailDlq, label: 'EmailDLQ' },
+    ].filter((entry) => entry.queue).forEach(({ queue, label }) => {
+      const dlqAlarm = new cloudwatch.Alarm(this, `${label}MessagesAlarm`, {
+        alarmName: `VirtualMeetup-${envName}-${label}-MessagesVisible`,
+        alarmDescription: `${label} has accumulated messages — investigate failed invocations`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateNumberOfMessagesVisible',
+          dimensionsMap: { QueueName: queue.queueName },
+          statistic: 'Maximum',
+          period: Duration.minutes(5),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      dlqAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+    });
 
     // -------------------------------------------------------
     // CloudWatch Dashboard
