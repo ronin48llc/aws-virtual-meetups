@@ -43,6 +43,16 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   RATE_WINDOW_SECONDS: 60,
 }));
 
+// Mock per-message auth check (issue #4) — the signaling dispatcher calls
+// checkConnectionAuth before any handler. Without this mock, the auth
+// check's internal DDB Get consumes the mockSend chain that handlers
+// downstream rely on (specifically the senderConn lookup from #79),
+// and handleSendDirectMessage's GetCommand then sees `undefined` and
+// returns 403/500.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
