@@ -70,4 +70,17 @@ module.exports = [
       },
     },
   },
+
+  // Jest test files that opt into the jsdom environment via the
+  // `@jest-environment jsdom` docblock get browser globals (document,
+  // window, etc.). ESLint can't read the docblock, so we tell it via a
+  // file-glob override on tests that load HTML fixtures.
+  {
+    files: ['test/unit/frontend-*.test.js'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+      },
+    },
+  },
 ];
