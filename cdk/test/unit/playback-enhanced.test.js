@@ -208,14 +208,27 @@ describe('Playback Module - Enhanced Playback Features', () => {
   let Playback;
   let mockDOM;
 
+  // PR #133 added `new URL(raw, window.location.href)` inside playback's
+  // _safeHttpUrl to reject non-http(s) schemes. The previous test setup
+  // replaced global.URL with a bare object containing only
+  // createObjectURL/revokeObjectURL — `new URL(...)` threw, _safeHttpUrl
+  // returned null, and _renderActionButtons cleared innerHTML and bailed
+  // before the buttons were rendered. Preserve the native URL constructor
+  // and attach createObjectURL mocks as static properties.
+  const NativeURL = URL;
+  const _origCreateObjectURL = NativeURL.createObjectURL;
+  const _origRevokeObjectURL = NativeURL.revokeObjectURL;
+
   beforeEach(() => {
     mockDOM = setupPageMock();
 
-    global.window = { location: { search: '' } };
+    global.window = { location: { search: '', href: 'http://localhost/' } };
     global.document = mockDOM.document;
     global.fetch = jest.fn();
     global.URLSearchParams = URLSearchParams;
-    global.URL = { createObjectURL: jest.fn(() => 'blob:mock'), revokeObjectURL: jest.fn() };
+    NativeURL.createObjectURL = jest.fn(() => 'blob:mock');
+    NativeURL.revokeObjectURL = jest.fn();
+    global.URL = NativeURL;
 
     // Clear module cache and reload
     const modulePath = require.resolve('../../../frontend/js/playback.js');
@@ -233,7 +246,17 @@ describe('Playback Module - Enhanced Playback Features', () => {
     delete global.document;
     delete global.fetch;
     delete global.Hls;
-    delete global.URL;
+    // Restore native URL static methods rather than dropping the constructor.
+    if (_origCreateObjectURL) {
+      NativeURL.createObjectURL = _origCreateObjectURL;
+    } else {
+      delete NativeURL.createObjectURL;
+    }
+    if (_origRevokeObjectURL) {
+      NativeURL.revokeObjectURL = _origRevokeObjectURL;
+    } else {
+      delete NativeURL.revokeObjectURL;
+    }
     jest.restoreAllMocks();
   });
 
