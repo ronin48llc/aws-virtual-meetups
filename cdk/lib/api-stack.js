@@ -8,6 +8,7 @@ const { WebSocketLambdaIntegration } = require('aws-cdk-lib/aws-apigatewayv2-int
 const apigatewayv2 = require('aws-cdk-lib/aws-apigatewayv2');
 const lambda = require('aws-cdk-lib/aws-lambda');
 const logs = require('aws-cdk-lib/aws-logs');
+const { RemovalPolicy } = require('aws-cdk-lib');
 const iam = require('aws-cdk-lib/aws-iam');
 const route53 = require('aws-cdk-lib/aws-route53');
 const targets = require('aws-cdk-lib/aws-route53-targets');
@@ -61,6 +62,17 @@ class ApiStack extends Stack {
     // the 200/400 default since aggregate scales with audience size. Pairs
     // with — does not replace — the WAF per-IP rules in waf-construct.js.
     configureHttpApiThrottling(httpApi);
+
+    // Access logs for HTTP API $default stage. Lambda CloudWatch Logs cover
+    // handler execution but not routing/authz/throttle decisions; without
+    // these you can't drill into a specific request ("user got a 401 at
+    // 14:23") after an incident. See issue #36.
+    const httpApiAccessLogGroup = new logs.LogGroup(this, 'HttpApiAccessLogGroup', {
+      logGroupName: '/aws/apigateway/VirtualMeetupHttpApi/access',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    configureAccessLogs(httpApi.defaultStage, httpApiAccessLogGroup);
 
     // -------------------------------------------------------
     // Lambda Functions
@@ -472,6 +484,14 @@ class ApiStack extends Stack {
       autoDeploy: true,
     });
 
+    // Access logs for the WebSocket prod stage (same rationale as HTTP).
+    const wsApiAccessLogGroup = new logs.LogGroup(this, 'WebSocketApiAccessLogGroup', {
+      logGroupName: '/aws/apigateway/VirtualMeetupWebSocketApi/access',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    configureAccessLogs(webSocketStage, wsApiAccessLogGroup);
+
     // Custom WebSocket routes
     const wsSignalingIntegration = new WebSocketLambdaIntegration('WsSignalingIntegration', wsSignalingFn);
 
@@ -694,10 +714,40 @@ function configureHttpApiThrottling(httpApi) {
   }
 }
 
+// JSON format for API Gateway access logs. Captures the per-request facts
+// you actually need to debug a production incident: who, when, what, why
+// it failed. The $context.* variables are evaluated by API Gateway at log
+// emit time.
+const API_GATEWAY_ACCESS_LOG_FORMAT = JSON.stringify({
+  requestId: '$context.requestId',
+  ip: '$context.identity.sourceIp',
+  requestTime: '$context.requestTime',
+  httpMethod: '$context.httpMethod',
+  routeKey: '$context.routeKey',
+  status: '$context.status',
+  protocol: '$context.protocol',
+  responseLength: '$context.responseLength',
+  integrationStatus: '$context.integrationStatus',
+  integrationError: '$context.integration.error',
+  authorizerError: '$context.authorizer.error',
+  principalId: '$context.authorizer.principalId',
+  errorMessage: '$context.error.message',
+});
+
+function configureAccessLogs(stage, logGroup) {
+  const cfnStage = stage.node.defaultChild;
+  cfnStage.accessLogSettings = {
+    destinationArn: logGroup.logGroupArn,
+    format: API_GATEWAY_ACCESS_LOG_FORMAT,
+  };
+}
+
 module.exports = {
   ApiStack,
   configureHttpApiThrottling,
   HTTP_API_DEFAULT_THROTTLE,
   HTTP_API_OPERATOR_THROTTLE,
   HTTP_API_OPERATOR_ROUTES,
+  configureAccessLogs,
+  API_GATEWAY_ACCESS_LOG_FORMAT,
 };
