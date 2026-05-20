@@ -20,7 +20,7 @@ const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivscha
 const { broadcast, getConnectionsForEvent } = require('./broadcast');
 const { checkRateLimit } = require('./rate-limiter');
 const { buildEventPK, buildHandSK, buildQuestionSK, chunk } = require('../shared/dynamo-utils');
-const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS } = require('../shared/constants');
+const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS, MAX_QUESTION_TEXT_LENGTH, MAX_ANSWER_TEXT_LENGTH } = require('../shared/constants');
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
@@ -315,6 +315,13 @@ async function handleSubmitQuestion(eventId, body, connectionId) {
     return { statusCode: 400, body: 'Missing question text' };
   }
 
+  // Length cap matches the DDB item-bloat fixes from #32/#33 and #46/#47.
+  // text is broadcast to every connection on the event, so the cap also
+  // bounds outbound bandwidth amplification. See #48.
+  if (typeof text !== 'string' || text.trim().length === 0 || text.length > MAX_QUESTION_TEXT_LENGTH) {
+    return { statusCode: 400, body: `question text must be 1-${MAX_QUESTION_TEXT_LENGTH} characters` };
+  }
+
   // Check if the sender's question submission is restricted
   const senderConn = await docClient.send(new GetCommand({
     TableName: CONNECTIONS_TABLE_NAME,
@@ -388,6 +395,12 @@ async function handleAnswerQuestion(eventId, body, connectionId) {
 
   if (!questionId || !timestamp) {
     return { statusCode: 400, body: 'Missing questionId or timestamp' };
+  }
+
+  // Empty answer is intentionally allowed (marks the question answered
+  // without a written reply); only cap when an answer is supplied. See #48.
+  if (answer && (typeof answer !== 'string' || answer.length > MAX_ANSWER_TEXT_LENGTH)) {
+    return { statusCode: 400, body: `answer text must be <= ${MAX_ANSWER_TEXT_LENGTH} characters` };
   }
 
   const pk = buildEventPK(eventId);

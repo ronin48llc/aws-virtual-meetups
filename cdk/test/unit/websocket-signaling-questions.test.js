@@ -172,6 +172,31 @@ describe('WebSocket Signaling Handler — Question Queue', () => {
       expect(result.body).toBe('Missing question text');
     });
 
+    it('returns 400 when question text exceeds the 1000-char cap (issue #48)', async () => {
+      const event = buildEvent({
+        action: 'submitQuestion',
+        eventId: 'evt_abc123',
+        data: { userId: 'user_xyz', text: 'x'.repeat(1001) },
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(400);
+      expect(result.body).toMatch(/1-1000 characters/);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when question text is whitespace-only (issue #48)', async () => {
+      const event = buildEvent({
+        action: 'submitQuestion',
+        eventId: 'evt_abc123',
+        data: { userId: 'user_xyz', text: '    ' },
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(400);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
     it('generates a unique questionId using crypto.randomUUID', async () => {
       // Mock GetCommand for connection record — no restrictions
       mockSend.mockResolvedValueOnce({
@@ -298,6 +323,23 @@ describe('WebSocket Signaling Handler — Question Queue', () => {
       const result = await handler(event);
       expect(result.statusCode).toBe(400);
       expect(result.body).toBe('Missing questionId or timestamp');
+    });
+
+    it('returns 400 when answer exceeds the 2000-char cap (issue #48)', async () => {
+      const event = buildEvent({
+        action: 'answerQuestion',
+        eventId: 'evt_abc123',
+        data: {
+          questionId: 'q_123',
+          timestamp: '2024-01-15T10:30:00Z',
+          answer: 'x'.repeat(2001),
+        },
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(400);
+      expect(result.body).toMatch(/2000 characters/);
+      expect(mockSend).not.toHaveBeenCalled();
     });
 
     it('returns 500 when DynamoDB update fails', async () => {

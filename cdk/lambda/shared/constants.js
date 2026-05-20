@@ -93,6 +93,12 @@ const CORS_HEADERS = Object.freeze({
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
 });
 
+/**
+ * Length bounds for user-supplied text fields written to DDB. See #32 / #46 / #48.
+ */
+const MAX_QUESTION_TEXT_LENGTH = 1000;
+const MAX_ANSWER_TEXT_LENGTH = 2000;
+
 module.exports = {
   EVENT_STATUS,
   KEY_PREFIX,
@@ -103,4 +109,6 @@ module.exports = {
   SESSION_ROLE,
   QUESTION_STATUS,
   CORS_HEADERS,
+  MAX_QUESTION_TEXT_LENGTH,
+  MAX_ANSWER_TEXT_LENGTH,
 };
