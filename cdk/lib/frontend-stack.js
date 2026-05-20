@@ -1,4 +1,4 @@
-const { Stack, CfnOutput, RemovalPolicy } = require('aws-cdk-lib');
+const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
 const s3 = require('aws-cdk-lib/aws-s3');
 const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
@@ -63,12 +63,48 @@ class FrontendStack extends Stack {
     // -------------------------------------------------------
     const { hostedZone, certificate, domainNames } = props;
 
+    // Issue #105: ship baseline browser security headers on every response.
+    // HSTS is conditional — only set when a real ACM certificate + custom
+    // domain are wired. HSTS on the auto-assigned *.cloudfront.net domain
+    // would lock the shared domain into a year-long HTTPS-only state we
+    // can't back out of from this app.
+    //
+    // CSP is intentionally omitted — authoring a real CSP requires
+    // enumerating every CDN-loaded script the SPA depends on (HLS.js,
+    // Cognito SDK, IVS player). See #23 for the SRI/pinning groundwork.
+    // Tracked as a separate effort.
+    const useHsts = Boolean(domainNames && certificate);
+    const securityHeadersBehavior = {
+      contentTypeOptions: { override: true },
+      frameOptions: {
+        frameOption: cloudfront.HeadersFrameOption.DENY,
+        override: true,
+      },
+      referrerPolicy: {
+        referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+        override: true,
+      },
+    };
+    if (useHsts) {
+      securityHeadersBehavior.strictTransportSecurity = {
+        accessControlMaxAge: Duration.days(365),
+        includeSubdomains: true,
+        preload: true,
+        override: true,
+      };
+    }
+    const securityHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'FrontendSecurityHeaders', {
+      responseHeadersPolicyName: `VirtualMeetupFrontendSecurityHeaders-${this.stackName}`,
+      securityHeadersBehavior,
+    });
+
     const distributionProps = {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessIdentity(this.frontendBucket, {
           originAccessIdentity,
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: securityHeadersPolicy,
       },
       defaultRootObject: 'index.html',
       errorResponses: [
