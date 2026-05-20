@@ -15,9 +15,14 @@ function synth() {
 }
 
 describe('StreamingStack recording bucket server access logs (issue #52)', () => {
-  test('two S3 buckets exist (recordings + access-logs target)', () => {
+  test('three S3 buckets exist (recordings + S3 access-logs target + CloudFront access-logs target)', () => {
+    // #139 added RecordingAccessLogsBucket (S3 server access logs); #59
+    // had already added RecordingDistributionAccessLogsBucket (CloudFront
+    // access logs). Both are RETAIN'd log sinks alongside the main
+    // RecordingBucket. The test originally asserted exactly 2 buckets,
+    // which broke once the CloudFront log bucket landed.
     const template = synth();
-    template.resourceCountIs('AWS::S3::Bucket', 2);
+    template.resourceCountIs('AWS::S3::Bucket', 3);
   });
 
   test('recording bucket has LoggingConfiguration pointing at a destination bucket', () => {
