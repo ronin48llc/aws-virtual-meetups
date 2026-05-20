@@ -47,6 +47,25 @@ class StreamingStack extends Stack {
 
     recordingBucket.grantRead(recordingOAI);
 
+    // CloudFront access logs target for the recording distribution.
+    // Separate bucket from the S3 server-access logs (#52), retained on
+    // teardown, OBJECT_WRITER (CloudFront requires it), 365-day expiry.
+    // See issue #58.
+    const recordingDistributionAccessLogsBucket = new s3.Bucket(this, 'RecordingDistributionAccessLogsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: RemovalPolicy.RETAIN,
+      objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
+      lifecycleRules: [
+        {
+          id: 'ExpireRecordingDistributionAccessLogs',
+          enabled: true,
+          expiration: Duration.days(365),
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+      ],
+    });
+
     // CloudFront distribution for serving recordings via HTTPS with CORS
     const recordingDistribution = new cloudfront.Distribution(this, 'RecordingDistribution', {
       defaultBehavior: {
@@ -57,6 +76,9 @@ class StreamingStack extends Stack {
         responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS_WITH_PREFLIGHT,
       },
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      enableLogging: true,
+      logBucket: recordingDistributionAccessLogsBucket,
+      logFilePrefix: 'recording-cf/',
     });
 
     // IVS Storage Configuration — links the S3 bucket for composition recording
