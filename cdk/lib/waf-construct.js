@@ -105,13 +105,26 @@ class WafConstruct extends Construct {
   }
 
   /**
-   * Rate limit rule for unauthenticated requests (no Authorization header).
+   * Strict rate limit for public (unauthenticated) endpoints.
+   *
+   * Issue #97: the previous scope-down filtered by "Authorization header
+   * starts with Bearer", which WAF cannot validate as a real JWT. An
+   * attacker who added `Authorization: Bearer x` slipped into the lenient
+   * authenticated bucket (500/min) instead of the strict 100/min bucket —
+   * 5x DoS amplification against `GET /events` and `GET /events/{id}`.
+   *
+   * Fix: scope-down by URI path. The strict limit applies to known-public
+   * paths regardless of headers. Authenticated routes (sit behind Cognito
+   * authorizer) fall through to the lenient global limit; fake bearer
+   * tokens are 401'd at the authorizer before reaching any Lambda, so the
+   * lenient bucket can't be meaningfully abused there.
+   *
    * 100 requests per minute = 500 per 5-minute WAF evaluation window.
    * Blocks with HTTP 429 for 5 minutes on breach.
    */
   _createUnauthenticatedRateLimitRule() {
     return {
-      name: 'RateLimitUnauthenticated',
+      name: 'RateLimitPublicEndpoints',
       priority: 1,
       action: {
         block: {
@@ -126,37 +139,51 @@ class WafConstruct extends Construct {
           limit: 500, // 500 per 5-minute window = ~100/min
           aggregateKeyType: 'IP',
           scopeDownStatement: {
-            notStatement: {
-              statement: {
-                byteMatchStatement: {
-                  fieldToMatch: {
-                    singleHeader: { name: 'authorization' },
+            orStatement: {
+              statements: [
+                {
+                  byteMatchStatement: {
+                    fieldToMatch: { uriPath: {} },
+                    positionalConstraint: 'EXACTLY',
+                    searchString: '/events',
+                    textTransformations: [{ priority: 0, type: 'NONE' }],
                   },
-                  positionalConstraint: 'STARTS_WITH',
-                  searchString: 'Bearer',
-                  textTransformations: [{ priority: 0, type: 'NONE' }],
                 },
-              },
+                {
+                  byteMatchStatement: {
+                    fieldToMatch: { uriPath: {} },
+                    positionalConstraint: 'STARTS_WITH',
+                    searchString: '/events/',
+                    textTransformations: [{ priority: 0, type: 'NONE' }],
+                  },
+                },
+              ],
             },
           },
         },
       },
       visibilityConfig: {
         cloudWatchMetricsEnabled: true,
-        metricName: 'RateLimitUnauthenticated',
+        metricName: 'RateLimitPublicEndpoints',
         sampledRequestsEnabled: true,
       },
     };
   }
 
   /**
-   * Rate limit rule for authenticated requests (has Authorization header).
+   * Lenient global rate limit applied to all requests regardless of auth.
+   *
+   * Issue #97: this used to scope-down to "has Authorization: Bearer",
+   * which made it trivially abusable (attackers add a fake header). With
+   * no scope-down, the limit is a true global cap. Authenticated routes
+   * are 401'd by Cognito for fake tokens before Lambda runs, so attackers
+   * can spam toward this cap but cannot actually consume backend cycles.
+   *
    * 500 requests per minute = 2500 per 5-minute WAF evaluation window.
-   * Blocks with HTTP 429 for 5 minutes on breach.
    */
   _createAuthenticatedRateLimitRule() {
     return {
-      name: 'RateLimitAuthenticated',
+      name: 'RateLimitGlobal',
       priority: 2,
       action: {
         block: {
@@ -170,21 +197,11 @@ class WafConstruct extends Construct {
         rateBasedStatement: {
           limit: 2500, // 2500 per 5-minute window = ~500/min
           aggregateKeyType: 'IP',
-          scopeDownStatement: {
-            byteMatchStatement: {
-              fieldToMatch: {
-                singleHeader: { name: 'authorization' },
-              },
-              positionalConstraint: 'STARTS_WITH',
-              searchString: 'Bearer',
-              textTransformations: [{ priority: 0, type: 'NONE' }],
-            },
-          },
         },
       },
       visibilityConfig: {
         cloudWatchMetricsEnabled: true,
-        metricName: 'RateLimitAuthenticated',
+        metricName: 'RateLimitGlobal',
         sampledRequestsEnabled: true,
       },
     };

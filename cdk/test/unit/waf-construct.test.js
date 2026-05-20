@@ -37,11 +37,11 @@ describe('WafConstruct', () => {
       });
     });
 
-    test('includes unauthenticated rate limit rule (500 per 5-min window)', () => {
+    test('includes strict rate limit for public endpoints (500 per 5-min window)', () => {
       template.hasResourceProperties('AWS::WAFv2::WebACL', {
         Rules: Match.arrayWith([
           Match.objectLike({
-            Name: 'RateLimitUnauthenticated',
+            Name: 'RateLimitPublicEndpoints',
             Priority: 1,
             Action: {
               Block: {
@@ -62,11 +62,11 @@ describe('WafConstruct', () => {
       });
     });
 
-    test('includes authenticated rate limit rule (2500 per 5-min window)', () => {
+    test('includes lenient global rate limit (2500 per 5-min window)', () => {
       template.hasResourceProperties('AWS::WAFv2::WebACL', {
         Rules: Match.arrayWith([
           Match.objectLike({
-            Name: 'RateLimitAuthenticated',
+            Name: 'RateLimitGlobal',
             Priority: 2,
             Action: {
               Block: {
@@ -85,6 +85,69 @@ describe('WafConstruct', () => {
           }),
         ]),
       });
+    });
+
+    // Issue #97 regression — the strict tier must filter by URI path, not
+    // by Authorization header. Header-based filtering was trivially bypassed
+    // by sending `Authorization: Bearer x`, which WAF can't validate.
+    test('strict rate-limit scope-down is path-based, not header-based (#97)', () => {
+      template.hasResourceProperties('AWS::WAFv2::WebACL', {
+        Rules: Match.arrayWith([
+          Match.objectLike({
+            Name: 'RateLimitPublicEndpoints',
+            Statement: {
+              RateBasedStatement: {
+                ScopeDownStatement: {
+                  OrStatement: {
+                    Statements: Match.arrayWith([
+                      Match.objectLike({
+                        ByteMatchStatement: {
+                          FieldToMatch: { UriPath: {} },
+                          PositionalConstraint: 'EXACTLY',
+                          SearchString: '/events',
+                        },
+                      }),
+                      Match.objectLike({
+                        ByteMatchStatement: {
+                          FieldToMatch: { UriPath: {} },
+                          PositionalConstraint: 'STARTS_WITH',
+                          SearchString: '/events/',
+                        },
+                      }),
+                    ]),
+                  },
+                },
+              },
+            },
+          }),
+        ]),
+      });
+    });
+
+    test('global rate-limit has no scope-down — applies to all paths (#97)', () => {
+      template.hasResourceProperties('AWS::WAFv2::WebACL', {
+        Rules: Match.arrayWith([
+          Match.objectLike({
+            Name: 'RateLimitGlobal',
+            Statement: {
+              RateBasedStatement: Match.objectLike({
+                Limit: 2500,
+                AggregateKeyType: 'IP',
+                ScopeDownStatement: Match.absent(),
+              }),
+            },
+          }),
+        ]),
+      });
+    });
+
+    test('no rule references the Authorization header anymore (#97)', () => {
+      // Header-based scope-down was the original bypass vector. Make sure
+      // it has been removed from BOTH rate-limit rules — a future regression
+      // that re-adds it would surface here.
+      const stringified = JSON.stringify(template.toJSON());
+      expect(stringified).not.toMatch(/singleHeader.*authorization/i);
+      expect(stringified).not.toMatch(/SingleHeader.*[Aa]uthorization/);
     });
 
     test('includes AWS Managed Rules Common Rule Set', () => {
@@ -198,8 +261,8 @@ describe('WafConstruct', () => {
     test('has exactly 7 rules', () => {
       template.hasResourceProperties('AWS::WAFv2::WebACL', {
         Rules: Match.arrayWith([
-          Match.objectLike({ Name: 'RateLimitUnauthenticated' }),
-          Match.objectLike({ Name: 'RateLimitAuthenticated' }),
+          Match.objectLike({ Name: 'RateLimitPublicEndpoints' }),
+          Match.objectLike({ Name: 'RateLimitGlobal' }),
           Match.objectLike({ Name: 'AWSManagedRulesCommonRuleSet' }),
           Match.objectLike({ Name: 'AWSManagedRulesSQLiRuleSet' }),
           Match.objectLike({ Name: 'AWSManagedRulesKnownBadInputsRuleSet' }),
