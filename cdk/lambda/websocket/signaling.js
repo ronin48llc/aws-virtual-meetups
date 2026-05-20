@@ -841,6 +841,22 @@ async function handleSendDirectMessage(eventId, body, connectionId) {
   };
 
   if (targetConnectionId) {
+    // Issue #89: verify the target connection is in THIS event before
+    // delivering. Without this, any logged-in user can DM into another
+    // event by supplying a connectionId from elsewhere — cross-event
+    // message leak. PR #76 closed the sender-side cross-event hole;
+    // this closes the target side.
+    const targetConn = await docClient.send(new GetCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId: targetConnectionId },
+    }));
+    if (!targetConn.Item || targetConn.Item.eventId !== eventId) {
+      console.warn('DM target not in this event', {
+        eventId, targetConnectionId, targetEventId: targetConn.Item && targetConn.Item.eventId,
+      });
+      return { statusCode: 403, body: 'Target connection not in this event' };
+    }
+
     // Presenter sending to a specific attendee
     try {
       await sendToConnection(targetConnectionId, directMessage);

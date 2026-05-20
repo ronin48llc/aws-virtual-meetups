@@ -281,6 +281,69 @@ describe('WebSocket Signaling Handler — Chat Messaging', () => {
     });
   });
 
+  describe('sendDirectMessage with targetConnectionId — cross-event guard (issue #89)', () => {
+    it('returns 403 when the target connection is in a different event', async () => {
+      // senderConn for issue #79 (sender identity derived from connection)
+      mockSend.mockResolvedValueOnce({
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane', eventId: 'evt_a' },
+      });
+      // Target connection — wrong event.
+      mockSend.mockResolvedValueOnce({
+        Item: { connectionId: 'conn-target', userId: 'user_target', eventId: 'evt_b' },
+      });
+
+      const event = buildEvent({
+        action: 'sendDirectMessage',
+        eventId: 'evt_a',
+        data: { targetConnectionId: 'conn-target', message: 'cross-event leak attempt' },
+        connectionId: 'conn-sender',
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+      // No PostToConnection should have been issued.
+      expect(mockApiSend).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when the target connection is missing entirely', async () => {
+      mockSend.mockResolvedValueOnce({
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane', eventId: 'evt_a' },
+      });
+      mockSend.mockResolvedValueOnce({ Item: undefined });
+
+      const event = buildEvent({
+        action: 'sendDirectMessage',
+        eventId: 'evt_a',
+        data: { targetConnectionId: 'conn-ghost', message: 'phantom DM' },
+        connectionId: 'conn-sender',
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it('delivers the DM when the target connection IS in the same event', async () => {
+      mockSend.mockResolvedValueOnce({
+        Item: { connectionId: 'conn-sender', userId: 'user_xyz', displayName: 'Jane', eventId: 'evt_a' },
+      });
+      mockSend.mockResolvedValueOnce({
+        Item: { connectionId: 'conn-target', userId: 'user_target', eventId: 'evt_a' },
+      });
+
+      const event = buildEvent({
+        action: 'sendDirectMessage',
+        eventId: 'evt_a',
+        data: { targetConnectionId: 'conn-target', message: 'legit DM' },
+        connectionId: 'conn-sender',
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+      // 1 PostToConnection to target + 1 confirmation to sender = 2 calls.
+      expect(mockApiSend).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('sendDirectMessage', () => {
     it('routes message only to presenter connections and confirms delivery', async () => {
       // Mock getConnectionsForEvent returning multiple connections
