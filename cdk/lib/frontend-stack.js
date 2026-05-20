@@ -80,7 +80,10 @@ class FrontendStack extends Stack {
       "img-src 'self' data: blob: https:",
       "media-src 'self' blob: https://*.amazonaws.com https://*.live-video.net",
       "font-src 'self' data:",
-      "connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net wss://transcribestreaming.us-east-1.amazonaws.com",
+      // transcribestreaming.<region>.amazonaws.com is already covered by
+      // the broader wss://*.amazonaws.com entry — listing it explicitly
+      // would hardcode a region and break deploys outside us-east-1.
+      "connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net",
       "worker-src 'self' blob:",
       "frame-ancestors 'none'",
       "base-uri 'self'",
