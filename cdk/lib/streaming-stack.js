@@ -17,12 +17,33 @@ class StreamingStack extends Stack {
     // content predates the chosen retention.
     const retentionDays = this.node.tryGetContext('recordingsRetentionDays') ?? 1095;
 
+    // Server access logs target bucket for the recording bucket. Kept
+    // separate (S3 requires the log target bucket be different from the
+    // source) and RETAIN'd on destroy so forensic logs survive a stack
+    // teardown. Capped at 365 days so the bucket doesn't grow unbounded.
+    // See issue #52.
+    const recordingAccessLogsBucket = new s3.Bucket(this, 'RecordingAccessLogsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: RemovalPolicy.RETAIN,
+      lifecycleRules: [
+        {
+          id: 'ExpireAccessLogs',
+          enabled: true,
+          expiration: Duration.days(365),
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+      ],
+    });
+
     // S3 bucket for IVS recordings with lifecycle rules
     const recordingBucket = new s3.Bucket(this, 'RecordingBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
+      serverAccessLogsBucket: recordingAccessLogsBucket,
+      serverAccessLogsPrefix: 'recordings/',
       lifecycleRules: [
         {
           id: 'IntelligentTiering',
