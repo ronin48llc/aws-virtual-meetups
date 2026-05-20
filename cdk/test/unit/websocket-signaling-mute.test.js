@@ -84,6 +84,8 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
 
   describe('muteAudio', () => {
     it('updates connection record with audioMuted flag and notifies the user', async () => {
+      // Issue #72: third-party mute requires presenter authz GET first.
+      mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
       const event = buildEvent({
@@ -141,6 +143,8 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
     });
 
     it('accepts targetConnectionId and userId from top-level body fields', async () => {
+      // Issue #72: third-party mute authz GET.
+      mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
       mockSend.mockResolvedValueOnce({});
 
       const event = buildEvent({
@@ -156,8 +160,55 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
     });
   });
 
+  describe('muteAudio third-party authz (issue #72)', () => {
+    it('allows self-mute without an authz GET', async () => {
+      // Same connectionId for target and sender → no authz GET needed.
+      mockSend.mockResolvedValueOnce({}); // UpdateCommand only
+
+      const event = buildEvent({
+        action: 'muteAudio',
+        eventId: 'evt_abc123',
+        connectionId: 'conn-self',
+        data: { targetConnectionId: 'conn-self', userId: 'user_self' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects third-party mute from a non-presenter connection with 403', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { role: 'attendee' } }); // authz GET
+
+      const event = buildEvent({
+        action: 'muteAudio',
+        eventId: 'evt_abc123',
+        connectionId: 'conn-attacker',
+        data: { targetConnectionId: 'conn-victim', userId: 'user_victim' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+      // No UpdateCommand issued — authz GET only.
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects third-party mute when the senderConn record is missing', async () => {
+      mockSend.mockResolvedValueOnce({ Item: undefined }); // authz GET
+
+      const event = buildEvent({
+        action: 'muteAudio',
+        eventId: 'evt_abc123',
+        connectionId: 'conn-ghost',
+        data: { targetConnectionId: 'conn-victim', userId: 'user_victim' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+    });
+  });
+
   describe('muteVideo', () => {
     it('updates connection record with videoDisabled flag and notifies the user', async () => {
+      // Issue #72: third-party mute requires presenter authz GET first.
+      mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
       const event = buildEvent({
