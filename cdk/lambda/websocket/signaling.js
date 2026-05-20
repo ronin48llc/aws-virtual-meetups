@@ -692,23 +692,25 @@ async function sendToConnection(connectionId, message) {
  * @returns {Object} Response with statusCode 200.
  */
 async function handleSendGroupMessage(eventId, body, connectionId) {
-  const userId = body.data?.userId || body.userId;
-  const displayName = body.data?.displayName || body.displayName || '';
   const message = body.data?.message || body.message;
-
-  if (!userId) {
-    return { statusCode: 400, body: 'Missing userId' };
-  }
 
   if (!message) {
     return { statusCode: 400, body: 'Missing message' };
   }
 
-  // Check if the sender's chat is restricted
+  // Issue #79: derive sender identity from the connection record, not the
+  // body. Without this, an attendee can spoof body.userId / body.displayName
+  // and the broadcast carries fake "from" attribution — phishing inside the
+  // chat surface. The body's userId / displayName are now ignored.
   const senderConn = await docClient.send(new GetCommand({
     TableName: CONNECTIONS_TABLE_NAME,
     Key: { connectionId },
   }));
+  if (!senderConn.Item) {
+    return { statusCode: 403, body: 'Connection not found' };
+  }
+  const userId = senderConn.Item.userId;
+  const displayName = senderConn.Item.displayName || senderConn.Item.email || userId || 'Unknown';
 
   if (senderConn.Item?.chatRestricted) {
     await sendToConnection(connectionId, {
@@ -775,8 +777,6 @@ async function handleSendGroupMessage(eventId, body, connectionId) {
  * @returns {Object} Response with statusCode 200.
  */
 async function handleSendDirectMessage(eventId, body, connectionId) {
-  const userId = body.data?.userId || body.userId;
-  const displayName = body.data?.displayName || body.displayName || '';
   const message = body.data?.message || body.message;
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
 
@@ -784,27 +784,26 @@ async function handleSendDirectMessage(eventId, body, connectionId) {
     return { statusCode: 400, body: 'Missing message' };
   }
 
-  const timestamp = new Date().toISOString();
-
-  // Get sender's display name from their connection record
-  let senderDisplayName = displayName;
-  if (!senderDisplayName) {
-    try {
-      const senderConn = await docClient.send(new GetCommand({
-        TableName: CONNECTIONS_TABLE_NAME,
-        Key: { connectionId },
-      }));
-      senderDisplayName = senderConn.Item?.displayName || senderConn.Item?.email || userId || 'Unknown';
-    } catch (e) {
-      senderDisplayName = userId || 'Unknown';
-    }
+  // Issue #79: derive sender identity from the connection record, not the
+  // body. The body's userId / displayName are ignored to prevent
+  // sender-spoofing / phishing inside the DM surface.
+  const senderConn = await docClient.send(new GetCommand({
+    TableName: CONNECTIONS_TABLE_NAME,
+    Key: { connectionId },
+  }));
+  if (!senderConn.Item) {
+    return { statusCode: 403, body: 'Connection not found' };
   }
+  const userId = senderConn.Item.userId;
+  const senderDisplayName = senderConn.Item.displayName || senderConn.Item.email || userId || 'Unknown';
+
+  const timestamp = new Date().toISOString();
 
   const directMessage = {
     type: 'DIRECT_MESSAGE',
     eventId,
     data: {
-      userId: userId || connectionId,
+      userId,
       displayName: senderDisplayName,
       message,
       timestamp,
