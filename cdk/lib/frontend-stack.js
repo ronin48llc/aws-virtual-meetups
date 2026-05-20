@@ -1,4 +1,4 @@
-const { Stack, CfnOutput, RemovalPolicy } = require('aws-cdk-lib');
+const { Stack, CfnOutput, Duration, RemovalPolicy } = require('aws-cdk-lib');
 const s3 = require('aws-cdk-lib/aws-s3');
 const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
@@ -58,6 +58,61 @@ class FrontendStack extends Stack {
     });
 
     // -------------------------------------------------------
+    // CloudFront Response Headers Policy — adds CSP, HSTS, X-Frame-Options,
+    // X-Content-Type-Options, and Referrer-Policy to every response.
+    //
+    // CSP scope notes:
+    // - script-src whitelists the IVS Web Broadcast SDK
+    //   (web-broadcast.live-video.net), hls.js + Cognito SDK
+    //   (cdn.jsdelivr.net). `'unsafe-inline'` is currently required because
+    //   index.html still has `onclick="..."` handlers — follow-up will
+    //   migrate those to addEventListener and drop unsafe-inline.
+    // - connect-src wildcards over amazonaws.com (API Gateway HTTP +
+    //   WebSocket, Transcribe Streaming) and live-video.net (IVS RTC +
+    //   Chat). Tighten to exact endpoints once they're known at deploy time.
+    // - frame-ancestors 'none' blocks clickjacking. X-Frame-Options DENY is
+    //   set in parallel for older browsers.
+    // -------------------------------------------------------
+    const cspDirectives = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://web-broadcast.live-video.net",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "media-src 'self' blob: https://*.amazonaws.com https://*.live-video.net",
+      "font-src 'self' data:",
+      "connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net wss://transcribestreaming.us-east-1.amazonaws.com",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join('; ');
+
+    const securityHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'FrontendSecurityHeaders', {
+      responseHeadersPolicyName: 'VirtualMeetup-FrontendSecurityHeaders',
+      securityHeadersBehavior: {
+        contentSecurityPolicy: {
+          contentSecurityPolicy: cspDirectives,
+          override: true,
+        },
+        strictTransportSecurity: {
+          accessControlMaxAge: Duration.days(365),
+          includeSubdomains: true,
+          preload: true,
+          override: true,
+        },
+        contentTypeOptions: { override: true },
+        frameOptions: {
+          frameOption: cloudfront.HeadersFrameOption.DENY,
+          override: true,
+        },
+        referrerPolicy: {
+          referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+          override: true,
+        },
+      },
+    });
+
+    // -------------------------------------------------------
     // CloudFront Distribution
     // Requirements: 3.1, 3.2
     // -------------------------------------------------------
@@ -69,6 +124,7 @@ class FrontendStack extends Stack {
           originAccessIdentity,
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: securityHeadersPolicy,
       },
       defaultRootObject: 'index.html',
       errorResponses: [
