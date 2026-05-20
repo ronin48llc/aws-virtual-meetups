@@ -155,6 +155,7 @@ const publicationStack = new PublicationStack(app, `${prefix}-Publication`, {
   description: 'Virtual Meetup Platform - Publication (recording to GitHub Pages)',
   recordingBucket: streamingStack.recordingBucket,
   emailSenderFunction: emailStack.emailSenderFunction,
+  recordingCloudfrontDomain: streamingStack.recordingDistribution.distributionDomainName,
 });
 publicationStack.addDependency(streamingStack);
 publicationStack.addDependency(emailStack);
