@@ -232,6 +232,15 @@ async function handleSingleRecipient(type, payload) {
 
   const eventUrl = payload.eventUrl || buildEventUrl(eventId);
 
+  // Recipient locale + timezone (issue #9). Today we accept them from the
+  // payload; the signup invocation is the next thing to update so it
+  // pulls them from the user's Cognito `custom:locale` /
+  // `custom:timezone` attributes. Until then, `en-US` / `UTC` are safe
+  // defaults — only signup-confirmation uses these strings, and the other
+  // email types still pass them but ignore them.
+  const recipientLocale = payload.recipientLocale || 'en-US';
+  const recipientTimeZone = payload.recipientTimeZone || 'UTC';
+
   const templateData = {
     eventTitle,
     eventDescription,
@@ -240,6 +249,8 @@ async function handleSingleRecipient(type, payload) {
     recipientName,
     playbackUrl,
     duration,
+    locale: recipientLocale,
+    timeZone: recipientTimeZone,
   };
 
   const template = renderTemplate(type, templateData);
