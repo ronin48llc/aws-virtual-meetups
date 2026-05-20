@@ -63,10 +63,13 @@ class ObservabilityStack extends Stack {
     // CloudWatch Alarms
     // -------------------------------------------------------
 
-    // Alarm: API Error Rate > 5%
+    // Issue #109: description previously claimed "rate exceeds 5%" but
+    // the metric is a raw Sum with threshold 5 — alarm fires on the
+    // 6th 5xx in a 5-minute window regardless of total traffic. That's
+    // still a reasonable signal, but the description was misleading.
     const apiErrorAlarm = new cloudwatch.Alarm(this, 'ApiErrorRateAlarm', {
       alarmName: `VirtualMeetup-${envName}-ApiErrorRate`,
-      alarmDescription: 'API 5xx error rate exceeds 5%',
+      alarmDescription: 'HTTP API: more than 5 server-side (5xx) errors in 5 minutes',
       metric: new cloudwatch.Metric({
         namespace: 'AWS/ApiGateway',
         metricName: '5xx',
@@ -83,39 +86,55 @@ class ObservabilityStack extends Stack {
     });
     apiErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
-    // Alarm: Lambda Error Rate > 1%
-    const lambdaErrorAlarm = new cloudwatch.Alarm(this, 'LambdaErrorRateAlarm', {
-      alarmName: `VirtualMeetup-${envName}-LambdaErrorRate`,
-      alarmDescription: 'Lambda error rate exceeds 1%',
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/Lambda',
-        metricName: 'Errors',
-        statistic: 'Sum',
-        period: Duration.minutes(5),
-      }),
-      threshold: 1,
-      evaluationPeriods: 1,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    // Issue #109: per-function Lambda error alarms. Previously a single
+    // alarm with no FunctionName dimension aggregated AWS/Lambda Errors
+    // across the whole account — noise from unrelated workloads would
+    // trip our pager and real platform errors got lost in the noise.
+    // Per-function alarms give the operator the broken function's name
+    // directly in the alarm. Threshold kept at "≥1 error per 5min" —
+    // the description now states the actual semantic (not the previous
+    // misleading "1% rate" wording).
+    lambdaFunctionNames.forEach((fnName) => {
+      const fnErrorAlarm = new cloudwatch.Alarm(this, `LambdaErrorAlarm-${fnName}`, {
+        alarmName: `VirtualMeetup-${envName}-${fnName}-Errors`,
+        alarmDescription: `${fnName} produced ≥1 error in 5 minutes`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Lambda',
+          metricName: 'Errors',
+          dimensionsMap: { FunctionName: fnName },
+          statistic: 'Sum',
+          period: Duration.minutes(5),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      fnErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
-    lambdaErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
-    // Alarm: DynamoDB Throttling
-    const dynamoThrottleAlarm = new cloudwatch.Alarm(this, 'DynamoThrottleAlarm', {
-      alarmName: `VirtualMeetup-${envName}-DynamoThrottling`,
-      alarmDescription: 'DynamoDB throttled requests detected',
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/DynamoDB',
-        metricName: 'ThrottledRequests',
-        statistic: 'Sum',
-        period: Duration.minutes(1),
-      }),
-      threshold: 0,
-      evaluationPeriods: 1,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    // Issue #109: per-table DynamoDB throttle alarms. The previous alarm
+    // omitted TableName and aggregated across every DDB table in the
+    // account — including CDK bootstrap tables and other apps' tables.
+    [mainTable, connectionsTable].filter(Boolean).forEach((table) => {
+      const tableName = table.tableName;
+      const throttleAlarm = new cloudwatch.Alarm(this, `DynamoThrottleAlarm-${table.node.id}`, {
+        alarmName: `VirtualMeetup-${envName}-${table.node.id}-Throttling`,
+        alarmDescription: `DynamoDB throttled requests on ${table.node.id}`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/DynamoDB',
+          metricName: 'ThrottledRequests',
+          dimensionsMap: { TableName: tableName },
+          statistic: 'Sum',
+          period: Duration.minutes(1),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      throttleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
-    dynamoThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
     // Alarm: WebSocket Failures > 10/min
     const wsFailureAlarm = new cloudwatch.Alarm(this, 'WebSocketFailureAlarm', {
@@ -137,22 +156,27 @@ class ObservabilityStack extends Stack {
     });
     wsFailureAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
-    // Alarm: High Lambda Duration (p99 > 5s)
-    const lambdaDurationAlarm = new cloudwatch.Alarm(this, 'LambdaDurationAlarm', {
-      alarmName: `VirtualMeetup-${envName}-LambdaHighDuration`,
-      alarmDescription: 'Lambda p99 duration exceeds 5 seconds',
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/Lambda',
-        metricName: 'Duration',
-        statistic: 'p99',
-        period: Duration.minutes(5),
-      }),
-      threshold: 5000,
-      evaluationPeriods: 1,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    // Issue #109: per-function p99 duration alarms. Same dimension fix as
+    // the error alarms above — without FunctionName, this aggregated p99
+    // across every Lambda in the account.
+    lambdaFunctionNames.forEach((fnName) => {
+      const fnDurationAlarm = new cloudwatch.Alarm(this, `LambdaDurationAlarm-${fnName}`, {
+        alarmName: `VirtualMeetup-${envName}-${fnName}-Duration`,
+        alarmDescription: `${fnName} p99 duration exceeds 5 seconds over a 5-minute window`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Lambda',
+          metricName: 'Duration',
+          dimensionsMap: { FunctionName: fnName },
+          statistic: 'p99',
+          period: Duration.minutes(5),
+        }),
+        threshold: 5000,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      fnDurationAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
-    lambdaDurationAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
     // Alarm: Lambda Throttles > 0 — distinct from Errors; fires when
     // concurrent invocations hit a reserved or account-wide cap. Throttles
