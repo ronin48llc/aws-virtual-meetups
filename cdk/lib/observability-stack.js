@@ -204,25 +204,34 @@ class ObservabilityStack extends Stack {
       fnDurationAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
 
-    // Alarm: Lambda Throttles > 0 — distinct from Errors; fires when
-    // concurrent invocations hit a reserved or account-wide cap. Throttles
-    // surface to clients as 502/503 at API GW but don't bump LambdaErrors
-    // since the underlying Lambda was never invoked. See #50.
-    const lambdaThrottleAlarm = new cloudwatch.Alarm(this, 'LambdaThrottleAlarm', {
-      alarmName: `VirtualMeetup-${envName}-LambdaThrottles`,
-      alarmDescription: 'Lambda throttling events detected — concurrent invocations hit a cap',
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/Lambda',
-        metricName: 'Throttles',
-        statistic: 'Sum',
-        period: Duration.minutes(1),
-      }),
-      threshold: 0,
-      evaluationPeriods: 1,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    // Per-function Lambda Throttles alarms (Issue #130).
+    //
+    // Originally introduced by PR #51 as a single account-wide alarm
+    // with no FunctionName dimension. #109 fixed Errors + Duration with
+    // the same per-function pattern but Throttles slipped through — it
+    // also aggregated across every Lambda in the account, paging on
+    // unrelated teams' throttles while hiding our own.
+    //
+    // Throttles surface to clients as 502/503 at API GW but don't bump
+    // LambdaErrors since the underlying Lambda was never invoked. See #50.
+    lambdaFunctionNames.forEach((fnName) => {
+      const fnThrottleAlarm = new cloudwatch.Alarm(this, `LambdaThrottleAlarm-${fnName}`, {
+        alarmName: `VirtualMeetup-${envName}-${fnName}-Throttles`,
+        alarmDescription: `${fnName} hit a Lambda concurrency throttle`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Lambda',
+          metricName: 'Throttles',
+          dimensionsMap: { FunctionName: fnName },
+          statistic: 'Sum',
+          period: Duration.minutes(1),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      fnThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
-    lambdaThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
     // Alarm: API 4xx rate > 50 per 5 min (~10/min). Catches scanning + broken
     // client deploys + systemic authz issues that don't trip the 5xx alarm.
