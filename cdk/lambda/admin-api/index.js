@@ -1,16 +1,22 @@
 'use strict';
 
+// Issue #93: This Lambda manipulates Cognito user accounts (disable/enable
+// arbitrary users) and leaks account-status metadata. When wired to API
+// Gateway it MUST sit behind a Cognito User Pool Authorizer. The
+// per-request role check below is defense-in-depth so the handler stays
+// safe even if a future PR adds the route without the authorizer, or
+// invokes this Lambda from a different trigger (EventBridge, direct).
+
 const { CognitoIdentityProviderClient, AdminDisableUserCommand, AdminEnableUserCommand, AdminGetUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
 
 const cognitoClient = new CognitoIdentityProviderClient({});
 const USER_POOL_ID = process.env.USER_POOL_ID;
 
-/**
- * Admin API Lambda handler for managing user accounts.
- * Supports disabling and enabling user accounts.
- * Requirements: 25.5
- */
 exports.handler = async (event) => {
+  // Authz gate runs before routing — every operation requires organizer role.
+  const authz = checkOrganizer(event);
+  if (authz) return authz;
+
   const { httpMethod, path, body } = parseEvent(event);
 
   try {
@@ -33,6 +39,36 @@ exports.handler = async (event) => {
     return response(500, { message: 'Internal server error' });
   }
 };
+
+function extractClaims(event) {
+  // API Gateway REST: event.requestContext.authorizer.claims
+  // API Gateway HTTP API (v2): event.requestContext.authorizer.jwt.claims
+  return (
+    event?.requestContext?.authorizer?.claims ||
+    event?.requestContext?.authorizer?.jwt?.claims ||
+    null
+  );
+}
+
+function checkOrganizer(event) {
+  const claims = extractClaims(event);
+  if (!claims) {
+    console.warn('Admin API call rejected: missing claims', {
+      path: event?.path || event?.rawPath,
+    });
+    return response(401, { message: 'Unauthorized' });
+  }
+  const role = claims['custom:role'];
+  if (role !== 'organizer') {
+    console.warn('Admin API call rejected: insufficient role', {
+      sub: claims.sub,
+      role,
+      path: event?.path || event?.rawPath,
+    });
+    return response(403, { message: 'Forbidden' });
+  }
+  return null;
+}
 
 async function disableUser(body) {
   const { username } = body;
@@ -82,7 +118,6 @@ async function getUserStatus(username) {
 }
 
 function parseEvent(event) {
-  // Support both API Gateway REST and HTTP API event formats
   const httpMethod = event.httpMethod || event.requestContext?.http?.method || 'GET';
   const path = event.path || event.rawPath || '';
   const body = event.body || '{}';
@@ -90,7 +125,6 @@ function parseEvent(event) {
 }
 
 function extractUsername(path) {
-  // Extract username from path like /admin/users/{username}/status
   const parts = path.split('/');
   const usersIndex = parts.indexOf('users');
   if (usersIndex >= 0 && parts.length > usersIndex + 1) {
