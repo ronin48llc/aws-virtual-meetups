@@ -1,6 +1,7 @@
 const path = require('path');
 const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const { SqsDestination } = require('aws-cdk-lib/aws-lambda-destinations');
 const iam = require('aws-cdk-lib/aws-iam');
 const sqs = require('aws-cdk-lib/aws-sqs');
@@ -68,6 +69,7 @@ class EmailStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/email-sender')),
       timeout: Duration.seconds(60),
       memorySize: 256,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: tableName,
         SES_SENDER: sesSender,

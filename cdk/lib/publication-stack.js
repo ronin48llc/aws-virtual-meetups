@@ -1,6 +1,7 @@
 const path = require('path');
 const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const events = require('aws-cdk-lib/aws-events');
 const targets = require('aws-cdk-lib/aws-events-targets');
 const secretsmanager = require('aws-cdk-lib/aws-secretsmanager');
@@ -43,6 +44,7 @@ class PublicationStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/publisher/')),
       timeout: Duration.minutes(5),
       memorySize: 512,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         RECORDING_BUCKET_NAME: recordingBucket.bucketName,
         GITHUB_TOKEN_SECRET_ARN: githubTokenSecret.secretArn,

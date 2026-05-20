@@ -2,6 +2,7 @@ const path = require('path');
 const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
 const cognito = require('aws-cdk-lib/aws-cognito');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 const { IdentityPool, UserPoolAuthenticationProvider } = require('aws-cdk-lib/aws-cognito-identitypool');
 
@@ -123,6 +124,7 @@ class AuthStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/admin-api/')),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         USER_POOL_ID: userPool.userPoolId,
       },
