@@ -8,6 +8,15 @@ class StreamingStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
+    // Recording retention: operators can override via cdk context
+    // (`recordingsRetentionDays`) in cdk.context.json. Default is 3 years —
+    // conservative for AWS user-group meetup archives. Lifecycle changes
+    // apply to existing objects on next S3 daily evaluation, so bumping
+    // this DOWN on a deployed account will queue older recordings for
+    // deletion within ~24h. Set higher before deploying if existing
+    // content predates the chosen retention.
+    const retentionDays = this.node.tryGetContext('recordingsRetentionDays') ?? 1095;
+
     // S3 bucket for IVS recordings with lifecycle rules
     const recordingBucket = new s3.Bucket(this, 'RecordingBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -28,6 +37,18 @@ class StreamingStack extends Stack {
               transitionAfter: Duration.days(90),
             },
           ],
+          // Cap current-version retention so Glacier storage doesn't grow
+          // forever. Operators override via cdk context recordingsRetentionDays.
+          expiration: Duration.days(retentionDays),
+          // versioned: true means every overwrite (HLS manifest churn during
+          // a live session) creates a noncurrent version. Without this, those
+          // sit in Standard storage forever — typically a bigger leak than
+          // the recordings themselves.
+          noncurrentVersionExpiration: Duration.days(30),
+          // Abort any IVS Composition multipart upload that didn't finish
+          // (failed composition, network drop). Otherwise the fragments are
+          // invisible in the console and bill silently.
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
         },
       ],
     });
