@@ -69,7 +69,7 @@ function buildEvent({ action, eventId, data, userId, timestamp, connectionId = '
 // check on presenter-only actions (lowerAllHands, acknowledgeHand,
 // dismissHand). Tests for non-presenter actions don't call this.
 function presenterAuth() {
-  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter' } });
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter', eventId: 'evt_abc123' } });
 }
 
 describe('WebSocket Signaling Handler — Hand Raising', () => {

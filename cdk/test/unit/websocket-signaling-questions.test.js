@@ -74,7 +74,7 @@ function buildEvent({ action, eventId, data, userId, questionId, timestamp, text
 // Issue #70: prepend a presenter Item to satisfy dispatcher authz on
 // presenter-only actions (dismissQuestion, pinQuestion, unpinQuestion).
 function presenterAuth() {
-  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter' } });
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter', eventId: 'evt_abc123' } });
 }
 
 describe('WebSocket Signaling Handler — Question Queue', () => {
