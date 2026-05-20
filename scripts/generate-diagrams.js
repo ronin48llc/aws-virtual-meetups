@@ -46,7 +46,13 @@ function renderDiagrams(blocks, outputDir) {
   for (const block of blocks) {
     const inputFile = path.join(outputDir, `${block.name}.mmd`);
     const pngFile = path.join(outputDir, `${block.name}.png`);
-    const svgFile = path.join(outputDir, `${block.name}.svg`);
+    const base = path.resolve(outputDir);
+    const target = path.resolve(outputDir, `${block.name}.svg`);
+    const relative = path.relative(base, target);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error('Invalid file path');
+    }
+    const svgFile = target;
 
     // Write Mermaid source
     fs.writeFileSync(inputFile, block.code);
