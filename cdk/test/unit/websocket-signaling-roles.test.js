@@ -57,7 +57,7 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
     // Prepend a presenter Item so each test's existing mockResolvedValueOnce
     // chain continues to satisfy its own assertions for the action-specific
     // calls that follow.
-    mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter' } });
+    mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter', eventId: 'evt_abc123' } });
   });
 
   describe('presenter-only authz (issue #70)', () => {
@@ -102,6 +102,25 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
       };
       const result = await handler(event);
       expect(result.statusCode).toBe(403);
+    });
+
+    it('returns 403 when senderConn.eventId does not match body.eventId (issue #75)', async () => {
+      mockSend.mockReset();
+      // Sender is a presenter but on a DIFFERENT event.
+      mockSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId: 'evt_OTHER' } });
+
+      const event = {
+        requestContext: { connectionId: 'conn-attacker' },
+        body: JSON.stringify({
+          action: 'promoteUser',
+          eventId: 'evt_VICTIM',
+          data: { targetConnectionId: 'conn-victim', userId: 'user-victim' },
+        }),
+      };
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+      expect(result.body).toMatch(/different event/);
+      expect(mockSend).toHaveBeenCalledTimes(1);
     });
   });
 

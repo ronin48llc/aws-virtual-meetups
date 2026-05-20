@@ -211,7 +211,7 @@ describe('Hand-Raising Property Tests', () => {
             }));
 
             // Issue #70: dispatcher authz GET on the connections table.
-            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId } });
             // Mock QueryCommand returning all hands
             mockSend.mockResolvedValueOnce({ Items: items });
 

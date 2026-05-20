@@ -72,7 +72,7 @@ function buildEvent({ action, eventId, data, userId, targetConnectionId, connect
 // Issue #70: prepend a presenter Item to satisfy dispatcher authz on
 // presenter-only actions (restrictChat, restrictQuestions, globalMute*).
 function presenterAuth() {
-  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-presenter', role: 'presenter' } });
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-presenter', role: 'presenter', eventId: 'evt_abc123' } });
 }
 
 describe('WebSocket Signaling Handler — Mute and Participation Controls', () => {

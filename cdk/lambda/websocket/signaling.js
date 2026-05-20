@@ -109,6 +109,16 @@ async function handler(event) {
       console.error('Failed to fetch connection for authz', { connectionId, action, error: authErr.message });
       return { statusCode: 500, body: 'Internal server error' };
     }
+    // Issue #75: also verify the connection's eventId matches the body's.
+    // Without this, an attendee/co-presenter of event A could act on event B
+    // by spoofing body.eventId. PR #71's role check covers the action being
+    // gated, but it's gating the WRONG event.
+    if (senderConn && senderConn.eventId !== eventId) {
+      console.warn('Cross-event presenter action denied', {
+        connectionId, action, bodyEventId: eventId, connEventId: senderConn.eventId,
+      });
+      return { statusCode: 403, body: 'Connection is for a different event' };
+    }
     const role = senderConn && senderConn.role;
     if (role !== SESSION_ROLE.PRESENTER && role !== SESSION_ROLE.CO_PRESENTER) {
       console.warn('Presenter-only action denied', { connectionId, action, eventId, role });
