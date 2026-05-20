@@ -20,7 +20,10 @@ const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivscha
 const { broadcast, getConnectionsForEvent } = require('./broadcast');
 const { checkRateLimit } = require('./rate-limiter');
 const { buildEventPK, buildHandSK, buildQuestionSK, chunk } = require('../shared/dynamo-utils');
-const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS } = require('../shared/constants');
+// MAX_DISPLAY_NAME_LENGTH was added to shared/constants.js by PR #47.
+// Default falls back to 100 if this PR lands before #47, so the merge
+// order doesn't matter.
+const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS, MAX_DISPLAY_NAME_LENGTH = 100 } = require('../shared/constants');
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
@@ -64,6 +67,20 @@ async function handler(event) {
   if (!rateCheck.allowed) {
     console.warn('Rate limit exceeded', { connectionId, action, eventId, count: rateCheck.count });
     return { statusCode: 429, body: 'Rate limit exceeded. Please slow down.' };
+  }
+
+  // Centralized displayName length validation. 6+ handlers read
+  // body.data?.displayName || body.displayName and write/broadcast it
+  // without bounds — same DDB-bloat / broadcast-amplification pattern
+  // PR #47 fixed for HTTP signup. Validating once here covers every
+  // current handler that reads this shape AND any future addition.
+  // Absent/empty displayName is fine — many handlers don't need one.
+  // See #60.
+  const dn = (body.data && body.data.displayName) || body.displayName;
+  if (dn !== undefined && dn !== null && dn !== '') {
+    if (typeof dn !== 'string' || dn.length > MAX_DISPLAY_NAME_LENGTH) {
+      return { statusCode: 400, body: `displayName must be <= ${MAX_DISPLAY_NAME_LENGTH} characters` };
+    }
   }
 
   try {
