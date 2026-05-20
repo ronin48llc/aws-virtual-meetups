@@ -13,7 +13,7 @@ jest.mock('@aws-sdk/client-secrets-manager', () => ({
 }));
 
 const { _internals } = require('../../lambda/publisher/index');
-const { generateJekyllPost, generateWebVTT, parseTranscriptSegments, formatTimestamp, escapeYaml } = _internals;
+const { generateJekyllPost, generateWebVTT, parseTranscriptSegments, formatTimestamp, _escapeYaml } = _internals;
 
 // --- Arbitraries ---
 
@@ -57,7 +57,7 @@ const arbSeconds = fc.integer({ min: 0, max: 59 });
 const arbMillis = fc.integer({ min: 0, max: 999 });
 
 // Generate a formatted timestamp string HH:MM:SS.mmm
-const arbTimestampStr = fc.tuple(arbHours, arbMinutes, arbSeconds, arbMillis)
+const _arbTimestampStr = fc.tuple(arbHours, arbMinutes, arbSeconds, arbMillis)
   .map(([h, m, s, ms]) =>
     `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`
   );

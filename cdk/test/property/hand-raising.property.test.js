@@ -58,7 +58,7 @@ const arbDisplayName = fc.string({ minLength: 1, maxLength: 50 })
   .filter((s) => s.trim().length > 0 && !/[\x00-\x1F\x7F]/.test(s));
 
 // Hand count (for generating lists of raised hands)
-const arbHandCount = fc.integer({ min: 1, max: 30 });
+const _arbHandCount = fc.integer({ min: 1, max: 30 });
 
 // Generate a list of unique raised hand items for a given event
 function arbHandItems(eventId) {
@@ -340,11 +340,11 @@ describe('Hand-Raising Property Tests', () => {
             if (uniqueHands.length < 2) return; // Need at least 2 hands
 
             // Simulate raising each hand (each creates a PutCommand)
-            for (const hand of uniqueHands) {
+            for (const _hand of uniqueHands) {
               mockSend.mockResolvedValueOnce({}); // PutCommand
             }
 
-            const putCalls = [];
+            const _putCalls = [];
             for (const hand of uniqueHands) {
               const raiseEvent = buildWebSocketEvent({
                 action: 'raiseHand',

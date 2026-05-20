@@ -1,6 +1,6 @@
 const path = require('path');
 const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
-const { HttpApi, HttpMethod, CorsHttpMethod, HttpStage, DomainName, ApiMapping } = require('aws-cdk-lib/aws-apigatewayv2');
+const { HttpApi, HttpMethod, CorsHttpMethod, _HttpStage, DomainName, ApiMapping } = require('aws-cdk-lib/aws-apigatewayv2');
 const { HttpLambdaIntegration } = require('aws-cdk-lib/aws-apigatewayv2-integrations');
 const { HttpUserPoolAuthorizer } = require('aws-cdk-lib/aws-apigatewayv2-authorizers');
 const { WebSocketApi, WebSocketStage } = require('aws-cdk-lib/aws-apigatewayv2');
@@ -407,7 +407,7 @@ class ApiStack extends Stack {
     });
 
     // Custom WebSocket routes
-    const wsSignalingIntegration = new WebSocketLambdaIntegration('WsSignalingIntegration', wsSignalingFn);
+    const _wsSignalingIntegration = new WebSocketLambdaIntegration('WsSignalingIntegration', wsSignalingFn);
 
     const customRoutes = [
       'raiseHand',

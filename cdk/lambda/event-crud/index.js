@@ -12,7 +12,7 @@ const {
   PutCommand,
   GetCommand,
   UpdateCommand,
-  DeleteCommand,
+  _DeleteCommand,
   QueryCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
@@ -380,7 +380,7 @@ async function getEvent(eventId) {
           durationSeconds: metrics.durationSeconds || 0,
         };
       }
-    } catch (err) {
+    } catch (_err) {
       // Non-blocking — metrics are optional
     }
   }

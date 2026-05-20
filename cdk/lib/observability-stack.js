@@ -23,7 +23,7 @@ class ObservabilityStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    const { httpApi, webSocketApi, mainTable, connectionsTable } = props;
+    const { httpApi, webSocketApi, _mainTable, _connectionsTable } = props;
     const envName = this.node.tryGetContext('env') || 'dev';
     const alarmEmails = this.node.tryGetContext('alarmEmails') || [];
 
@@ -43,7 +43,7 @@ class ObservabilityStack extends Stack {
     // -------------------------------------------------------
     // Log Retention — 30 days for all Lambda Log Groups
     // -------------------------------------------------------
-    const logGroups = lambdaFunctionNames.map((fnName) => {
+    const _logGroups = lambdaFunctionNames.map((fnName) => {
       return new logs.LogGroup(this, `LogGroup-${fnName}`, {
         logGroupName: `/aws/lambda/${fnName}`,
         retention: logs.RetentionDays.ONE_MONTH,

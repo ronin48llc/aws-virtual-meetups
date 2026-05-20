@@ -156,7 +156,7 @@ describe('Question Queue Property Tests', () => {
 
             // Submit each question sequentially
             // Each submitQuestion call does: GetCommand (check questionsRestricted) + PutCommand
-            for (const q of questions) {
+            for (const _q of questions) {
               mockSend.mockResolvedValueOnce({ Item: {} }); // GetCommand - no restriction
               mockSend.mockResolvedValueOnce({}); // PutCommand
             }

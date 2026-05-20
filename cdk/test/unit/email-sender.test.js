@@ -294,7 +294,7 @@ describe('Email Sender Lambda Handler', () => {
     });
 
     it('falls back to SendEmailCommand when durationMinutes is missing from metadata', async () => {
-      const { durationMinutes, ...withoutDuration } = baseEventMetadata;
+      const { _durationMinutes, ...withoutDuration } = baseEventMetadata;
       mockDocSend.mockResolvedValueOnce({ Item: withoutDuration });
 
       const result = await handler(basePayload);

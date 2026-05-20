@@ -1,10 +1,12 @@
 'use strict';
 
 /**
- * ESLint v9 flat-config for the CDK + Lambda codebase. Errors that catch real
- * footguns (undefined vars, unreachable code, accidental globals). Style and
- * unused-locals stay as warnings so the cutover doesn't drown in noise — see
- * issue #6 for the migration plan to make these errors over time.
+ * ESLint v9 flat-config for the CDK + Lambda codebase.
+ *
+ * All rules are at `error` severity. Zero-warnings is the bar — the
+ * existing backlog was cleaned up when this config landed and the rule
+ * patterns (`^_` prefix for intentionally-unused args/vars/caught errors)
+ * are the documented escape hatch.
  */
 
 const js = require('@eslint/js');
@@ -34,29 +36,33 @@ module.exports = [
       },
     },
     rules: {
-      'no-unused-vars': ['warn', {
+      'no-unused-vars': ['error', {
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
         caughtErrorsIgnorePattern: '^_',
       }],
       // Allow `require()` (CommonJS project)
       '@typescript-eslint/no-require-imports': 'off',
-      // Warn on console.* in production code paths but allow in Lambda
-      // handlers / tests (covered by file-scoped overrides below).
       'no-console': 'off',
       // Real footguns
       'no-undef': 'error',
       'no-unreachable': 'error',
       'no-cond-assign': 'error',
       'no-dupe-keys': 'error',
-      'no-empty': ['warn', { allowEmptyCatch: true }],
-      'no-prototype-builtins': 'warn',
-      'no-useless-escape': 'warn',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-prototype-builtins': 'error',
+      'no-useless-escape': 'error',
       // Off project-wide — the codebase uses /[\x00-\x1F\x7F]/ deliberately
       // in input-sanitization code (lambda/shared/validation.js) and in
       // property-test filters that strip control characters from generated
       // strings. The control characters are the *point*, not a bug.
       'no-control-regex': 'off',
+    },
+    linterOptions: {
+      // Flag any `// eslint-disable-...` directive that doesn't actually
+      // silence a real violation. Forces the codebase to keep disables
+      // tied to real reasons rather than accumulating dead comments.
+      reportUnusedDisableDirectives: 'error',
     },
   },
 

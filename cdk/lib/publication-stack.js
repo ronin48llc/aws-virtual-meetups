@@ -5,7 +5,7 @@ const events = require('aws-cdk-lib/aws-events');
 const targets = require('aws-cdk-lib/aws-events-targets');
 const secretsmanager = require('aws-cdk-lib/aws-secretsmanager');
 const sqs = require('aws-cdk-lib/aws-sqs');
-const iam = require('aws-cdk-lib/aws-iam');
+const _iam = require('aws-cdk-lib/aws-iam');
 
 class PublicationStack extends Stack {
   constructor(scope, id, props) {

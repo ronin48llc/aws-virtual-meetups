@@ -7,7 +7,7 @@ process.env.AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
 process.env.AWS_SESSION_TOKEN = 'FwoGZXIvYXdzEBYaDHqa0AP';
 
 const { handler, _internals } = require('../../lambda/transcription/index');
-const { generateTranscribePresignedUrl, buildTranslateConfig, SUPPORTED_SOURCE_LANGUAGES, SUPPORTED_TARGET_LANGUAGES } = _internals;
+const { generateTranscribePresignedUrl, buildTranslateConfig, _SUPPORTED_SOURCE_LANGUAGES, _SUPPORTED_TARGET_LANGUAGES } = _internals;
 
 function buildEvent({ method, resource, pathParameters, body, claims }) {
   const event = {

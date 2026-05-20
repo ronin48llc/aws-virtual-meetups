@@ -9,7 +9,7 @@
 // Minimal DOM mock for testing the playback module
 function createMockDOM() {
   const elements = {};
-  const eventListeners = {};
+  const _eventListeners = {};
 
   function createElement(tag) {
     const el = {
@@ -252,7 +252,7 @@ describe('Playback Module - Captions and Transcript', () => {
 
   afterEach(() => {
     if (Playback) {
-      try { Playback.destroy(); } catch (e) { /* ignore */ }
+      try { Playback.destroy(); } catch (_e) { /* ignore */ }
     }
     delete global.window;
     delete global.document;

@@ -21,7 +21,7 @@ class EmailStack extends Stack {
     // Requirements: 6.1, 6.2, 6.4
     // -------------------------------------------------------
     if (hostedZone) {
-      const sesIdentity = new ses.EmailIdentity(this, 'SenderDomainIdentity', {
+      const _sesIdentity = new ses.EmailIdentity(this, 'SenderDomainIdentity', {
         identity: ses.Identity.publicHostedZone(hostedZone),
       });
 
@@ -39,7 +39,7 @@ class EmailStack extends Stack {
     } else {
       // Fallback: verify a specific email address when no domain is configured
       const fallbackEmail = this.node.tryGetContext('sesVerifiedEmail') || 'noreply@example.com';
-      const sesIdentity = new ses.EmailIdentity(this, 'SenderEmailIdentity', {
+      const _sesIdentity = new ses.EmailIdentity(this, 'SenderEmailIdentity', {
         identity: ses.Identity.email(fallbackEmail),
       });
     }
@@ -111,7 +111,7 @@ class EmailStack extends Stack {
     // -------------------------------------------------------
     // EventBridge Scheduler Group
     // -------------------------------------------------------
-    const schedulerGroup = new scheduler.CfnScheduleGroup(this, 'ReminderSchedulerGroup', {
+    const _schedulerGroup = new scheduler.CfnScheduleGroup(this, 'ReminderSchedulerGroup', {
       name: 'VirtualMeetup-Reminders',
     });
 

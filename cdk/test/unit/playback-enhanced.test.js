@@ -227,7 +227,7 @@ describe('Playback Module - Enhanced Playback Features', () => {
 
   afterEach(() => {
     if (Playback) {
-      try { Playback.destroy(); } catch (e) { /* ignore */ }
+      try { Playback.destroy(); } catch (_e) { /* ignore */ }
     }
     delete global.window;
     delete global.document;

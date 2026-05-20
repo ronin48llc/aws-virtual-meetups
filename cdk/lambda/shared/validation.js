@@ -99,7 +99,7 @@ function sanitize(str) {
   if (!str || typeof str !== 'string') {
     return '';
   }
-  // eslint-disable-next-line no-control-regex
+
   return str.trim().replace(/[\x00-\x1F\x7F]/g, '');
 }
 
@@ -120,7 +120,7 @@ function parseBody(body) {
   try {
     const data = JSON.parse(body);
     return { valid: true, data, error: null };
-  } catch (err) {
+  } catch (_err) {
     return { valid: false, data: null, error: 'Invalid JSON in request body' };
   }
 }

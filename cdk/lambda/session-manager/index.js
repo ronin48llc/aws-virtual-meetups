@@ -9,7 +9,7 @@
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand, UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
-const { IVSRealTimeClient, CreateStageCommand, DeleteStageCommand, StartCompositionCommand, StopCompositionCommand, GetCompositionCommand } = require('@aws-sdk/client-ivs-realtime');
+const { IVSRealTimeClient, CreateStageCommand, DeleteStageCommand, StartCompositionCommand, StopCompositionCommand, _GetCompositionCommand } = require('@aws-sdk/client-ivs-realtime');
 const { IvschatClient, CreateRoomCommand } = require('@aws-sdk/client-ivschat');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 

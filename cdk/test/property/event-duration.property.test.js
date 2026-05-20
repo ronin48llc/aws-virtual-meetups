@@ -147,7 +147,7 @@ describe('Event Duration Property Tests', () => {
    */
   describe('Property 4: durationMinutes range validation', () => {
     // Generator for invalid durationMinutes (outside valid range)
-    const arbInvalidDuration = fc.oneof(
+    const _arbInvalidDuration = fc.oneof(
       fc.integer({ min: -1000, max: 0 }),
       fc.integer({ min: 481, max: 10000 }),
       fc.double().filter(n => !Number.isInteger(n))
@@ -700,7 +700,7 @@ describe('Property 6: Auto-stop is a no-op for non-live events', () => {
     jest.resetModules();
 
     // Re-require fast-check since modules were reset
-    const fcLocal = require('fast-check');
+    const _fcLocal = require('fast-check');
 
     sessionManagerHandler = require('../../lambda/session-manager/index').handler;
   });

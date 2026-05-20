@@ -12,7 +12,7 @@
  */
 
 const crypto = require('crypto');
-const { success, badRequest, unauthorized, forbidden, serverError } = require('../shared/response');
+const { success, badRequest, unauthorized, _forbidden, serverError } = require('../shared/response');
 const { parseBody, validateRequiredFields } = require('../shared/validation');
 
 const AWS_REGION = process.env.AWS_REGION || 'us-east-1';

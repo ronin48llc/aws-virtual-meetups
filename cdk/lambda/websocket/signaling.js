@@ -151,7 +151,7 @@ async function handler(event) {
  * @param {string} connectionId - The WebSocket connection ID.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleRaiseHand(eventId, body, connectionId) {
+async function handleRaiseHand(eventId, body, _connectionId) {
   const userId = body.data?.userId || body.userId;
   const displayName = body.data?.displayName || body.displayName || '';
 
@@ -199,7 +199,7 @@ async function handleRaiseHand(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleLowerHand(eventId, body, connectionId) {
+async function handleLowerHand(eventId, body, _connectionId) {
   const userId = body.data?.userId || body.userId;
   const timestamp = body.data?.timestamp || body.timestamp;
 
@@ -237,7 +237,7 @@ async function handleLowerHand(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleLowerAllHands(eventId, body, connectionId) {
+async function handleLowerAllHands(eventId, _body, _connectionId) {
   const pk = buildEventPK(eventId);
 
   // Query all HAND# items for this event
@@ -381,7 +381,7 @@ async function handleSubmitQuestion(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleAnswerQuestion(eventId, body, connectionId) {
+async function handleAnswerQuestion(eventId, body, _connectionId) {
   const questionId = body.data?.questionId || body.questionId;
   const timestamp = body.data?.timestamp || body.timestamp;
   const answer = body.data?.answer || body.answer || '';
@@ -435,7 +435,7 @@ async function handleAnswerQuestion(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleDismissQuestion(eventId, body, connectionId) {
+async function handleDismissQuestion(eventId, body, _connectionId) {
   const questionId = body.data?.questionId || body.questionId;
   const timestamp = body.data?.timestamp || body.timestamp;
 
@@ -476,7 +476,7 @@ async function handleDismissQuestion(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester.
  * @returns {Object} Response with statusCode 200.
  */
-async function handlePromoteUser(eventId, body, connectionId) {
+async function handlePromoteUser(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -515,7 +515,7 @@ async function handlePromoteUser(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleDemoteUser(eventId, body, connectionId) {
+async function handleDemoteUser(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -554,7 +554,7 @@ async function handleDemoteUser(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleGrantSpeak(eventId, body, connectionId) {
+async function handleGrantSpeak(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -593,7 +593,7 @@ async function handleGrantSpeak(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleRevokeSpeak(eventId, body, connectionId) {
+async function handleRevokeSpeak(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -632,7 +632,7 @@ async function handleRevokeSpeak(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester.
  * @returns {Object} Response with statusCode 200.
  */
-async function handleToggleChat(eventId, body, connectionId) {
+async function handleToggleChat(eventId, body, _connectionId) {
   const enabled = body.data?.enabled;
 
   if (typeof enabled !== 'boolean') {
@@ -795,7 +795,7 @@ async function handleSendDirectMessage(eventId, body, connectionId) {
         Key: { connectionId },
       }));
       senderDisplayName = senderConn.Item?.displayName || senderConn.Item?.email || userId || 'Unknown';
-    } catch (e) {
+    } catch (_e) {
       senderDisplayName = userId || 'Unknown';
     }
   }
@@ -863,7 +863,7 @@ async function handleSendDirectMessage(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleMuteAudio(eventId, body, connectionId) {
+async function handleMuteAudio(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -901,7 +901,7 @@ async function handleMuteAudio(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleMuteVideo(eventId, body, connectionId) {
+async function handleMuteVideo(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -939,7 +939,7 @@ async function handleMuteVideo(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleRestrictChat(eventId, body, connectionId) {
+async function handleRestrictChat(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -977,7 +977,7 @@ async function handleRestrictChat(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleRestrictQuestions(eventId, body, connectionId) {
+async function handleRestrictQuestions(eventId, body, _connectionId) {
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const userId = body.data?.userId || body.userId;
 
@@ -1015,7 +1015,7 @@ async function handleRestrictQuestions(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleGlobalMuteAudio(eventId, body, connectionId) {
+async function handleGlobalMuteAudio(eventId, body, _connectionId) {
   const enabled = body.data?.enabled;
 
   if (typeof enabled !== 'boolean') {
@@ -1053,7 +1053,7 @@ async function handleGlobalMuteAudio(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleGlobalMuteVideo(eventId, body, connectionId) {
+async function handleGlobalMuteVideo(eventId, body, _connectionId) {
   const enabled = body.data?.enabled;
 
   if (typeof enabled !== 'boolean') {
@@ -1157,7 +1157,7 @@ async function executeKickFlow(eventId, userId, targetConnectionId, reason) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleKickUser(eventId, body, connectionId) {
+async function handleKickUser(eventId, body, _connectionId) {
   const userId = body.data?.userId || body.userId;
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const reason = body.data?.reason || body.reason || 'Kicked by presenter';
@@ -1195,7 +1195,7 @@ async function handleKickUser(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleBanUser(eventId, body, connectionId) {
+async function handleBanUser(eventId, body, _connectionId) {
   const userId = body.data?.userId || body.userId;
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
   const reason = body.data?.reason || body.reason || 'Banned by presenter';
@@ -1253,7 +1253,7 @@ async function handleBanUser(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleUnbanUser(eventId, body, connectionId) {
+async function handleUnbanUser(eventId, body, _connectionId) {
   const userId = body.data?.userId || body.userId;
 
   if (!userId) {
@@ -1332,7 +1332,7 @@ async function handleListBans(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleAcknowledgeHand(eventId, body, connectionId) {
+async function handleAcknowledgeHand(eventId, body, _connectionId) {
   const userId = body.data?.userId || body.userId;
   const timestamp = body.data?.timestamp || body.timestamp;
 
@@ -1395,7 +1395,7 @@ async function handleAcknowledgeHand(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleDismissHand(eventId, body, connectionId) {
+async function handleDismissHand(eventId, body, _connectionId) {
   const userId = body.data?.userId || body.userId;
   const timestamp = body.data?.timestamp || body.timestamp;
 
@@ -1554,7 +1554,7 @@ async function handleGetHandsList(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handlePinQuestion(eventId, body, connectionId) {
+async function handlePinQuestion(eventId, body, _connectionId) {
   const questionId = body.data?.questionId || body.questionId;
   const text = body.data?.text || body.text;
   const displayName = body.data?.displayName || body.displayName || '';
@@ -1588,7 +1588,7 @@ async function handlePinQuestion(eventId, body, connectionId) {
  * @param {string} connectionId - The WebSocket connection ID of the requester (presenter).
  * @returns {Object} Response with statusCode 200.
  */
-async function handleUnpinQuestion(eventId, body, connectionId) {
+async function handleUnpinQuestion(eventId, body, _connectionId) {
   const questionId = body.data?.questionId || body.questionId;
 
   if (!questionId) {
@@ -1631,7 +1631,7 @@ async function handleTyping(eventId, body, connectionId) {
       }));
       senderDisplayName = senderDisplayName || senderConn.Item?.displayName || senderConn.Item?.email || 'Someone';
       senderUserId = senderUserId || senderConn.Item?.userId || '';
-    } catch (e) {
+    } catch (_e) {
       senderDisplayName = senderDisplayName || 'Someone';
     }
   }
@@ -1652,7 +1652,7 @@ async function handleTyping(eventId, body, connectionId) {
   for (const conn of otherConnections) {
     try {
       await sendToConnection(conn.connectionId, message);
-    } catch (error) {
+    } catch (_error) {
       // Ignore stale connections
     }
   }

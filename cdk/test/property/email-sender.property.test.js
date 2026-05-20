@@ -90,11 +90,11 @@ describe('Email Sender Property Tests', () => {
    * resolves without throwing and logs the error with eventId and recipient.
    */
   describe('Property 2: Email Failure Resilience', () => {
-    let consoleErrorSpy;
+    let _consoleErrorSpy;
 
     beforeEach(() => {
       jest.clearAllMocks();
-      consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      _consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       jest.spyOn(console, 'log').mockImplementation(() => {});
       jest.spyOn(console, 'warn').mockImplementation(() => {});
     });

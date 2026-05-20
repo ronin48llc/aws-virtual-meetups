@@ -76,11 +76,11 @@ const arbMessage = fc.string({ minLength: 1, maxLength: 200 })
   .filter((s) => s.trim().length > 0 && !/[\x00-\x1F\x7F]/.test(s));
 
 // ISO timestamp arbitrary
-const arbTimestamp = fc.integer({ min: 1600000000000, max: 1900000000000 })
+const _arbTimestamp = fc.integer({ min: 1600000000000, max: 1900000000000 })
   .map((ms) => new Date(ms).toISOString());
 
 // Generate a set of connections with exactly one presenter and multiple attendees
-function arbConnectionSet(eventId) {
+function _arbConnectionSet(eventId) {
   return fc.record({
     presenterConnId: arbConnectionId,
     presenterUserId: arbUserId,

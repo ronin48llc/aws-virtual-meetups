@@ -23,7 +23,7 @@ const {
   createReminderSchedules,
   deleteReminderSchedules,
   computeScheduleTime,
-  buildScheduleName,
+  _buildScheduleName,
   formatScheduleExpression,
   SCHEDULER_GROUP,
   OFFSET_24H,
