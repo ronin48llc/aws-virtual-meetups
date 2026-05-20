@@ -871,6 +871,20 @@ async function handleMuteAudio(eventId, body, connectionId) {
     return { statusCode: 400, body: 'Missing targetConnectionId or userId' };
   }
 
+  // Self-mute is allowed for anyone; third-party mute requires presenter
+  // role. PR #71's centralized dispatcher check skipped this handler to
+  // preserve the self-mute UX. See #72.
+  if (targetConnectionId !== connectionId) {
+    const senderConn = await docClient.send(new GetCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId },
+    }));
+    const role = senderConn.Item && senderConn.Item.role;
+    if (role !== SESSION_ROLE.PRESENTER && role !== SESSION_ROLE.CO_PRESENTER) {
+      return { statusCode: 403, body: 'Only presenters can mute other attendees' };
+    }
+  }
+
   await docClient.send(new UpdateCommand({
     TableName: CONNECTIONS_TABLE_NAME,
     Key: { connectionId: targetConnectionId },
@@ -907,6 +921,19 @@ async function handleMuteVideo(eventId, body, connectionId) {
 
   if (!targetConnectionId || !userId) {
     return { statusCode: 400, body: 'Missing targetConnectionId or userId' };
+  }
+
+  // Self-mute (video off) is allowed for anyone; third-party requires
+  // presenter role. See #72.
+  if (targetConnectionId !== connectionId) {
+    const senderConn = await docClient.send(new GetCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId },
+    }));
+    const role = senderConn.Item && senderConn.Item.role;
+    if (role !== SESSION_ROLE.PRESENTER && role !== SESSION_ROLE.CO_PRESENTER) {
+      return { statusCode: 403, body: 'Only presenters can disable other attendees\' video' };
+    }
   }
 
   await docClient.send(new UpdateCommand({
