@@ -112,12 +112,16 @@ Note the ARN — update `ivsEncoderConfigArn` in `cdk/bin/app.js`.
 
 ### GitHub Token for Publication
 
-Store your GitHub PAT in Secrets Manager:
+Store your GitHub PAT in Secrets Manager. Export the token as `GITHUB_PAT`
+first (never paste it inline — the scanner picks up literal command-line
+secrets, and your shell will log it to history):
 
 ```bash
+export GITHUB_PAT='...'   # your fine-grained PAT, scoped to the publication repo
+
 aws secretsmanager put-secret-value \
   --secret-id VirtualMeetup/GitHubToken \
-  --secret-string '{"token":"ghp_YOUR_TOKEN_HERE"}'
+  --secret-string "$(jq -n --arg t "$GITHUB_PAT" '{token:$t}')"
 ```
 
 ## Frontend Deployment
@@ -183,7 +187,13 @@ This creates a user with:
 
 ### Manual User Creation
 
+Export the passwords first so they don't get logged in your shell history (the
+scanner also flags `--password` literals on the command line):
+
 ```bash
+read -rs -p "Temporary password: " TEMP_PASSWORD; echo
+read -rs -p "Permanent password: " PERMANENT_PASSWORD; echo
+
 aws cognito-idp admin-create-user \
   --user-pool-id <USER_POOL_ID> \
   --username user@example.com \
@@ -191,13 +201,13 @@ aws cognito-idp admin-create-user \
     Name=email,Value=user@example.com \
     Name=email_verified,Value=true \
     Name=custom:role,Value=organizer \
-  --temporary-password "TempPass123!" \
+  --temporary-password "$TEMP_PASSWORD" \
   --message-action SUPPRESS
 
 aws cognito-idp admin-set-user-password \
   --user-pool-id <USER_POOL_ID> \
   --username user@example.com \
-  --password "PermanentPass123!" \
+  --password "$PERMANENT_PASSWORD" \
   --permanent
 ```
 

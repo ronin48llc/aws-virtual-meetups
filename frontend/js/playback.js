@@ -260,11 +260,19 @@ const Playback = (() => {
     var actionsContainer = document.getElementById('playback-actions');
     if (!actionsContainer) return;
 
+    // Reject any URL scheme other than http/https — defends against a
+    // javascript: or data: URL slipping in from a compromised API response.
+    var safeHref = _safeHttpUrl(playbackUrl);
+    if (!safeHref) {
+      actionsContainer.innerHTML = '';
+      return;
+    }
+
     var html = '';
 
     // Download button
     html += '<a id="playback-download-btn" ' +
-      'href="' + _escapeHtml(playbackUrl) + '" ' +
+      'href="' + _escapeHtml(safeHref) + '" ' +
       'download ' +
       'class="btn btn--secondary" ' +
       'style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" ' +
@@ -964,10 +972,26 @@ const Playback = (() => {
    * @param {string} str - String to escape
    * @returns {string} Escaped string
    */
+  function _safeHttpUrl(raw) {
+    if (typeof raw !== 'string' || !raw) return null;
+    try {
+      var u = new URL(raw, window.location.href);
+      return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
   function _escapeHtml(str) {
-    var div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
+    // Escapes all five HTML/attr-significant chars so the result is safe to
+    // interpolate into both element text and attribute contexts (incl.
+    // single- or double-quoted onclick="...").
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // --- Public API ---
