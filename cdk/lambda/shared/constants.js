@@ -94,13 +94,13 @@ const CORS_HEADERS = Object.freeze({
 });
 
 /**
- * Length bounds for user-supplied text fields. DDB's 400 KB per-item
- * cap is the upstream limit; these caps keep items + GSI projections
- * from being silently bloated by a single oversized record. See #32, #46.
+ * Length bounds for user-supplied text fields written to DDB. See #32 / #46 / #48.
  */
 const MAX_TITLE_LENGTH = 200;
 const MAX_DESCRIPTION_LENGTH = 5000;
 const MAX_DISPLAY_NAME_LENGTH = 100;
+const MAX_QUESTION_TEXT_LENGTH = 1000;
+const MAX_ANSWER_TEXT_LENGTH = 2000;
 
 module.exports = {
   EVENT_STATUS,
@@ -115,4 +115,6 @@ module.exports = {
   MAX_TITLE_LENGTH,
   MAX_DESCRIPTION_LENGTH,
   MAX_DISPLAY_NAME_LENGTH,
+  MAX_QUESTION_TEXT_LENGTH,
+  MAX_ANSWER_TEXT_LENGTH,
 };
