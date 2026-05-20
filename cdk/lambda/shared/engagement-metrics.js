@@ -134,9 +134,14 @@ async function updatePeakConcurrent(tableName, eventId, currentCount) {
  * @param {number} [finalMetrics.recordingDurationSec] - Recording duration in seconds.
  */
 async function finalizeMetrics(tableName, eventId, finalMetrics = {}) {
-  const updateParts = ['#updatedAt = :now'];
-  const names = { '#updatedAt': 'updatedAt' };
-  const values = { ':now': new Date().toISOString() };
+  // Stamp a finalizedAt sentinel and guard against double-finalize. Mirrors
+  // updatePeakConcurrent's conditional-update + swallow pattern. The second
+  // call to finalize an already-finalized event becomes a no-op so retries
+  // never overwrite the historically correct values.
+  const now = new Date().toISOString();
+  const updateParts = ['#updatedAt = :now', '#finalizedAt = :now'];
+  const names = { '#updatedAt': 'updatedAt', '#finalizedAt': 'finalizedAt' };
+  const values = { ':now': now };
 
   const fields = [
     'avgSessionDurationSec',
@@ -154,16 +159,25 @@ async function finalizeMetrics(tableName, eventId, finalMetrics = {}) {
     }
   }
 
-  await docClient.send(new UpdateCommand({
-    TableName: tableName,
-    Key: {
-      PK: buildEventPK(eventId),
-      SK: SK.METRICS,
-    },
-    UpdateExpression: `SET ${updateParts.join(', ')}`,
-    ExpressionAttributeNames: names,
-    ExpressionAttributeValues: values,
-  }));
+  try {
+    await docClient.send(new UpdateCommand({
+      TableName: tableName,
+      Key: {
+        PK: buildEventPK(eventId),
+        SK: SK.METRICS,
+      },
+      UpdateExpression: `SET ${updateParts.join(', ')}`,
+      ConditionExpression: 'attribute_not_exists(#finalizedAt)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    }));
+    return { finalized: true };
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      return { finalized: false, reason: 'already-finalized' };
+    }
+    throw err;
+  }
 }
 
 /**
@@ -198,9 +212,15 @@ async function getMetrics(tableName, eventId) {
  * @returns {Promise<Object>} Updated attributes.
  */
 async function storeEngagementSummary(tableName, eventId, metrics = {}) {
-  const updateParts = ['#updatedAt = :now'];
-  const names = { '#updatedAt': 'updatedAt' };
-  const values = { ':now': new Date().toISOString() };
+  // Stamp finalizedAt and guard against double-finalize. session-manager's
+  // endSession path re-counts SIGNUP# / QUESTION# at call time, so a second
+  // call (auto-stop racing with manual stop, client retry, etc.) would
+  // re-count at a later wall clock and overwrite the at-event-end snapshot.
+  // Subsequent calls become no-ops returning null.
+  const now = new Date().toISOString();
+  const updateParts = ['#updatedAt = :now', '#finalizedAt = :now'];
+  const names = { '#updatedAt': 'updatedAt', '#finalizedAt': 'finalizedAt' };
+  const values = { ':now': now };
 
   if (metrics.totalAttendees !== undefined) {
     updateParts.push('#totalAttendees = :totalAttendees');
@@ -220,19 +240,26 @@ async function storeEngagementSummary(tableName, eventId, metrics = {}) {
     values[':durationSeconds'] = metrics.durationSeconds;
   }
 
-  const result = await docClient.send(new UpdateCommand({
-    TableName: tableName,
-    Key: {
-      PK: buildEventPK(eventId),
-      SK: SK.METRICS,
-    },
-    UpdateExpression: `SET ${updateParts.join(', ')}`,
-    ExpressionAttributeNames: names,
-    ExpressionAttributeValues: values,
-    ReturnValues: 'ALL_NEW',
-  }));
-
-  return result.Attributes;
+  try {
+    const result = await docClient.send(new UpdateCommand({
+      TableName: tableName,
+      Key: {
+        PK: buildEventPK(eventId),
+        SK: SK.METRICS,
+      },
+      UpdateExpression: `SET ${updateParts.join(', ')}`,
+      ConditionExpression: 'attribute_not_exists(#finalizedAt)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+      ReturnValues: 'ALL_NEW',
+    }));
+    return result.Attributes;
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      return null;
+    }
+    throw err;
+  }
 }
 
 module.exports = {
