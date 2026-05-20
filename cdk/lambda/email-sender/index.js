@@ -30,21 +30,35 @@ const SINGLE_RECIPIENT_TYPES = ['event-created', 'signup-confirmation'];
 const BULK_TYPES = ['day-before-reminder', 'hour-before-reminder', 'event-started', 'recap'];
 
 /**
- * Query all attendees registered for an event.
+ * Query ALL attendees registered for an event, paging through DynamoDB
+ * results until LastEvaluatedKey is exhausted. Internal callers
+ * (bulk reminder/recap email flows) need the complete list; without the
+ * loop, DDB's 1 MB page cap silently drops attendees past ~1500.
+ * See issue #62.
  * @param {string} eventId - The event identifier.
  * @returns {Promise<Array<{userId: string, displayName: string, email: string, registeredAt: string}>>}
  */
 async function getAttendees(eventId) {
-  const result = await docClient.send(new QueryCommand({
-    TableName: TABLE_NAME,
-    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
-    ExpressionAttributeValues: {
-      ':pk': buildEventPK(eventId),
-      ':skPrefix': KEY_PREFIX.SIGNUP,
-    },
-  }));
+  const items = [];
+  let exclusiveStartKey;
+  do {
+    const queryParams = {
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
+      ExpressionAttributeValues: {
+        ':pk': buildEventPK(eventId),
+        ':skPrefix': KEY_PREFIX.SIGNUP,
+      },
+    };
+    if (exclusiveStartKey) {
+      queryParams.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(queryParams));
+    items.push(...(result.Items || []));
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
 
-  return (result.Items || []).map((item) => ({
+  return items.map((item) => ({
     userId: item.userId,
     displayName: item.displayName,
     email: item.email,

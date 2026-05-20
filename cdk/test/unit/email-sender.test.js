@@ -476,4 +476,68 @@ describe('Email Sender Lambda Handler', () => {
       expect(callArgs.Message.Body.Html.Data).toContain('https://custom-url.com/events/evt_abc');
     });
   });
+
+  describe('getAttendees pagination loop (issue #62)', () => {
+    it('iterates LastEvaluatedKey until exhausted and sends to ALL attendees across pages', async () => {
+      // event-metadata GetCommand
+      mockDocSend.mockResolvedValueOnce({
+        Item: { title: 'Big Event', description: 'd', scheduledStart: '2024-03-15T18:00:00Z' },
+      });
+      // First Query page — 2 attendees + LastEvaluatedKey
+      mockDocSend.mockResolvedValueOnce({
+        Items: [
+          { userId: 'u1', displayName: 'A', email: 'a@example.com', registeredAt: '2024-01-01T00:00:00Z' },
+          { userId: 'u2', displayName: 'B', email: 'b@example.com', registeredAt: '2024-01-01T00:00:00Z' },
+        ],
+        LastEvaluatedKey: { PK: 'EVENT#evt_big', SK: 'SIGNUP#u2' },
+      });
+      // Second Query page — 2 more attendees + LastEvaluatedKey
+      mockDocSend.mockResolvedValueOnce({
+        Items: [
+          { userId: 'u3', displayName: 'C', email: 'c@example.com', registeredAt: '2024-01-01T00:00:00Z' },
+          { userId: 'u4', displayName: 'D', email: 'd@example.com', registeredAt: '2024-01-01T00:00:00Z' },
+        ],
+        LastEvaluatedKey: { PK: 'EVENT#evt_big', SK: 'SIGNUP#u4' },
+      });
+      // Third Query page — 1 attendee, no LastEvaluatedKey (terminates the loop)
+      mockDocSend.mockResolvedValueOnce({
+        Items: [
+          { userId: 'u5', displayName: 'E', email: 'e@example.com', registeredAt: '2024-01-01T00:00:00Z' },
+        ],
+      });
+
+      const payload = { type: 'day-before-reminder', eventId: 'evt_big' };
+      const result = await handler(payload);
+      expect(result.statusCode).toBe(200);
+
+      // 5 attendees across 3 paginated pages → 5 SendEmail invocations.
+      expect(mockSesSend).toHaveBeenCalledTimes(5);
+
+      // The second Query call must have carried the first page's ExclusiveStartKey.
+      const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
+      const queryCalls = QueryCommand.mock.calls.filter(
+        (c) => c[0] && c[0].KeyConditionExpression === 'PK = :pk AND begins_with(SK, :skPrefix)',
+      );
+      expect(queryCalls.length).toBe(3);
+      expect(queryCalls[0][0].ExclusiveStartKey).toBeUndefined();
+      expect(queryCalls[1][0].ExclusiveStartKey).toEqual({ PK: 'EVENT#evt_big', SK: 'SIGNUP#u2' });
+      expect(queryCalls[2][0].ExclusiveStartKey).toEqual({ PK: 'EVENT#evt_big', SK: 'SIGNUP#u4' });
+    });
+
+    it('handles a single-page response (no LastEvaluatedKey) — loop terminates after one Query', async () => {
+      mockDocSend.mockResolvedValueOnce({
+        Item: { title: 'Small Event', description: 'd', scheduledStart: '2024-03-15T18:00:00Z' },
+      });
+      mockDocSend.mockResolvedValueOnce({
+        Items: [
+          { userId: 'u1', displayName: 'A', email: 'a@example.com', registeredAt: '2024-01-01T00:00:00Z' },
+        ],
+      });
+
+      const payload = { type: 'hour-before-reminder', eventId: 'evt_small' };
+      const result = await handler(payload);
+      expect(result.statusCode).toBe(200);
+      expect(mockSesSend).toHaveBeenCalledTimes(1);
+    });
+  });
 });
