@@ -30,6 +30,30 @@ const TABLE_NAME = process.env.TABLE_NAME;
 const RECORDING_BUCKET_NAME = process.env.RECORDING_BUCKET_NAME;
 const RECORDING_CLOUDFRONT_DOMAIN = process.env.RECORDING_CLOUDFRONT_DOMAIN;
 const IVS_COMPOSITION_ROLE_ARN = process.env.IVS_COMPOSITION_ROLE_ARN;
+
+/**
+ * Sum the Count field across every page of a DynamoDB Query with
+ * Select:'COUNT'. DDB's COUNT mode still respects the 1 MB-per-page
+ * cap; without the loop, totalAttendees / totalQuestions undercount
+ * any event with ~1500+ items in the partition. See issue #64.
+ *
+ * @param {Object} params - QueryCommand params (without Select / ExclusiveStartKey).
+ * @returns {Promise<number>} The total count summed across all pages.
+ */
+async function sumPaginatedCount(params) {
+  let total = 0;
+  let exclusiveStartKey;
+  do {
+    const queryParams = { ...params, Select: 'COUNT' };
+    if (exclusiveStartKey) {
+      queryParams.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(queryParams));
+    total += result.Count || 0;
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return total;
+}
 const WEBSOCKET_ENDPOINT = process.env.WEBSOCKET_ENDPOINT;
 const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
 const EMAIL_LAMBDA_ARN = process.env.EMAIL_LAMBDA_ARN;
@@ -441,29 +465,21 @@ async function stopEvent(event, eventId) {
     const startedAt = existing.Item.startedAt;
     const durationSeconds = startedAt ? Math.floor((new Date(now).getTime() - new Date(startedAt).getTime()) / 1000) : 0;
 
-    // Query signups count for the event
-    const signupsResult = await docClient.send(new QueryCommand({
+    // Sum Count across all pages. DDB's Select:COUNT still respects the
+    // 1 MB page cap — without this loop, totalAttendees / totalQuestions
+    // get the first-page count, not the true total, for any event with
+    // ~1500+ items in the partition. See issue #64.
+    const totalAttendees = await sumPaginatedCount({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
-      ExpressionAttributeValues: {
-        ':pk': buildEventPK(eventId),
-        ':skPrefix': 'SIGNUP#',
-      },
-      Select: 'COUNT',
-    }));
-    const totalAttendees = signupsResult.Count || 0;
+      ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'SIGNUP#' },
+    });
 
-    // Query questions count for the event
-    const questionsResult = await docClient.send(new QueryCommand({
+    const totalQuestions = await sumPaginatedCount({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
-      ExpressionAttributeValues: {
-        ':pk': buildEventPK(eventId),
-        ':skPrefix': 'QUESTION#',
-      },
-      Select: 'COUNT',
-    }));
-    const totalQuestions = questionsResult.Count || 0;
+      ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'QUESTION#' },
+    });
 
     await storeEngagementSummary(TABLE_NAME, eventId, {
       totalAttendees,

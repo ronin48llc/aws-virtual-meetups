@@ -441,6 +441,54 @@ describe('Session Manager Lambda handler', () => {
       const body = JSON.parse(result.body);
       expect(body.message).toContain('Event ID is required');
     });
+
+    describe('engagement summary count pagination (issue #64)', () => {
+      it('sums Count across paginated signups + questions queries', async () => {
+        // Mock the entire endSession path with paginated counts:
+        // - signups: 3 pages of Count = 1500 + 1500 + 200 = 3200
+        // - questions: 2 pages of Count = 800 + 50 = 850
+        mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });           // get event
+        mockIvsRealTimeSend.mockResolvedValueOnce({});                     // stop composition
+        mockDdbSend.mockResolvedValueOnce({});                             // set hlsPlaybackUrl
+        mockDdbSend.mockResolvedValueOnce({});                             // update status
+        mockDdbSend.mockResolvedValueOnce({ Items: [] });                  // broadcast connections
+        mockIvsRealTimeSend.mockResolvedValueOnce({});                     // delete stage
+
+        // signups COUNT page 1
+        mockDdbSend.mockResolvedValueOnce({ Count: 1500, LastEvaluatedKey: { k: 1 } });
+        // signups COUNT page 2
+        mockDdbSend.mockResolvedValueOnce({ Count: 1500, LastEvaluatedKey: { k: 2 } });
+        // signups COUNT page 3 (terminates)
+        mockDdbSend.mockResolvedValueOnce({ Count: 200 });
+
+        // questions COUNT page 1
+        mockDdbSend.mockResolvedValueOnce({ Count: 800, LastEvaluatedKey: { k: 3 } });
+        // questions COUNT page 2 (terminates)
+        mockDdbSend.mockResolvedValueOnce({ Count: 50 });
+
+        // storeEngagementSummary's UpdateCommand
+        mockDdbSend.mockResolvedValueOnce({ Attributes: {} });
+
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/stop',
+          pathParameters: { id: 'evt_abc' },
+          claims: validClaims,
+        });
+
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+
+        // The final UpdateCommand must persist the SUMMED totals.
+        const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+        const finalUpdate = UpdateCommand.mock.calls
+          .map((c) => c[0])
+          .find((p) => p && p.ExpressionAttributeValues && p.ExpressionAttributeValues[':totalAttendees'] !== undefined);
+        expect(finalUpdate).toBeDefined();
+        expect(finalUpdate.ExpressionAttributeValues[':totalAttendees']).toBe(3200);
+        expect(finalUpdate.ExpressionAttributeValues[':totalQuestions']).toBe(850);
+      });
+    });
   });
 
   describe('Unsupported routes', () => {
