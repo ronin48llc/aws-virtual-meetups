@@ -397,69 +397,111 @@ const App = (() => {
     `;
   }
 
+  function renderEventCard(evt) {
+    var startDate = evt.scheduledStart ? new Date(evt.scheduledStart).toLocaleString() : 'TBD';
+    var eventUrl = '#/events/' + (evt.eventId || evt.id);
+    var durationInfo = '';
+    if (evt.durationMinutes) {
+      durationInfo = '<p class="card__meta" style="color: #555;">Duration: ' + escapeHtml(formatDurationMinutes(evt.durationMinutes)) + '</p>';
+    }
+    return '<div class="card">' +
+      '<span class="badge badge--upcoming">Upcoming</span>' +
+      '<h3 class="card__title mt-sm">' + escapeHtml(evt.title || 'Untitled') + '</h3>' +
+      '<p class="card__meta">' + escapeHtml(startDate) + '</p>' +
+      durationInfo +
+      '<p class="card__description">' + escapeHtml(evt.description || '') + '</p>' +
+      '<a href="' + eventUrl + '" class="btn btn--outline mt-md">View Event</a>' +
+    '</div>';
+  }
+
+  function renderPopular(events, popularContainer) {
+    if (!popularContainer) return;
+    var sorted = events.slice().sort(function(a, b) {
+      return (b.signupCount || 0) - (a.signupCount || 0);
+    });
+    var popularHtml = '';
+    var popularCount = Math.min(sorted.length, 3);
+    for (var j = 0; j < popularCount; j++) {
+      var pEvt = sorted[j];
+      var pStartDate = pEvt.scheduledStart ? new Date(pEvt.scheduledStart).toLocaleString() : 'TBD';
+      var pEventUrl = '#/events/' + (pEvt.eventId || pEvt.id);
+      popularHtml += '<div class="card">' +
+        '<span class="badge badge--upcoming">🔥 Popular</span>' +
+        '<h3 class="card__title mt-sm">' + escapeHtml(pEvt.title || 'Untitled') + '</h3>' +
+        '<p class="card__meta">' + escapeHtml(pStartDate) + '</p>' +
+        '<p class="card__description">' + escapeHtml(pEvt.description || '') + '</p>' +
+        '<a href="' + pEventUrl + '" class="btn btn--outline mt-md">View Event</a>' +
+      '</div>';
+    }
+    popularContainer.innerHTML = popularHtml || '<div class="card"><p class="card__description">No events yet.</p></div>';
+  }
+
   /**
    * Load upcoming events from the API and render them on the homepage.
+   * Follows `nextCursor` via a "Load more" button so the GET /events endpoint
+   * stays bounded per request.
    */
   async function loadHomeEvents() {
     var container = document.getElementById('events-list');
     var popularContainer = document.getElementById('popular-events-list');
     if (!container) return;
 
-    try {
-      var apiBase = window.API_BASE_URL || '/api';
-      var res = await fetch(apiBase + '/events');
-      if (!res.ok) throw new Error('Failed to load events');
-      var data = await res.json();
-      var events = data.events || data || [];
+    var apiBase = window.API_BASE_URL || '/api';
+    var accumulated = [];
 
-      if (!events.length) {
+    async function fetchPage(cursor) {
+      var url = apiBase + '/events';
+      if (cursor) url += '?cursor=' + encodeURIComponent(cursor);
+      var res = await fetch(url);
+      if (!res.ok) throw new Error('Failed to load events');
+      return res.json();
+    }
+
+    function render(nextCursor) {
+      if (!accumulated.length) {
         container.innerHTML = '<div class="card"><p class="card__description">No upcoming events. Check back soon!</p></div>';
-        if (popularContainer) popularContainer.innerHTML = '<div class="card"><p class="card__description">No events yet.</p></div>';
+        renderPopular([], popularContainer);
         return;
       }
 
       var html = '';
-      for (var i = 0; i < events.length; i++) {
-        var evt = events[i];
-        var startDate = evt.scheduledStart ? new Date(evt.scheduledStart).toLocaleString() : 'TBD';
-        var eventUrl = '#/events/' + (evt.eventId || evt.id);
-        var durationInfo = '';
-        if (evt.durationMinutes) {
-          durationInfo = '<p class="card__meta" style="color: #555;">Duration: ' + escapeHtml(formatDurationMinutes(evt.durationMinutes)) + '</p>';
-        }
-        html += '<div class="card">' +
-          '<span class="badge badge--upcoming">Upcoming</span>' +
-          '<h3 class="card__title mt-sm">' + escapeHtml(evt.title || 'Untitled') + '</h3>' +
-          '<p class="card__meta">' + escapeHtml(startDate) + '</p>' +
-          durationInfo +
-          '<p class="card__description">' + escapeHtml(evt.description || '') + '</p>' +
-          '<a href="' + eventUrl + '" class="btn btn--outline mt-md">View Event</a>' +
-        '</div>';
+      for (var i = 0; i < accumulated.length; i++) {
+        html += renderEventCard(accumulated[i]);
+      }
+      if (nextCursor) {
+        html += '<div class="card" style="text-align: center;">' +
+          '<button type="button" class="btn btn--outline" id="events-load-more">Load more</button>' +
+          '</div>';
       }
       container.innerHTML = html;
 
-      // Popular events: sort by signupCount (if available) or show first few
-      if (popularContainer) {
-        var sorted = events.slice().sort(function(a, b) {
-          return (b.signupCount || 0) - (a.signupCount || 0);
-        });
-        var popularHtml = '';
-        var popularCount = Math.min(sorted.length, 3);
-        for (var j = 0; j < popularCount; j++) {
-          var pEvt = sorted[j];
-          var pStartDate = pEvt.scheduledStart ? new Date(pEvt.scheduledStart).toLocaleString() : 'TBD';
-          var pEventUrl = '#/events/' + (pEvt.eventId || pEvt.id);
-          popularHtml += '<div class="card">' +
-            '<span class="badge badge--upcoming">🔥 Popular</span>' +
-            '<h3 class="card__title mt-sm">' + escapeHtml(pEvt.title || 'Untitled') + '</h3>' +
-            '<p class="card__meta">' + escapeHtml(pStartDate) + '</p>' +
-            '<p class="card__description">' + escapeHtml(pEvt.description || '') + '</p>' +
-            '<a href="' + pEventUrl + '" class="btn btn--outline mt-md">View Event</a>' +
-          '</div>';
+      if (nextCursor) {
+        var btn = document.getElementById('events-load-more');
+        if (btn) {
+          btn.addEventListener('click', async function() {
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+            try {
+              var nextData = await fetchPage(nextCursor);
+              var nextEvents = nextData.events || [];
+              accumulated = accumulated.concat(nextEvents);
+              render(nextData.nextCursor);
+            } catch (_e) {
+              btn.disabled = false;
+              btn.textContent = 'Load more';
+            }
+          });
         }
-        popularContainer.innerHTML = popularHtml || '<div class="card"><p class="card__description">No events yet.</p></div>';
       }
-    } catch (err) {
+
+      renderPopular(accumulated, popularContainer);
+    }
+
+    try {
+      var data = await fetchPage(null);
+      accumulated = data.events || data || [];
+      render(data.nextCursor);
+    } catch (_err) {
       container.innerHTML = '<div class="card"><p class="card__description">No upcoming events. Check back soon!</p></div>';
       if (popularContainer) popularContainer.innerHTML = '<div class="card"><p class="card__description">No events yet.</p></div>';
     }

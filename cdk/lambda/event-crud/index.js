@@ -234,13 +234,82 @@ async function createEvent(event) {
   return created(response);
 }
 
+const LIST_EVENTS_DEFAULT_LIMIT = 100;
+const LIST_EVENTS_MAX_LIMIT = 500;
+
+/**
+ * Decode an opaque pagination cursor (base64url-encoded JSON) back into a
+ * DynamoDB ExclusiveStartKey. Returns null for missing input; throws on
+ * malformed input so the caller can surface a 400.
+ * @param {string|undefined} cursor
+ * @returns {Object|null}
+ */
+function decodeCursor(cursor) {
+  if (!cursor) {
+    return null;
+  }
+  const json = Buffer.from(cursor, 'base64url').toString('utf8');
+  const parsed = JSON.parse(json);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('cursor must decode to an object');
+  }
+  return parsed;
+}
+
+/**
+ * Encode a DynamoDB LastEvaluatedKey into an opaque base64url JSON cursor.
+ * @param {Object} key
+ * @returns {string}
+ */
+function encodeCursor(key) {
+  return Buffer.from(JSON.stringify(key), 'utf8').toString('base64url');
+}
+
+/**
+ * Parse and validate the ?limit= query param.
+ * @param {string|undefined} raw
+ * @returns {{ value: number, error: string|null }}
+ */
+function parseLimit(raw) {
+  if (raw === undefined || raw === null || raw === '') {
+    return { value: LIST_EVENTS_DEFAULT_LIMIT, error: null };
+  }
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    return { value: 0, error: 'limit must be a positive integer' };
+  }
+  const n = Number(raw);
+  if (n > LIST_EVENTS_MAX_LIMIT) {
+    return { value: 0, error: `limit must be <= ${LIST_EVENTS_MAX_LIMIT}` };
+  }
+  return { value: n, error: null };
+}
+
 /**
  * List upcoming events via GSI1.
  * Public access - no authentication required.
+ *
+ * Query params:
+ *   - limit:  optional, 1..LIST_EVENTS_MAX_LIMIT, defaults to LIST_EVENTS_DEFAULT_LIMIT.
+ *   - cursor: optional opaque cursor returned from a prior page as `nextCursor`.
+ *
+ * Response shape: { events: [...], nextCursor?: string }.
  */
-async function listEvents() {
-  // Query all events from GSI1 (includes upcoming, live, and staging events)
-  const result = await docClient.send(new QueryCommand({
+async function listEvents(event) {
+  const qs = (event && event.queryStringParameters) || {};
+
+  const { value: limit, error: limitError } = parseLimit(qs.limit);
+  if (limitError) {
+    return badRequest(limitError);
+  }
+
+  let exclusiveStartKey = null;
+  try {
+    exclusiveStartKey = decodeCursor(qs.cursor);
+  } catch (_err) {
+    return badRequest('cursor is malformed');
+  }
+
+  const queryParams = {
     TableName: TABLE_NAME,
     IndexName: 'GSI1',
     KeyConditionExpression: 'GSI1PK = :pk',
@@ -248,7 +317,13 @@ async function listEvents() {
       ':pk': GSI.GSI1_UPCOMING_PK,
     },
     ScanIndexForward: false, // Most recent first
-  }));
+    Limit: limit,
+  };
+  if (exclusiveStartKey) {
+    queryParams.ExclusiveStartKey = exclusiveStartKey;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
 
   const events = (result.Items || []).map((item) => {
     const mapped = {
@@ -273,7 +348,11 @@ async function listEvents() {
     return mapped;
   });
 
-  return success({ events });
+  const response = { events };
+  if (result.LastEvaluatedKey) {
+    response.nextCursor = encodeCursor(result.LastEvaluatedKey);
+  }
+  return success(response);
 }
 
 /**
@@ -690,7 +769,7 @@ exports.handler = async (event) => {
 
     // Route: GET /events
     if (method === 'GET' && normalizedResource === '/events') {
-      return await listEvents();
+      return await listEvents(event);
     }
 
     // Route: GET /events/{id}

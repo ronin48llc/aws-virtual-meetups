@@ -38,12 +38,13 @@ process.env.SCHEDULER_ROLE_ARN = 'arn:aws:iam::123456789012:role/VirtualMeetup-S
 
 const { handler } = require('../../lambda/event-crud/index');
 
-function buildEvent({ method, resource, body, pathParameters, claims }) {
+function buildEvent({ method, resource, body, pathParameters, queryStringParameters, claims }) {
   const event = {
     httpMethod: method,
     resource,
     body: body ? JSON.stringify(body) : null,
     pathParameters: pathParameters || null,
+    queryStringParameters: queryStringParameters || null,
     requestContext: {},
   };
   if (claims) {
@@ -212,6 +213,136 @@ describe('Event CRUD Lambda handler', () => {
       const event = buildEvent({ method: 'GET', resource: '/events' });
       const result = await handler(event);
       expect(result.statusCode).toBe(200);
+    });
+
+    describe('pagination', () => {
+      function getQueryParams() {
+        // Find the most recent QueryCommand invocation against GSI1 in mockSend.
+        for (let i = mockSend.mock.calls.length - 1; i >= 0; i--) {
+          const cmd = mockSend.mock.calls[i][0];
+          if (cmd && cmd.type === 'Query' && cmd.params && cmd.params.IndexName === 'GSI1') {
+            return cmd.params;
+          }
+        }
+        throw new Error('no QueryCommand against GSI1 was issued');
+      }
+
+      it('applies a default Limit of 100 when none is supplied', async () => {
+        mockSend.mockResolvedValueOnce({ Items: [] });
+
+        const event = buildEvent({ method: 'GET', resource: '/events' });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(200);
+        expect(getQueryParams().Limit).toBe(100);
+      });
+
+      it('honors an explicit ?limit within the cap', async () => {
+        mockSend.mockResolvedValueOnce({ Items: [] });
+
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events',
+          queryStringParameters: { limit: '50' },
+        });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(200);
+        expect(getQueryParams().Limit).toBe(50);
+      });
+
+      it('rejects ?limit above the cap with 400', async () => {
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events',
+          queryStringParameters: { limit: '5000' },
+        });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(400);
+        expect(mockSend).not.toHaveBeenCalled();
+      });
+
+      it('rejects non-positive-integer ?limit with 400', async () => {
+        for (const bad of ['0', '-3', '1.5', 'abc', ' ']) {
+          mockSend.mockClear();
+          const event = buildEvent({
+            method: 'GET',
+            resource: '/events',
+            queryStringParameters: { limit: bad },
+          });
+          const result = await handler(event);
+          expect(result.statusCode).toBe(400);
+          expect(mockSend).not.toHaveBeenCalled();
+        }
+      });
+
+      it('returns nextCursor when DynamoDB returns a LastEvaluatedKey', async () => {
+        const lastKey = { PK: 'EVENT#abc', SK: 'META', GSI1PK: 'UPCOMING', GSI1SK: '2026-06-01T10:00:00Z' };
+        mockSend.mockResolvedValueOnce({ Items: [], LastEvaluatedKey: lastKey });
+
+        const event = buildEvent({ method: 'GET', resource: '/events' });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(200);
+        const body = JSON.parse(result.body);
+        expect(typeof body.nextCursor).toBe('string');
+        // Round-trip: the cursor decodes back to the original LastEvaluatedKey.
+        const decoded = JSON.parse(Buffer.from(body.nextCursor, 'base64url').toString('utf8'));
+        expect(decoded).toEqual(lastKey);
+      });
+
+      it('omits nextCursor when DynamoDB returns no LastEvaluatedKey', async () => {
+        mockSend.mockResolvedValueOnce({ Items: [] });
+
+        const event = buildEvent({ method: 'GET', resource: '/events' });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(200);
+        const body = JSON.parse(result.body);
+        expect(body).not.toHaveProperty('nextCursor');
+      });
+
+      it('forwards a valid ?cursor as ExclusiveStartKey on the Query', async () => {
+        const startKey = { PK: 'EVENT#xyz', SK: 'META', GSI1PK: 'UPCOMING', GSI1SK: '2026-05-15T08:00:00Z' };
+        const cursor = Buffer.from(JSON.stringify(startKey), 'utf8').toString('base64url');
+        mockSend.mockResolvedValueOnce({ Items: [] });
+
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events',
+          queryStringParameters: { cursor },
+        });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(200);
+        expect(getQueryParams().ExclusiveStartKey).toEqual(startKey);
+      });
+
+      it('rejects a malformed ?cursor with 400', async () => {
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events',
+          queryStringParameters: { cursor: 'not-base64url-json!!!' },
+        });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(400);
+        expect(mockSend).not.toHaveBeenCalled();
+      });
+
+      it('rejects a ?cursor that decodes to a non-object with 400', async () => {
+        const cursor = Buffer.from('"just a string"', 'utf8').toString('base64url');
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events',
+          queryStringParameters: { cursor },
+        });
+        const result = await handler(event);
+
+        expect(result.statusCode).toBe(400);
+        expect(mockSend).not.toHaveBeenCalled();
+      });
     });
   });
 
