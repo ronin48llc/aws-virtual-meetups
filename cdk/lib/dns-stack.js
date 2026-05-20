@@ -22,9 +22,24 @@ class DnsStack extends Stack {
     // Route53 Public Hosted Zone (lookup existing)
     // The domain is registered in Route53, so the hosted zone already exists.
     // Requirements: 1.1, 1.2, 1.3
+    //
+    // Issue #147: synth-time validation. The previous default
+    // ('YOUR_HOSTED_ZONE_ID' / 'yourdomain.com') let synth succeed with
+    // placeholder values, deferring failure 10+ minutes into CloudFormation
+    // when the cert tried to validate against a nonexistent zone. Fail
+    // loudly with an actionable message instead.
     // -------------------------------------------------------
-    const hostedZoneId = this.node.tryGetContext('hostedZoneId') || 'YOUR_HOSTED_ZONE_ID';
-    const domainName = this.node.tryGetContext('domainName') || 'yourdomain.com';
+    const hostedZoneId = this.node.tryGetContext('hostedZoneId');
+    const domainName = this.node.tryGetContext('domainName');
+    if (!hostedZoneId || hostedZoneId === 'YOUR_HOSTED_ZONE_ID') {
+      throw new Error(
+        'DnsStack: -c hostedZoneId=<Z...> is required. Find your zone ID with:\n' +
+        '  aws route53 list-hosted-zones-by-name --dns-name <your-domain.com>'
+      );
+    }
+    if (!domainName || domainName === 'yourdomain.com') {
+      throw new Error('DnsStack: -c domainName=<your-domain.com> is required.');
+    }
 
     this.hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
       hostedZoneId: hostedZoneId,
