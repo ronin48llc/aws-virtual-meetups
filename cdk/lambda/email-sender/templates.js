@@ -73,17 +73,26 @@ function getStrings(locale) {
  */
 function formatEmailDate(isoDate, locale, timeZone) {
   const date = new Date(isoDate);
-  const options = {
+  const baseOptions = {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: timeZone || 'UTC',
     timeZoneName: 'short',
   };
-  return date.toLocaleString(locale || DEFAULT_LOCALE, options);
+  const effectiveLocale = locale || DEFAULT_LOCALE;
+  const effectiveTz = timeZone || 'UTC';
+  try {
+    return date.toLocaleString(effectiveLocale, { ...baseOptions, timeZone: effectiveTz });
+  } catch (_) {
+    // Bad locale or invalid IANA timezone makes Intl throw RangeError. Fall
+    // back to UTC + DEFAULT_LOCALE rather than crashing the email send —
+    // the recipient gets a slightly different format, but that beats a
+    // dropped notification.
+    return date.toLocaleString(DEFAULT_LOCALE, { ...baseOptions, timeZone: 'UTC' });
+  }
 }
 
 /**

@@ -56,6 +56,20 @@ describe('templates.js — formatEmailDate (issue #9)', () => {
     // 18:00Z = 13:00 in Chicago summer (CDT)
     expect(s).toMatch(/1:00/);
   });
+
+  test('falls back to UTC + en-US when timezone is invalid (third-pass audit)', () => {
+    // 'Mars/Olympus_Mons' is not a real IANA timezone; without the fallback
+    // this would throw RangeError and crash the email send.
+    const s = formatEmailDate(iso, 'en-US', 'Mars/Olympus_Mons');
+    expect(s).toMatch(/UTC/);
+    expect(s).toMatch(/Tuesday/);
+  });
+
+  test('falls back to UTC + en-US when locale is invalid', () => {
+    const s = formatEmailDate(iso, 'fictional-LOCALE', 'UTC');
+    expect(s).toMatch(/Tuesday/);
+    expect(s).toMatch(/UTC/);
+  });
 });
 
 describe('templates.js — renderSignupConfirmation locale switching (issue #9)', () => {
