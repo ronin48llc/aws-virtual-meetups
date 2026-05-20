@@ -33,6 +33,30 @@ const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
 const WEBSOCKET_ENDPOINT = process.env.WEBSOCKET_ENDPOINT;
 
 /**
+ * Run a Query and loop through DynamoDB's LastEvaluatedKey until the
+ * full result is accumulated. DDB caps a single Query page at 1 MB;
+ * without this, snapshot handlers like getQuestionQueue / getHandsList
+ * silently truncate past ~1500 items. See issue #66.
+ *
+ * @param {Object} params - QueryCommand params (no ExclusiveStartKey).
+ * @returns {Promise<Array<Object>>}
+ */
+async function paginatedQuery(params) {
+  const items = [];
+  let exclusiveStartKey;
+  do {
+    const queryParams = { ...params };
+    if (exclusiveStartKey) {
+      queryParams.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(queryParams));
+    items.push(...(result.Items || []));
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return items;
+}
+
+/**
  * Main handler — routes WebSocket messages by action.
  *
  * @param {Object} event - API Gateway WebSocket event.
@@ -1548,7 +1572,7 @@ async function handleGetAttendeeList(eventId, body, connectionId) {
 async function handleGetQuestionQueue(eventId, body, connectionId) {
   const pk = buildEventPK(eventId);
 
-  const result = await docClient.send(new QueryCommand({
+  const items = await paginatedQuery({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
     ExpressionAttributeValues: {
@@ -1556,9 +1580,9 @@ async function handleGetQuestionQueue(eventId, body, connectionId) {
       ':skPrefix': KEY_PREFIX.QUESTION,
     },
     ScanIndexForward: true,
-  }));
+  });
 
-  const questions = (result.Items || [])
+  const questions = items
     .filter(q => q.status === QUESTION_STATUS.QUEUED)
     .map(q => ({
       questionId: q.questionId,
@@ -1570,7 +1594,7 @@ async function handleGetQuestionQueue(eventId, body, connectionId) {
       timestamp: q.submittedAt,
     }));
 
-  const answered = (result.Items || [])
+  const answered = items
     .filter(q => q.status === QUESTION_STATUS.ANSWERED)
     .map(q => ({
       questionId: q.questionId,
@@ -1604,7 +1628,7 @@ async function handleGetQuestionQueue(eventId, body, connectionId) {
 async function handleGetHandsList(eventId, body, connectionId) {
   const pk = buildEventPK(eventId);
 
-  const result = await docClient.send(new QueryCommand({
+  const items = await paginatedQuery({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
     ExpressionAttributeValues: {
@@ -1612,9 +1636,9 @@ async function handleGetHandsList(eventId, body, connectionId) {
       ':skPrefix': KEY_PREFIX.HAND,
     },
     ScanIndexForward: true,
-  }));
+  });
 
-  const hands = (result.Items || []).map(h => ({
+  const hands = items.map(h => ({
     userId: h.userId,
     displayName: h.displayName,
     timestamp: h.timestamp,

@@ -505,4 +505,49 @@ describe('WebSocket Signaling Handler — Question Queue', () => {
       expect(result.body).toBe('Internal server error');
     });
   });
+
+  describe('getQuestionQueue pagination (issue #66)', () => {
+    it('paginates QUESTION# queries and accumulates across pages before sending', async () => {
+      // Page 1: 1 queued + LastEvaluatedKey
+      mockSend.mockResolvedValueOnce({
+        Items: [
+          { questionId: 'q1', userId: 'u1', displayName: 'A', text: 'Q1', status: 'queued', submittedAt: '2024-01-01T10:00:00Z' },
+        ],
+        LastEvaluatedKey: { PK: 'EVENT#evt_abc', SK: 'QUESTION#2024-01-01T10:00:00Z#q1' },
+      });
+      // Page 2: 1 queued + 1 answered, no LastEvaluatedKey (terminates)
+      mockSend.mockResolvedValueOnce({
+        Items: [
+          { questionId: 'q2', userId: 'u2', displayName: 'B', text: 'Q2', status: 'queued', submittedAt: '2024-01-01T10:01:00Z' },
+          { questionId: 'q3', userId: 'u3', displayName: 'C', text: 'Q3', status: 'answered', submittedAt: '2024-01-01T10:02:00Z' },
+        ],
+      });
+      // PostToConnectionCommand — assume success.
+      mockApiSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        action: 'getQuestionQueue',
+        eventId: 'evt_abc123',
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+
+      // The push must include both pages: 2 queued + 1 answered.
+      const { PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      const sentPayload = JSON.parse(PostToConnectionCommand.mock.calls[0][0].Data);
+      expect(sentPayload.type).toBe('QUESTION_QUEUE');
+      expect(sentPayload.data.questions).toHaveLength(2);
+      expect(sentPayload.data.answered).toHaveLength(1);
+      expect(sentPayload.data.count).toBe(2);
+
+      // Second Query must have carried the first page's ExclusiveStartKey.
+      const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
+      const queryCalls = QueryCommand.mock.calls.filter(
+        (c) => c[0] && c[0].ExpressionAttributeValues && c[0].ExpressionAttributeValues[':skPrefix'] === 'QUESTION#',
+      );
+      expect(queryCalls.length).toBe(2);
+      expect(queryCalls[0][0].ExclusiveStartKey).toBeUndefined();
+      expect(queryCalls[1][0].ExclusiveStartKey).toEqual({ PK: 'EVENT#evt_abc', SK: 'QUESTION#2024-01-01T10:00:00Z#q1' });
+    });
+  });
 });
