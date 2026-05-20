@@ -36,7 +36,14 @@ class StreamingStack extends Stack {
       ],
     });
 
-    // S3 bucket for IVS recordings with lifecycle rules
+    // S3 bucket for IVS recordings with lifecycle rules.
+    // Issue #115: eventBridgeEnabled is required for the PublicationStack's
+    // EventBridge Rule (RecordingCreatedRule) to fire. Without it S3 does
+    // NOT publish Object Created events to EventBridge — the publisher
+    // Lambda never gets invoked, recordings sit in S3 forever, no Jekyll
+    // post gets committed, no recap email goes out. The publication-stack
+    // file's comment "The recording bucket must have EventBridge
+    // notifications enabled" was an assumption that was never enforced.
     const recordingBucket = new s3.Bucket(this, 'RecordingBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
@@ -44,6 +51,7 @@ class StreamingStack extends Stack {
       autoDeleteObjects: true,
       serverAccessLogsBucket: recordingAccessLogsBucket,
       serverAccessLogsPrefix: 'recordings/',
+      eventBridgeEnabled: true,
       lifecycleRules: [
         {
           id: 'IntelligentTiering',
