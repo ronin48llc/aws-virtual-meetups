@@ -139,6 +139,34 @@ describe('AuthStack', () => {
         PreventUserExistenceErrors: 'ENABLED',
       });
     });
+
+    // Issue #99: CDK's default OAuth config (implicit + code grants, scope
+    // aws.cognito.signin.user.admin, callback https://example.com) is dead
+    // surface on this platform — the frontend uses SRP exclusively. The
+    // assertions below trip if a future change re-introduces those defaults.
+    test('App Client has OAuth disabled (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        AllowedOAuthFlowsUserPoolClient: false,
+      });
+    });
+
+    test('App Client does NOT emit an AllowedOAuthFlows property (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        AllowedOAuthFlows: Match.absent(),
+      });
+    });
+
+    test('App Client does NOT emit AllowedOAuthScopes (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        AllowedOAuthScopes: Match.absent(),
+      });
+    });
+
+    test('App Client does NOT emit a placeholder CallbackURLs entry (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        CallbackURLs: Match.absent(),
+      });
+    });
   });
 
   describe('Admin API Lambda for user account management', () => {

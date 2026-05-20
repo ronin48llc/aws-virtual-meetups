@@ -90,7 +90,12 @@ class AuthStack extends Stack {
       },
     });
 
-    // App Client with SRP auth flow (no client secret for SPA)
+    // App Client with SRP auth flow (no client secret for SPA).
+    // Issue #99: disableOAuth removes CDK's default OAuth surface
+    // (implicit + code grants with the placeholder https://example.com
+    // callback). The frontend uses SRP via the Cognito SDK exclusively —
+    // no OAuth redirect, no Hosted UI, so the OAuth subsystem is dead
+    // code that just expands attack surface.
     const userPoolClient = userPool.addClient('VirtualMeetupAppClient', {
       userPoolClientName: 'virtual-meetup-app-client',
       authFlows: {
@@ -98,6 +103,7 @@ class AuthStack extends Stack {
       },
       generateSecret: false,
       preventUserExistenceErrors: true,
+      disableOAuth: true,
     });
 
     // Identity Pool linked to User Pool
