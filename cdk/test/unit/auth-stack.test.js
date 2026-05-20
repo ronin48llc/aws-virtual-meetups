@@ -139,6 +139,22 @@ describe('AuthStack', () => {
         PreventUserExistenceErrors: 'ENABLED',
       });
     });
+
+    test('App Client has explicit token validity overrides (issue #44)', () => {
+      // CDK normalizes everything to minutes in the synthesized template:
+      //   id/access: Duration.hours(1) -> 60 minutes.
+      //   refresh:   Duration.days(14) -> 20160 minutes (14 * 24 * 60).
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        IdTokenValidity: 60,
+        AccessTokenValidity: 60,
+        RefreshTokenValidity: 20160,
+        TokenValidityUnits: Match.objectLike({
+          IdToken: 'minutes',
+          AccessToken: 'minutes',
+          RefreshToken: 'minutes',
+        }),
+      });
+    });
   });
 
   describe('Admin API Lambda for user account management', () => {
