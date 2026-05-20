@@ -73,7 +73,12 @@ class WafConstruct extends Construct {
         // Rule 5: AWS Managed Rules - Known Bad Inputs
         this._createManagedRuleGroup('AWSManagedRulesKnownBadInputsRuleSet', 'AWS', 30),
 
-        // Rule 6: Size Restriction - 4KB max body for WebSocket/Chat payloads
+        // Rule 6: AWS Managed Rules - Amazon IP Reputation List
+        // Free, AWS-curated block list of IPs currently flagged by AWS
+        // threat intel (botnets, scanners, recent-attack sources). See #40.
+        this._createManagedRuleGroup('AWSManagedRulesAmazonIpReputationList', 'AWS', 35),
+
+        // Rule 7: Size Restriction - 4KB max body for WebSocket/Chat payloads
         this._createSizeRestrictionRule(),
       ],
     });
