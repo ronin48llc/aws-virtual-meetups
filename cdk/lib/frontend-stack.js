@@ -1,4 +1,4 @@
-const { Stack, CfnOutput, RemovalPolicy } = require('aws-cdk-lib');
+const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
 const s3 = require('aws-cdk-lib/aws-s3');
 const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
@@ -63,6 +63,25 @@ class FrontendStack extends Stack {
     // -------------------------------------------------------
     const { hostedZone, certificate, domainNames } = props;
 
+    // CloudFront access logs target bucket. Retained on stack destroy so
+    // forensic logs survive teardown. OBJECT_WRITER ownership is required
+    // for CloudFront log delivery (CDK warns otherwise). Capped at 365
+    // days. See issue #54.
+    const frontendAccessLogsBucket = new s3.Bucket(this, 'FrontendAccessLogsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: RemovalPolicy.RETAIN,
+      objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
+      lifecycleRules: [
+        {
+          id: 'ExpireFrontendAccessLogs',
+          enabled: true,
+          expiration: Duration.days(365),
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+      ],
+    });
+
     const distributionProps = {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessIdentity(this.frontendBucket, {
@@ -71,6 +90,9 @@ class FrontendStack extends Stack {
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       },
       defaultRootObject: 'index.html',
+      enableLogging: true,
+      logBucket: frontendAccessLogsBucket,
+      logFilePrefix: 'frontend/',
       errorResponses: [
         {
           httpStatus: 403,
