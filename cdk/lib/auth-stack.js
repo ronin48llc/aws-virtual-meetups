@@ -95,7 +95,12 @@ class AuthStack extends Stack {
       },
     });
 
-    // App Client with SRP auth flow (no client secret for SPA)
+    // App Client with SRP auth flow (no client secret for SPA).
+    // Explicit token-validity overrides: Cognito defaults are 1h/1h/30d,
+    // and the 30-day refresh window is the long-tail risk if a token is
+    // exfiltrated (XSS, lost device, malicious extension). 14d cuts
+    // post-exfiltration blast radius in half while still keeping active
+    // weekly-meetup attendees signed in without re-auth. See #44.
     const userPoolClient = userPool.addClient('VirtualMeetupAppClient', {
       userPoolClientName: 'virtual-meetup-app-client',
       authFlows: {
@@ -103,6 +108,9 @@ class AuthStack extends Stack {
       },
       generateSecret: false,
       preventUserExistenceErrors: true,
+      idTokenValidity: Duration.hours(1),
+      accessTokenValidity: Duration.hours(1),
+      refreshTokenValidity: Duration.days(14),
     });
 
     // Identity Pool linked to User Pool
