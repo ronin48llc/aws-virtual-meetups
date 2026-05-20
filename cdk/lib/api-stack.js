@@ -86,12 +86,16 @@ class ApiStack extends Stack {
     });
 
     // Token Generator Lambda
+    // Workload: 1-2 DDB GetItems, 1 DDB Query, IVS CreateParticipantToken +
+    // IVS CreateChatToken. Observed p99 well under 2s; 15s is ~7x margin
+    // for cold start + transient downstream slowness without sitting on
+    // a true hang. See #42.
     const tokenGeneratorFn = new lambda.Function(this, 'TokenGeneratorFunction', {
       functionName: 'VirtualMeetup-TokenGenerator',
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'token-generator/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
-      timeout: Duration.seconds(30),
+      timeout: Duration.seconds(15),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
       environment: {
@@ -101,12 +105,14 @@ class ApiStack extends Stack {
     });
 
     // Signup Lambda
+    // Workload: 1 DDB Put, 1 DDB Get, 1 fire-and-forget async Lambda invoke.
+    // Observed p99 under 1s; 15s is comfortable margin. See #42.
     const signupFn = new lambda.Function(this, 'SignupFunction', {
       functionName: 'VirtualMeetup-Signup',
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'signup/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
-      timeout: Duration.seconds(30),
+      timeout: Duration.seconds(15),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
       environment: {
