@@ -26,7 +26,7 @@ class ApiStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    const { userPool, userPoolClient, mainTable, connectionsTable, emailSenderFunction, schedulerRole, hostedZone, certificate } = props;
+    const { userPool, userPoolClient, mainTable, connectionsTable, emailSenderFunction, schedulerRole, hostedZone, certificate, chatReviewFunction } = props;
     const domainName = props.domainName || 'yourdomain.com';
     // -------------------------------------------------------
     // Cognito Authorizer for HTTP API
@@ -314,6 +314,11 @@ class ApiStack extends Stack {
     sessionManagerFn.addEnvironment('IVS_STORAGE_CONFIG_ARN', props.ivsStorageConfigArn || '');
     sessionManagerFn.addEnvironment('IVS_ENCODER_CONFIG_ARN', props.ivsEncoderConfigArn || '');
     sessionManagerFn.addEnvironment('RECORDING_CLOUDFRONT_DOMAIN', props.recordingCloudfrontDomain || '');
+    // Issue #101: session-manager wires this ARN as messageReviewHandler on
+    // every IVS Chat room it creates. Empty value means no review handler
+    // (fail-open) — only acceptable for non-prod or staging deploys that
+    // explicitly opt out.
+    sessionManagerFn.addEnvironment('CHAT_REVIEW_LAMBDA_ARN', chatReviewFunction ? chatReviewFunction.functionArn : '');
 
     // Session Manager needs scheduler permissions for auto-stop and warning schedules
     sessionManagerFn.addToRolePolicy(new iam.PolicyStatement({

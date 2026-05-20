@@ -57,6 +57,7 @@ async function sumPaginatedCount(params) {
 const WEBSOCKET_ENDPOINT = process.env.WEBSOCKET_ENDPOINT;
 const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
 const EMAIL_LAMBDA_ARN = process.env.EMAIL_LAMBDA_ARN;
+const CHAT_REVIEW_LAMBDA_ARN = process.env.CHAT_REVIEW_LAMBDA_ARN;
 const SESSION_MANAGER_ARN = process.env.SESSION_MANAGER_ARN;
 const SCHEDULER_ROLE_ARN = process.env.SCHEDULER_ROLE_ARN;
 
@@ -193,10 +194,20 @@ async function startEvent(event, eventId) {
   }));
   const stageArn = stageResult.stage.arn;
 
-  // Create IVS Chat Room
-  const chatRoomResult = await ivsChatClient.send(new CreateRoomCommand({
-    name: `meetup-chat-${eventId}`,
-  }));
+  // Create IVS Chat Room.
+  // Issue #101: wire the chat-review Lambda as messageReviewHandler so
+  // every chat message is screened for length, base64 payloads, and the
+  // URL blocklist. fallbackResult:DENY means a Lambda failure blocks
+  // the message rather than letting it through — fail-closed is the
+  // right default for moderation.
+  const createRoomParams = { name: `meetup-chat-${eventId}` };
+  if (CHAT_REVIEW_LAMBDA_ARN) {
+    createRoomParams.messageReviewHandler = {
+      uri: CHAT_REVIEW_LAMBDA_ARN,
+      fallbackResult: 'DENY',
+    };
+  }
+  const chatRoomResult = await ivsChatClient.send(new CreateRoomCommand(createRoomParams));
   const chatRoomArn = chatRoomResult.arn;
 
   // Start server-side composition for recording to S3
