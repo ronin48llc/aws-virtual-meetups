@@ -90,29 +90,37 @@ class FrontendStack extends Stack {
       "form-action 'self'",
     ].join('; ');
 
-    const securityHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'FrontendSecurityHeaders', {
-      responseHeadersPolicyName: 'VirtualMeetup-FrontendSecurityHeaders',
-      securityHeadersBehavior: {
-        contentSecurityPolicy: {
-          contentSecurityPolicy: cspDirectives,
-          override: true,
-        },
-        strictTransportSecurity: {
-          accessControlMaxAge: Duration.days(365),
-          includeSubdomains: true,
-          preload: true,
-          override: true,
-        },
-        contentTypeOptions: { override: true },
-        frameOptions: {
-          frameOption: cloudfront.HeadersFrameOption.DENY,
-          override: true,
-        },
-        referrerPolicy: {
-          referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
-          override: true,
-        },
+    // HSTS is conditional — only set when a real ACM certificate + custom
+    // domain are wired (issue #105). HSTS on the auto-assigned *.cloudfront.net
+    // domain would lock the shared domain into a year-long HTTPS-only state
+    // we can't back out of from this app.
+    const useHsts = Boolean(props.domainNames && props.certificate);
+    const securityHeadersBehavior = {
+      contentSecurityPolicy: {
+        contentSecurityPolicy: cspDirectives,
+        override: true,
       },
+      contentTypeOptions: { override: true },
+      frameOptions: {
+        frameOption: cloudfront.HeadersFrameOption.DENY,
+        override: true,
+      },
+      referrerPolicy: {
+        referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+        override: true,
+      },
+    };
+    if (useHsts) {
+      securityHeadersBehavior.strictTransportSecurity = {
+        accessControlMaxAge: Duration.days(365),
+        includeSubdomains: true,
+        preload: true,
+        override: true,
+      };
+    }
+    const securityHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'FrontendSecurityHeaders', {
+      responseHeadersPolicyName: `VirtualMeetupFrontendSecurityHeaders-${this.stackName}`,
+      securityHeadersBehavior,
     });
 
     // -------------------------------------------------------

@@ -21,10 +21,13 @@ describe('FrontendStack — CloudFront security response headers (issue #3)', ()
     template = Template.fromStack(stack);
   });
 
-  test('creates a ResponseHeadersPolicy named VirtualMeetup-FrontendSecurityHeaders', () => {
+  test('creates a ResponseHeadersPolicy with a stack-scoped name', () => {
+    // Issue #105 changed the policy name from the hardcoded
+    // 'VirtualMeetup-FrontendSecurityHeaders' to a stack-scoped form so
+    // multiple stacks (dev/prod) can coexist without name collisions.
     template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
-        Name: 'VirtualMeetup-FrontendSecurityHeaders',
+        Name: Match.stringLikeRegexp('^VirtualMeetupFrontendSecurityHeaders-'),
       }),
     });
   });
@@ -58,16 +61,16 @@ describe('FrontendStack — CloudFront security response headers (issue #3)', ()
     expect(csp).toContain("frame-ancestors 'none'");
   });
 
-  test('sets Strict-Transport-Security with one-year max-age + includeSubdomains + preload', () => {
+  test('omits Strict-Transport-Security on the no-cert stack', () => {
+    // Issue #105 made HSTS conditional: only set when a real cert + custom
+    // domain are wired (otherwise HSTS on a shared *.cloudfront.net domain
+    // would lock other apps into HTTPS-only). The with-cert path is covered
+    // by the "with custom domain + certificate" describe block in
+    // frontend-stack.test.js.
     template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
         SecurityHeadersConfig: Match.objectLike({
-          StrictTransportSecurity: Match.objectLike({
-            AccessControlMaxAgeSec: 365 * 24 * 60 * 60,
-            IncludeSubdomains: true,
-            Preload: true,
-            Override: true,
-          }),
+          StrictTransportSecurity: Match.absent(),
         }),
       }),
     });
