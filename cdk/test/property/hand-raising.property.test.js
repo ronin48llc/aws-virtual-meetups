@@ -32,6 +32,14 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   RATE_WINDOW_SECONDS: 60,
 }));
 
+// Mock per-message auth check (issue #4) — the dispatcher calls
+// checkConnectionAuth at the top of every action and its DDB Get
+// would otherwise consume the mockSend chain the lowerAllHands
+// presenter authz (#70) needs.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
