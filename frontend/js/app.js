@@ -784,7 +784,14 @@ const App = (() => {
 
       // Initialize LiveSession with tokens
       if (typeof LiveSession !== 'undefined' && joinData.stageToken) {
-        var wsUrl = window.WS_BASE_URL || 'wss://0b5r6cb8gd.execute-api.us-east-1.amazonaws.com/prod';
+        var wsUrl = resolveWsBaseUrl();
+        if (!wsUrl) {
+          if (statusEl) {
+            statusEl.innerHTML = '<p style="color: #e63946;">Live session unavailable: WebSocket endpoint not configured.</p>' +
+              '<button class="btn btn--outline mt-md" onclick="App.navigate(\'/events/' + eventId + '\')">Back to Event</button>';
+          }
+          return;
+        }
         LiveSession.init({
           eventId: eventId,
           participantToken: joinData.stageToken.token,
@@ -850,7 +857,12 @@ const App = (() => {
         clearInterval(pollInterval);
 
         if (typeof LiveSession !== 'undefined' && joinData.stageToken) {
-          var wsUrl = window.WS_BASE_URL || 'wss://0b5r6cb8gd.execute-api.us-east-1.amazonaws.com/prod';
+          var wsUrl = resolveWsBaseUrl();
+          if (!wsUrl) {
+            // The polling path is fire-and-forget; surface the misconfig in
+            // the console (resolveWsBaseUrl already did) and bail this tick.
+            return;
+          }
           LiveSession.init({
             eventId: eventId,
             participantToken: joinData.stageToken.token,
@@ -1123,6 +1135,26 @@ const App = (() => {
     const div = document.createElement('div');
     div.textContent = str || '';
     return div.innerHTML;
+  }
+
+  /**
+   * Resolve the WebSocket base URL from runtime config.
+   *
+   * Issue #125: previously fell back to a hardcoded API Gateway
+   * URL belonging to one specific deployment, which coupled
+   * every SPA copy to that one deployment's endpoint.
+   * window.WS_BASE_URL must be set by config.js (see PR #23
+   * scaffolding) before live-session features work.
+   *
+   * @returns {string|null} The configured WS base URL, or null
+   *                        if not configured (caller must bail).
+   */
+  function resolveWsBaseUrl() {
+    if (typeof window !== 'undefined' && window.WS_BASE_URL) {
+      return window.WS_BASE_URL;
+    }
+    console.error('App: WS_BASE_URL is not configured. Live sessions require window.WS_BASE_URL to be set in config.js.');
+    return null;
   }
 
   // --- Initialization ---
