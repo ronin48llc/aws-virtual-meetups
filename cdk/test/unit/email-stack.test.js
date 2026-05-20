@@ -190,4 +190,48 @@ describe('EmailStack', () => {
       expect(stack.emailDlq).toBeDefined();
     });
   });
+
+  // Issue #111: SES SendEmail/SendRawEmail policy must scope to the
+  // platform's SES identity ARN (not '*') and include a ses:FromAddress
+  // condition. The previous code granted Resource:'*' which let the
+  // Lambda spoof any verified identity in the AWS account.
+  describe('SES IAM scoping (#111)', () => {
+    test('SES SendEmail policy targets a specific identity, not "*"', () => {
+      const policies = template.findResources('AWS::IAM::Policy');
+      const sesPolicy = Object.values(policies).find((p) => {
+        const stmts = p.Properties.PolicyDocument.Statement;
+        return stmts.some((s) => {
+          const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+          return actions.includes('ses:SendEmail');
+        });
+      });
+      expect(sesPolicy).toBeDefined();
+
+      const sesStmt = sesPolicy.Properties.PolicyDocument.Statement.find((s) => {
+        const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+        return actions.includes('ses:SendEmail');
+      });
+      // Resource must NOT be the literal '*' (or contain it).
+      const resources = Array.isArray(sesStmt.Resource) ? sesStmt.Resource : [sesStmt.Resource];
+      resources.forEach((r) => {
+        expect(r).not.toBe('*');
+      });
+    });
+
+    test('SES SendEmail policy includes ses:FromAddress condition', () => {
+      const policies = template.findResources('AWS::IAM::Policy');
+      const sesStmt = Object.values(policies)
+        .flatMap((p) => p.Properties.PolicyDocument.Statement)
+        .find((s) => {
+          const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+          return actions.includes('ses:SendEmail');
+        });
+
+      expect(sesStmt).toBeDefined();
+      expect(sesStmt.Condition).toBeDefined();
+      expect(sesStmt.Condition.StringEquals).toBeDefined();
+      expect(sesStmt.Condition.StringEquals['ses:FromAddress']).toBeDefined();
+      expect(typeof sesStmt.Condition.StringEquals['ses:FromAddress']).toBe('string');
+    });
+  });
 });
