@@ -12,10 +12,18 @@
  */
 
 const crypto = require('crypto');
-const { success, badRequest, unauthorized, forbidden, serverError } = require('../shared/response');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, GetCommand } = require('@aws-sdk/lib-dynamodb');
+const { success, badRequest, unauthorized, forbidden, notFound, serverError } = require('../shared/response');
 const { parseBody, validateRequiredFields } = require('../shared/validation');
+const { SK } = require('../shared/constants');
+const { buildEventPK } = require('../shared/dynamo-utils');
 
 const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
+const TABLE_NAME = process.env.TABLE_NAME;
+
+const ddbClient = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(ddbClient);
 
 /**
  * Supported source languages for Amazon Transcribe Streaming.
@@ -210,6 +218,23 @@ async function startTranscription(event) {
   const eventId = pathParams && pathParams.id;
   if (!eventId) {
     return badRequest('Event ID is required');
+  }
+
+  // Issue #81: verify the requester owns the event before issuing
+  // SigV4-signed Transcribe credentials. Without this any logged-in
+  // user could mint Transcribe Streaming sessions on the platform's
+  // AWS account (cost amplification).
+  if (TABLE_NAME) {
+    const eventResult = await docClient.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
+    }));
+    if (!eventResult.Item) {
+      return notFound('Event not found');
+    }
+    if (eventResult.Item.ownerUserId !== claims.userId) {
+      return forbidden('Only the event owner can start transcription');
+    }
   }
 
   const { valid, data, error } = parseBody(event.body);
