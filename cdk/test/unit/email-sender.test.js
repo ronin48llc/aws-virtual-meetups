@@ -7,6 +7,7 @@ const mockDocSend = jest.fn();
 jest.mock('@aws-sdk/client-ses', () => ({
   SESClient: jest.fn(() => ({ send: mockSesSend })),
   SendEmailCommand: jest.fn((params) => ({ type: 'SendEmail', input: params })),
+  SendRawEmailCommand: jest.fn((params) => ({ type: 'SendRawEmail', input: params })),
 }));
 
 jest.mock('@aws-sdk/client-dynamodb', () => ({
@@ -52,6 +53,13 @@ describe('Email Sender Lambda Handler', () => {
     });
 
     it('handles signup-confirmation type as single-recipient', async () => {
+      // signup-confirmation now looks up event metadata to build an ICS
+      // attachment. Provide a minimal metadata response so the lookup
+      // doesn't return undefined.
+      mockDocSend.mockResolvedValueOnce({
+        Item: { title: 'Test Event', description: 'desc', scheduledStart: '2024-03-15T18:00:00Z', durationMinutes: 60 },
+      });
+
       const payload = {
         type: 'signup-confirmation',
         eventId: 'evt_123',
@@ -187,12 +195,16 @@ describe('Email Sender Lambda Handler', () => {
     });
 
     it('From address is always phannah@thenetwerk.net', async () => {
+      // Use event-created (still routes through SendEmailCommand). The
+      // signup-confirmation path uses SendRawEmailCommand and is covered
+      // by the "signup-confirmation ICS" describe block below.
       const payload = {
-        type: 'signup-confirmation',
+        type: 'event-created',
         eventId: 'evt_456',
         recipientEmail: 'user@example.com',
         recipientName: 'User',
         eventTitle: 'Another Event',
+        eventDescription: 'desc',
         scheduledStart: '2024-04-01T10:00:00Z',
       };
 
@@ -204,6 +216,128 @@ describe('Email Sender Lambda Handler', () => {
           Source: expect.stringContaining('phannah@thenetwerk.net'),
         })
       );
+    });
+  });
+
+  describe('signup-confirmation ICS attachment', () => {
+    const baseEventMetadata = {
+      title: 'Test Event',
+      description: 'A test event description',
+      scheduledStart: '2026-05-19T18:00:00Z',
+      durationMinutes: 60,
+    };
+
+    const basePayload = {
+      type: 'signup-confirmation',
+      eventId: 'evt_123',
+      recipientEmail: 'attendee@example.com',
+      recipientName: 'Jane Doe',
+      eventTitle: 'Test Event',
+      scheduledStart: '2026-05-19T18:00:00Z',
+    };
+
+    it('sends via SendRawEmailCommand with an ICS attachment when event metadata is complete', async () => {
+      mockDocSend.mockResolvedValueOnce({ Item: { ...baseEventMetadata } });
+
+      const result = await handler(basePayload);
+      expect(result.statusCode).toBe(200);
+
+      const { SendRawEmailCommand, SendEmailCommand } = require('@aws-sdk/client-ses');
+      expect(SendRawEmailCommand).toHaveBeenCalledTimes(1);
+      expect(SendEmailCommand).not.toHaveBeenCalled();
+
+      const callArgs = SendRawEmailCommand.mock.calls[0][0];
+      expect(callArgs.Source).toBe(process.env.SES_SENDER);
+      expect(callArgs.Destinations).toEqual(['attendee@example.com']);
+      expect(Buffer.isBuffer(callArgs.RawMessage.Data)).toBe(true);
+
+      const rawBody = callArgs.RawMessage.Data.toString('utf8');
+      expect(rawBody).toContain('Content-Type: multipart/mixed;');
+      expect(rawBody).toContain('Content-Type: text/calendar; method=REQUEST; charset=UTF-8; name="event.ics"');
+      expect(rawBody).toContain('Content-Disposition: attachment; filename="event.ics"');
+    });
+
+    it('the ICS payload contains the event title, start, and duration', async () => {
+      mockDocSend.mockResolvedValueOnce({ Item: { ...baseEventMetadata } });
+
+      await handler(basePayload);
+
+      const { SendRawEmailCommand } = require('@aws-sdk/client-ses');
+      const rawBody = SendRawEmailCommand.mock.calls[0][0].RawMessage.Data.toString('utf8');
+
+      // The ICS body is base64-encoded inside the MIME envelope. Pull the
+      // attachment block and decode.
+      const attachmentMatch = rawBody.match(/Content-Disposition: attachment; filename="event\.ics"\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/);
+      expect(attachmentMatch).toBeTruthy();
+      const b64 = attachmentMatch[1].replace(/\r\n/g, '');
+      const ics = Buffer.from(b64, 'base64').toString('utf8');
+
+      expect(ics).toContain('BEGIN:VCALENDAR');
+      expect(ics).toContain('METHOD:REQUEST');
+      expect(ics).toContain('UID:evt_123@');
+      expect(ics).toContain('DTSTART:20260519T180000Z');
+      expect(ics).toContain('DURATION:PT60M');
+      expect(ics).toContain('SUMMARY:Test Event');
+      expect(ics).toContain('DESCRIPTION:A test event description');
+      expect(ics).toContain('END:VCALENDAR');
+    });
+
+    it('falls back to SendEmailCommand when event metadata is missing', async () => {
+      mockDocSend.mockResolvedValueOnce({ Item: null });
+
+      const result = await handler(basePayload);
+      expect(result.statusCode).toBe(200);
+
+      const { SendRawEmailCommand, SendEmailCommand } = require('@aws-sdk/client-ses');
+      expect(SendRawEmailCommand).not.toHaveBeenCalled();
+      expect(SendEmailCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to SendEmailCommand when durationMinutes is missing from metadata', async () => {
+      const { durationMinutes, ...withoutDuration } = baseEventMetadata;
+      mockDocSend.mockResolvedValueOnce({ Item: withoutDuration });
+
+      const result = await handler(basePayload);
+      expect(result.statusCode).toBe(200);
+
+      const { SendRawEmailCommand, SendEmailCommand } = require('@aws-sdk/client-ses');
+      expect(SendRawEmailCommand).not.toHaveBeenCalled();
+      expect(SendEmailCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('derives durationMinutes from a "duration" (seconds) field when "durationMinutes" is absent', async () => {
+      mockDocSend.mockResolvedValueOnce({
+        Item: { ...baseEventMetadata, durationMinutes: undefined, duration: 90 * 60 },
+      });
+
+      await handler(basePayload);
+
+      const { SendRawEmailCommand } = require('@aws-sdk/client-ses');
+      const rawBody = SendRawEmailCommand.mock.calls[0][0].RawMessage.Data.toString('utf8');
+      const attachmentMatch = rawBody.match(/Content-Disposition: attachment; filename="event\.ics"\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/);
+      const ics = Buffer.from(attachmentMatch[1].replace(/\r\n/g, ''), 'base64').toString('utf8');
+      expect(ics).toContain('DURATION:PT90M');
+    });
+
+    it('uses the FRONTEND_URL hostname as the UID domain', async () => {
+      mockDocSend.mockResolvedValueOnce({ Item: { ...baseEventMetadata } });
+
+      await handler(basePayload);
+
+      const { SendRawEmailCommand } = require('@aws-sdk/client-ses');
+      const rawBody = SendRawEmailCommand.mock.calls[0][0].RawMessage.Data.toString('utf8');
+      const attachmentMatch = rawBody.match(/Content-Disposition: attachment; filename="event\.ics"\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/);
+      const ics = Buffer.from(attachmentMatch[1].replace(/\r\n/g, ''), 'base64').toString('utf8');
+      // FRONTEND_URL = https://d2hbje3cen4qrx.cloudfront.net (set above)
+      expect(ics).toContain('UID:evt_123@d2hbje3cen4qrx.cloudfront.net');
+    });
+
+    it('logs but does not throw when SES rejects the SendRawEmail call', async () => {
+      mockDocSend.mockResolvedValueOnce({ Item: { ...baseEventMetadata } });
+      mockSesSend.mockRejectedValueOnce(new Error('SES throttle'));
+
+      const result = await handler(basePayload);
+      expect(result.statusCode).toBe(200);
     });
   });
 
