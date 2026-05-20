@@ -1,0 +1,9 @@
+{
+  "name": "virtual-meetup-lambdas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runtime dependencies for the Lambda handlers in this directory. The CDK ApiStack zips this whole directory via lambda.Code.fromAsset, so anything listed here is shipped to AWS with the function code. @aws-sdk/* packages are NOT listed because they're baked into the Node 20 runtime.",
+  "dependencies": {
+    "aws-jwt-verify": "^5.1.0"
+  }
+}

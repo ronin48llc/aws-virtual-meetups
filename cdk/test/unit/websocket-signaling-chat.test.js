@@ -39,6 +39,13 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   RATE_WINDOW_SECONDS: 60,
 }));
 
+// Issue #4: signaling.js calls checkConnectionAuth at the top of every
+// request. In unit tests we always want it to allow through; specific
+// expiry/reject paths are covered in websocket-signaling-tokenexp.test.js.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';

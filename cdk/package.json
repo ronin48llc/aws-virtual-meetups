@@ -10,7 +10,8 @@
     "test": "jest",
     "test:unit": "jest --testPathPattern=test/unit",
     "test:property": "jest --testPathPattern=test/property",
-    "test:integration": "jest --testPathPattern=test/integration"
+    "test:integration": "jest --testPathPattern=test/integration",
+    "postinstall": "cd lambda && npm install --omit=dev --silent"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.150.0",
@@ -28,6 +29,7 @@
     "@aws-sdk/client-ses": "^3.1047.0",
     "@aws-sdk/lib-dynamodb": "^3.1047.0",
     "aws-cdk": "^2.150.0",
+    "aws-jwt-verify": "^5.1.1",
     "fast-check": "^3.19.0",
     "jest": "^29.7.0",
     "jsdom": "^29.1.1"
@@ -36,6 +38,9 @@
     "testEnvironment": "node",
     "testMatch": [
       "**/test/**/*.test.js"
-    ]
+    ],
+    "moduleNameMapper": {
+      "^aws-jwt-verify$": "<rootDir>/node_modules/aws-jwt-verify"
+    }
   }
 }

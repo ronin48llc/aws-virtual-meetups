@@ -2,13 +2,15 @@
 
 /**
  * WebSocket $connect handler.
- * Authenticates via query string token and stores connection in WebSocketConnections table.
+ * Verifies the Cognito ID token from the query string, stores connection
+ * metadata (including token expiry) in the WebSocketConnections table.
  * @module websocket/connect
  */
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, GetCommand, QueryCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
 const { broadcast } = require('./broadcast');
+const { verifyIdToken } = require('../shared/jwt-verifier');
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
@@ -32,18 +34,29 @@ async function handler(event) {
 
   const token = queryParams.token;
   const eventId = queryParams.eventId;
-  const userId = queryParams.userId;
   const role = queryParams.role || 'attendee';
   const displayName = queryParams.displayName || '';
-  const email = queryParams.email || '';
 
-  // Validate required parameters
-  if (!token || !eventId || !userId) {
-    console.error('Missing required query parameters', { connectionId, hasToken: !!token, hasEventId: !!eventId, hasUserId: !!userId });
+  // Required parameters
+  if (!token || !eventId) {
+    console.error('Missing required query parameters', { connectionId, hasToken: !!token, hasEventId: !!eventId });
     return { statusCode: 401, body: 'Unauthorized: missing required parameters' };
   }
 
-  // Validate role
+  // Verify the Cognito ID token. Identity (userId, email) comes from the
+  // verified claims, never the query string — the client cannot lie about
+  // who they are.
+  const claims = await verifyIdToken(token);
+  if (!claims) {
+    console.error('Token verification failed', { connectionId, eventId });
+    return { statusCode: 401, body: 'Unauthorized: invalid token' };
+  }
+  const userId = claims.sub;
+  const email = claims.email || '';
+  const tokenExp = typeof claims.exp === 'number' ? claims.exp : null;
+
+  // Validate role (session-level, not a Cognito claim — it's the role the
+  // user is *requesting* for this event session)
   const validRoles = ['presenter', 'co-presenter', 'attendee'];
   if (!validRoles.includes(role)) {
     console.error('Invalid role', { connectionId, role });
@@ -102,6 +115,10 @@ async function handler(event) {
         email,
         connectedAt: now.toISOString(),
         ttl,
+        // Per-message auth: signaling.js compares tokenExp against the
+        // current time on every message and rejects expired connections.
+        // See issue #4.
+        tokenExp,
       },
     }));
 

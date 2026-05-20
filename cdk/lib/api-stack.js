@@ -124,6 +124,8 @@ class ApiStack extends Stack {
     });
 
     // WebSocket Connect Lambda
+    // Needs Cognito user-pool / client IDs so it can verify the ID token
+    // presented in the $connect query string (issue #4).
     const wsConnectFn = new lambda.Function(this, 'WsConnectFunction', {
       functionName: 'VirtualMeetup-WsConnect',
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -135,6 +137,8 @@ class ApiStack extends Stack {
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
       },
     });
 
@@ -154,6 +158,9 @@ class ApiStack extends Stack {
     });
 
     // WebSocket Signaling Lambda
+    // Cognito env vars carried for future use; today only the per-message
+    // tokenExp check needs them (sourced via the connection record), but
+    // any deeper validation (e.g., revocation lookup) will use them too.
     const wsSignalingFn = new lambda.Function(this, 'WsSignalingFunction', {
       functionName: 'VirtualMeetup-WsSignaling',
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -165,6 +172,8 @@ class ApiStack extends Stack {
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
       },
     });
 

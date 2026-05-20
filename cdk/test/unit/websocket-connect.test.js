@@ -1,5 +1,24 @@
 'use strict';
 
+// Mock the JWT verifier so connect.js trusts the test query-string token.
+// Tests can override mockVerifyIdToken.mockResolvedValueOnce(...) to exercise
+// the failure path (returns null).
+const mockVerifyIdToken = jest.fn();
+jest.mock('../../lambda/shared/jwt-verifier', () => ({
+  verifyIdToken: mockVerifyIdToken,
+}));
+
+// Default: every test sees a verifier that returns claims matching the
+// userId/email/exp the existing tests expect. Individual tests override
+// via mockResolvedValueOnce.
+beforeEach(() => {
+  mockVerifyIdToken.mockResolvedValue({
+    sub: 'user-456',
+    email: 'user-456@example.com',
+    exp: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+  });
+});
+
 // Mock AWS SDK
 const mockSend = jest.fn();
 jest.mock('@aws-sdk/client-dynamodb', () => ({
@@ -212,16 +231,78 @@ describe('WebSocket Connect Handler', () => {
     expect(result.statusCode).toBe(401);
   });
 
-  it('returns 401 when userId is missing', async () => {
+  it('returns 401 when token verification fails (issue #4)', async () => {
+    // Override the default verifier mock for this test only — returning
+    // null means the JWT was invalid or expired.
+    mockVerifyIdToken.mockResolvedValueOnce(null);
+
     const event = buildConnectEvent({
       queryStringParameters: {
-        token: 'valid-token-123',
+        token: 'forged-or-expired-token',
         eventId: 'evt_abc123',
       },
     });
 
     const result = await connectHandler(event);
     expect(result.statusCode).toBe(401);
+    expect(result.body).toMatch(/invalid token/i);
+  });
+
+  it('uses claims.sub for userId — never the query string (issue #4)', async () => {
+    mockVerifyIdToken.mockResolvedValueOnce({
+      sub: 'verified-user-from-jwt',
+      email: 'verified@example.com',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    // Ban check
+    mockSend.mockResolvedValueOnce({ Item: undefined });
+    // Query for stale connections
+    mockSend.mockResolvedValueOnce({ Items: [] });
+    // Put for new connection
+    mockSend.mockResolvedValueOnce({});
+    // Broadcast Query
+    mockSend.mockResolvedValue({ Items: [] });
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token',
+        eventId: 'evt_abc123',
+        userId: 'attacker-claimed-id', // should be ignored
+      },
+    });
+
+    await connectHandler(event);
+
+    const { PutCommand } = require('@aws-sdk/lib-dynamodb');
+    const putCall = PutCommand.mock.calls[0][0];
+    expect(putCall.Item.userId).toBe('verified-user-from-jwt');
+    expect(putCall.Item.userId).not.toBe('attacker-claimed-id');
+  });
+
+  it('stores tokenExp on the connection record for per-message validation (issue #4)', async () => {
+    const exp = Math.floor(Date.now() / 1000) + 1800;
+    mockVerifyIdToken.mockResolvedValueOnce({
+      sub: 'user-456',
+      email: 'user-456@example.com',
+      exp,
+    });
+    mockSend.mockResolvedValueOnce({ Item: undefined });
+    mockSend.mockResolvedValueOnce({ Items: [] });
+    mockSend.mockResolvedValueOnce({});
+    mockSend.mockResolvedValue({ Items: [] });
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token',
+        eventId: 'evt_abc123',
+      },
+    });
+
+    await connectHandler(event);
+
+    const { PutCommand } = require('@aws-sdk/lib-dynamodb');
+    const putCall = PutCommand.mock.calls[0][0];
+    expect(putCall.Item.tokenExp).toBe(exp);
   });
 
   it('returns 401 when queryStringParameters is null', async () => {
