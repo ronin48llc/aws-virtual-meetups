@@ -120,8 +120,17 @@ describe('Publication Property Tests', () => {
             // Must contain the HLS URL
             expect(result).toContain(hlsUrl);
 
-            // Must contain the event title
-            expect(result).toContain(metadata.title);
+            // Must contain the event title. Issue #87: the body interpolates
+            // an HTML-escaped form of the title (anti-XSS); test against the
+            // escaped form, not the raw. Front matter still uses the
+            // YAML-escaped form via escapeYaml.
+            const htmlEscapedTitle = String(metadata.title)
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#39;');
+            expect(result).toContain(htmlEscapedTitle);
 
             // Must contain the caption track reference
             expect(result).toContain(captionPath);

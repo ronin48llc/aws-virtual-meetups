@@ -229,11 +229,18 @@ function generateJekyllPost(metadata, hlsUrl, captionPath) {
     '---',
   ].join('\n');
 
+  // Issue #87: escape user-supplied title/description before interpolating
+  // into the markdown body. Markdown allows raw HTML, and Jekyll renders it.
+  // Without escaping, an organizer can inject persistent <script> into the
+  // public GitHub Pages recording site.
+  const safeTitle = escapeMarkdownHtml(title);
+  const safeDescription = escapeMarkdownHtml(description);
+
   const body = [
     '',
-    `# ${title}`,
+    `# ${safeTitle}`,
     '',
-    description,
+    safeDescription,
     '',
     '## Watch Recording',
     '',
@@ -257,6 +264,20 @@ function generateJekyllPost(metadata, hlsUrl, captionPath) {
   ].join('\n');
 
   return frontMatter + body;
+}
+
+/**
+ * Escape HTML special characters for safe inclusion in markdown bodies that
+ * may be rendered by Jekyll (which permits raw HTML). See issue #87.
+ */
+function escapeMarkdownHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -423,6 +444,7 @@ exports._internals = {
   generateWebVTT,
   generateJekyllPost,
   escapeYaml,
+  escapeMarkdownHtml,
   formatDateForFilename,
   commitFilesToGitHub,
   readJsonFromS3,

