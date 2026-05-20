@@ -481,6 +481,32 @@ const App = (() => {
   }
 
   /**
+   * Build a validated URL for API requests.
+   */
+  function buildValidatedUrl(baseUrl, eventId) {
+    try {
+      // Minimal path validation
+      if (baseUrl.includes('/../') || /\/%2e%2e\//i.test(baseUrl)) {
+        throw new Error('Invalid path');
+      }
+      
+      const url = new URL(baseUrl);
+      
+      // Validate path parameters
+      if (!/^[A-Za-z0-9_-]+$/.test(eventId)) {
+        throw new Error('Invalid parameter');
+      }
+      
+      // Rebuild pathname from fixed literals + validated segments
+      url.pathname = '/events/' + eventId;
+      
+      return url.href;
+    } catch {
+      throw new Error('Invalid URL');
+    }
+  }
+
+  /**
    * Load event details from API and render the detail page.
    */
   async function loadEventDetail(eventId) {
@@ -489,7 +515,7 @@ const App = (() => {
 
     try {
       var apiBase = window.API_BASE_URL || '/api';
-      var res = await fetch(apiBase + '/events/' + encodeURIComponent(eventId));
+      var res = await fetch(buildValidatedUrl(apiBase, eventId));
       if (!res.ok) throw new Error('Event not found');
       var evt = await res.json();
 

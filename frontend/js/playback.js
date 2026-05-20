@@ -230,6 +230,44 @@ const Playback = (() => {
   // --- Private Methods ---
 
   /**
+   * Build and validate URLs to prevent SSRF attacks.
+   * @param {string} baseUrl - Base URL to validate and use
+   * @param {string} [pathSegment] - Optional path segment to append
+   * @returns {string} Validated URL
+   */
+  function buildValidatedUrl(baseUrl, pathSegment) {
+    try {
+      // Minimal path validation
+      if (baseUrl.includes('/../') || /\/%2e%2e\//i.test(baseUrl)) {
+        throw new Error('Invalid path');
+      }
+      
+      const url = new URL(baseUrl);
+      
+      // Protocol + host checks
+      const allowedDomains = ['localhost', '127.0.0.1'];
+      if (!allowedDomains.includes(url.hostname)) {
+        throw new Error('Invalid host');
+      }
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        throw new Error('Invalid protocol');
+      }
+      
+      // Validate path parameter if provided
+      if (pathSegment) {
+        if (!/^[A-Za-z0-9_-]+$/.test(pathSegment)) {
+          throw new Error('Invalid parameter');
+        }
+        url.pathname = url.pathname + '/events/' + pathSegment;
+      }
+      
+      return url.href;
+    } catch {
+      throw new Error('Invalid URL');
+    }
+  }
+
+  /**
    * Show the video player section and hide the "no recording" message.
    */
   function _showPlayerSection() {
@@ -421,7 +459,8 @@ const Playback = (() => {
     var apiBase = window.API_BASE_URL || '/api';
 
     try {
-      var response = await fetch(apiBase + '/events/' + encodeURIComponent(eventId));
+      var validatedUrl = buildValidatedUrl(apiBase, eventId);
+      var response = await fetch(validatedUrl);
       if (!response.ok) {
         throw new Error('Event not found');
       }
@@ -600,7 +639,8 @@ const Playback = (() => {
     }
 
     // Fetch and parse the WebVTT file
-    fetch(url)
+    var validatedUrl = buildValidatedUrl(url);
+    fetch(validatedUrl)
       .then(function(response) {
         if (!response.ok) {
           throw new Error('Failed to fetch transcript');
