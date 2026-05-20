@@ -61,7 +61,7 @@ const ManageEvents = (() => {
     } catch (err) {
       isLoading = false;
       events = [];
-      _renderEventList('Failed to load events: ' + (err.message || 'Unknown error'));
+      _renderEventList(window.I18n.t('errors.event.loadFailed', { detail: err.message || window.I18n.t('errors.unknown') }));
     }
   }
 
@@ -122,7 +122,7 @@ const ManageEvents = (() => {
       _showNotification('Event created successfully.');
     } catch (err) {
       _setFormLoading(false);
-      _showFormError(err.message || 'Failed to create event.');
+      _showFormError(err.message || window.I18n.t('errors.event.createFailed'));
     }
   }
 
@@ -177,7 +177,7 @@ const ManageEvents = (() => {
       _showNotification('Event updated successfully.');
     } catch (err) {
       _setFormLoading(false);
-      _showFormError(err.message || 'Failed to update event.');
+      _showFormError(err.message || window.I18n.t('errors.event.updateFailed'));
     }
   }
 
@@ -197,7 +197,7 @@ const ManageEvents = (() => {
       await loadEvents();
       _showNotification('Event deleted.');
     } catch (err) {
-      _showNotification('Failed to delete event: ' + (err.message || 'Unknown error'));
+      _showNotification(window.I18n.t('errors.event.deleteFailed', { detail: err.message || window.I18n.t('errors.unknown') }));
     }
   }
 
@@ -216,7 +216,7 @@ const ManageEvents = (() => {
       // Redirect presenter to the live session page (green room)
       window.location.hash = '#/events/' + id + '/live';
     } catch (err) {
-      _showNotification('Failed to start event: ' + (err.message || 'Unknown error'));
+      _showNotification(window.I18n.t('errors.event.startFailed', { detail: err.message || window.I18n.t('errors.unknown') }));
     }
   }
 
@@ -235,7 +235,7 @@ const ManageEvents = (() => {
       await loadEvents();
       _showNotification('Event ended.');
     } catch (err) {
-      _showNotification('Failed to stop event: ' + (err.message || 'Unknown error'));
+      _showNotification(window.I18n.t('errors.event.stopFailed', { detail: err.message || window.I18n.t('errors.unknown') }));
     }
   }
 
@@ -259,7 +259,7 @@ const ManageEvents = (() => {
       var signups = response.signups || response || [];
       _renderSignupList(container, signups, id);
     } catch (err) {
-      container.innerHTML = '<p style="color: #e63946;">Failed to load sign-ups: ' + _escapeHtml(err.message || 'Unknown error') + '</p>';
+      container.innerHTML = '<p style="color: #e63946;">' + _escapeHtml(window.I18n.t('errors.event.signupsLoadFailed', { detail: err.message || window.I18n.t('errors.unknown') })) + '</p>';
     }
   }
 
