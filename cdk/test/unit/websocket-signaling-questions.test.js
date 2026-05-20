@@ -76,6 +76,45 @@ describe('WebSocket Signaling Handler — Question Queue', () => {
     jest.clearAllMocks();
   });
 
+  describe('centralized displayName length check (issue #60)', () => {
+    it('rejects any handler when displayName exceeds 100 chars, before handler logic runs', async () => {
+      const event = buildEvent({
+        action: 'submitQuestion',
+        eventId: 'evt_abc123',
+        data: { userId: 'user_xyz', displayName: 'x'.repeat(101), text: 'Short Q' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(400);
+      expect(result.body).toMatch(/displayName/);
+      // No DDB call should have been issued — the dispatcher rejects first.
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('accepts displayName exactly at 100 chars', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123' } });
+      mockSend.mockResolvedValueOnce({});
+      const event = buildEvent({
+        action: 'submitQuestion',
+        eventId: 'evt_abc123',
+        data: { userId: 'user_xyz', displayName: 'x'.repeat(100), text: 'Short Q' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+    });
+
+    it('skips the check when displayName is absent', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123' } });
+      mockSend.mockResolvedValueOnce({});
+      const event = buildEvent({
+        action: 'submitQuestion',
+        eventId: 'evt_abc123',
+        data: { userId: 'user_xyz', text: 'Short Q' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+    });
+  });
+
   describe('submitQuestion', () => {
     it('stores question item in DynamoDB and broadcasts QUESTION_SUBMITTED', async () => {
       // Mock GetCommand for connection record — no restrictions
