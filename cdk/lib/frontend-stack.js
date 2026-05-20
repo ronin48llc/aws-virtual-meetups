@@ -128,6 +128,15 @@ class FrontendStack extends Stack {
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy: securityHeadersPolicy,
+        // CachePolicy.CACHING_DISABLED: every viewer request goes to S3.
+        // The SPA's JS/CSS asset names are NOT content-hashed (frontend/
+        // index.html references js/app.js, css/styles.css by stable name),
+        // so the default CACHING_OPTIMIZED policy (24h DefaultTTL) would
+        // serve stale shells for up to a day after each deploy. Latency
+        // hit at this scale (~50ms) is acceptable; once the build emits
+        // hashed asset filenames, switch this back to CACHING_OPTIMIZED
+        // and add a short-TTL behavior for *.html / `/`. See issue #38.
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
       },
       defaultRootObject: 'index.html',
       errorResponses: [
