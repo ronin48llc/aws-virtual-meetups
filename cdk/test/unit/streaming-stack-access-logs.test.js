@@ -15,7 +15,10 @@ function synth() {
 }
 
 describe('StreamingStack recording bucket server access logs (issue #52)', () => {
-  test('three S3 buckets exist (recordings + S3 access-logs target + CloudFront access-logs target)', () => {
+  test('three S3 buckets exist (recordings + S3 access-logs + CloudFront access-logs)', () => {
+    // Originally 2, then PR #59 added RecordingDistributionAccessLogsBucket
+    // for the CloudFront log sink. Both retain'd log sinks coexist with
+    // the main RecordingBucket.
     const template = synth();
     template.resourceCountIs('AWS::S3::Bucket', 3);
   });
