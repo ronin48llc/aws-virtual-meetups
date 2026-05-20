@@ -71,6 +71,12 @@ function buildEvent({ action, eventId, data, userId, questionId, timestamp, text
   };
 }
 
+// Issue #70: prepend a presenter Item to satisfy dispatcher authz on
+// presenter-only actions (dismissQuestion, pinQuestion, unpinQuestion).
+function presenterAuth() {
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter' } });
+}
+
 describe('WebSocket Signaling Handler — Question Queue', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -404,6 +410,10 @@ describe('WebSocket Signaling Handler — Question Queue', () => {
   });
 
   describe('dismissQuestion', () => {
+    beforeEach(() => {
+      presenterAuth();
+    });
+
     it('updates question status to dismissed and broadcasts QUESTION_DISMISSED', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 

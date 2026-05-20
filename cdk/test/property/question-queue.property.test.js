@@ -275,6 +275,8 @@ describe('Question Queue Property Tests', () => {
             mockBroadcast.mockReset();
             mockBroadcast.mockResolvedValue({ sent: 2, failed: 0, cleaned: 0 });
 
+            // Issue #70: dispatcher authz GET on the connections table.
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
             // Mock UpdateCommand
             mockSend.mockResolvedValueOnce({});
 
