@@ -9,6 +9,7 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: jest.fn(() => ({ send: mockSend })),
   },
+  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
   PutCommand: jest.fn((params) => ({ type: 'Put', params })),
   DeleteCommand: jest.fn((params) => ({ type: 'Delete', params })),
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
@@ -27,6 +28,13 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   checkRateLimit: jest.fn().mockResolvedValue({ allowed: true, count: 1 }),
   RATE_LIMIT: 60,
   RATE_WINDOW_SECONDS: 60,
+}));
+
+// Issue #4: signaling.js calls checkConnectionAuth at the top of every
+// request. In unit tests we always want it to allow through; specific
+// expiry/reject paths are covered in websocket-signaling-tokenexp.test.js.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
 }));
 
 // Set env before requiring handler

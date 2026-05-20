@@ -19,6 +19,7 @@ const { IVSRealTimeClient, DisconnectParticipantCommand } = require('@aws-sdk/cl
 const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
 const { broadcast, getConnectionsForEvent } = require('./broadcast');
 const { checkRateLimit } = require('./rate-limiter');
+const { checkConnectionAuth } = require('./auth-check');
 const { buildEventPK, buildHandSK, buildQuestionSK, chunk } = require('../shared/dynamo-utils');
 const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS } = require('../shared/constants');
 
@@ -54,6 +55,18 @@ async function handler(event) {
   if (!eventId) {
     console.error('Missing eventId', { connectionId, action });
     return { statusCode: 400, body: 'Missing eventId' };
+  }
+
+  // -------------------------------------------------------
+  // Per-message auth check (issue #4)
+  // The $connect handler captured the Cognito ID-token's `exp` claim onto
+  // the connection record. We verify it hasn't passed before dispatching
+  // any action — expired tokens are rejected even if the WebSocket is
+  // still open.
+  // -------------------------------------------------------
+  const auth = await checkConnectionAuth(connectionId);
+  if (!auth.allowed) {
+    return { statusCode: 401, body: 'Unauthorized: token expired' };
   }
 
   // -------------------------------------------------------
