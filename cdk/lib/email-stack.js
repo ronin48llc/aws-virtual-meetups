@@ -20,8 +20,9 @@ class EmailStack extends Stack {
     // otherwise fall back to the legacy email-address identity.
     // Requirements: 6.1, 6.2, 6.4
     // -------------------------------------------------------
+    let sesIdentity;
     if (hostedZone) {
-      const sesIdentity = new ses.EmailIdentity(this, 'SenderDomainIdentity', {
+      sesIdentity = new ses.EmailIdentity(this, 'SenderDomainIdentity', {
         identity: ses.Identity.publicHostedZone(hostedZone),
       });
 
@@ -39,7 +40,7 @@ class EmailStack extends Stack {
     } else {
       // Fallback: verify a specific email address when no domain is configured
       const fallbackEmail = this.node.tryGetContext('sesVerifiedEmail') || 'noreply@example.com';
-      const sesIdentity = new ses.EmailIdentity(this, 'SenderEmailIdentity', {
+      sesIdentity = new ses.EmailIdentity(this, 'SenderEmailIdentity', {
         identity: ses.Identity.email(fallbackEmail),
       });
     }
@@ -83,6 +84,10 @@ class EmailStack extends Stack {
 
     // -------------------------------------------------------
     // Email Lambda Permissions — SES SendEmail/SendRawEmail
+    // Scoped to the verified sender identity ARN only, so a compromised
+    // Lambda role cannot send email from arbitrary SES identities in the
+    // account. The identity itself is created above (domain identity when
+    // hostedZone is provided, email-address identity otherwise).
     // -------------------------------------------------------
     emailSenderFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -90,7 +95,7 @@ class EmailStack extends Stack {
         'ses:SendEmail',
         'ses:SendRawEmail',
       ],
-      resources: ['*'],
+      resources: [sesIdentity.emailIdentityArn],
     }));
 
     // -------------------------------------------------------
