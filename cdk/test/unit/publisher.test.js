@@ -538,3 +538,59 @@ describe('Publisher Lambda - handler integration', () => {
     expect(body.message).toBe('Published successfully');
   });
 });
+
+// Issue #117: CDK provisions the GitHub token secret as a JSON template
+// — `{ "token": "...", "placeholder": "..." }`. The previous implementation
+// returned the whole JSON string as the auth token, producing
+// `Authorization: token {"token":"...",...}` and a 401 from GitHub.
+describe('Publisher Lambda - getGitHubToken (#117)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('extracts the `token` field when SecretString is a JSON object', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: JSON.stringify({ token: 'ghp_abc123', placeholder: 'noise' }),
+    });
+
+    const token = await _internals.getGitHubToken();
+    expect(token).toBe('ghp_abc123');
+  });
+
+  it('returns the value as-is when SecretString is a plain token string', async () => {
+    // Operators who overwrite the secret in the console with a plain
+    // string (no JSON wrapper) must keep working.
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: 'ghp_plain_token_value',
+    });
+
+    const token = await _internals.getGitHubToken();
+    expect(token).toBe('ghp_plain_token_value');
+  });
+
+  it('falls back to raw string when JSON parses but has no `token` field', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: JSON.stringify({ placeholder: 'noise', other: 'fields' }),
+    });
+
+    const token = await _internals.getGitHubToken();
+    // The raw JSON gets returned verbatim — better than throwing because
+    // an operator may have stored an unusual format. Authentication will
+    // fail downstream, which is the right signal.
+    expect(token).toBe('{"placeholder":"noise","other":"fields"}');
+  });
+
+  it('throws when SecretString is empty', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: '',
+    });
+
+    await expect(_internals.getGitHubToken()).rejects.toThrow(/missing or empty/);
+  });
+
+  it('throws when SecretString is missing/undefined', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({});
+
+    await expect(_internals.getGitHubToken()).rejects.toThrow(/missing or empty/);
+  });
+});
