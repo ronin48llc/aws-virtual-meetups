@@ -44,6 +44,15 @@ class ApiStack extends Stack {
       },
     });
 
+    // Per-stage default throttle of 200 rps / 400 burst, well under the AWS
+    // account default of 10,000 rps. Operator-only routes are tightened
+    // further — they should only ever fire on the order of clicks-per-
+    // session, so a 5/10 cap catches a runaway client long before WAF
+    // (per-IP, 5-min eval) would. End-user routes (signup, join, GET) keep
+    // the 200/400 default since aggregate scales with audience size. Pairs
+    // with — does not replace — the WAF per-IP rules in waf-construct.js.
+    configureHttpApiThrottling(httpApi);
+
     // -------------------------------------------------------
     // Lambda Functions
     // All Lambdas use the full lambda/ directory as code asset
@@ -579,4 +588,50 @@ class ApiStack extends Stack {
   }
 }
 
-module.exports = { ApiStack };
+// Stage-level default throttle. Well under the AWS account default of
+// 10,000 rps; sized to absorb a popular event's worth of audience-driven
+// traffic without protecting individual end-user-driven routes more
+// strictly than they need. Keys are PascalCase to match CloudFormation —
+// CfnStage's `routeSettings` is a passthrough map and does not perform
+// case transformation on inner objects, so we keep both shapes
+// PascalCase for consistency and use addPropertyOverride below.
+const HTTP_API_DEFAULT_THROTTLE = {
+  ThrottlingRateLimit: 200,
+  ThrottlingBurstLimit: 400,
+};
+
+// Tighter throttle for operator-only routes (start/stop/extend/create).
+// These should never fire faster than a presenter clicking a button.
+const HTTP_API_OPERATOR_THROTTLE = {
+  ThrottlingRateLimit: 5,
+  ThrottlingBurstLimit: 10,
+};
+
+// Route keys (METHOD + space + path) that get the operator throttle.
+// Format must match API Gateway's RouteKey format exactly.
+const HTTP_API_OPERATOR_ROUTES = [
+  'POST /events',
+  'POST /events/{id}/start',
+  'POST /events/{id}/stop',
+  'POST /events/{id}/go-live',
+  'POST /events/{id}/extend',
+  'POST /events/{id}/transcription/start',
+];
+
+function configureHttpApiThrottling(httpApi) {
+  const cfnStage = httpApi.defaultStage.node.defaultChild;
+  // Use addPropertyOverride so both the outer property names and the inner
+  // RouteSettings map values land in CloudFormation with PascalCase keys.
+  cfnStage.addPropertyOverride('DefaultRouteSettings', HTTP_API_DEFAULT_THROTTLE);
+  for (const routeKey of HTTP_API_OPERATOR_ROUTES) {
+    cfnStage.addPropertyOverride(`RouteSettings.${routeKey}`, HTTP_API_OPERATOR_THROTTLE);
+  }
+}
+
+module.exports = {
+  ApiStack,
+  configureHttpApiThrottling,
+  HTTP_API_DEFAULT_THROTTLE,
+  HTTP_API_OPERATOR_THROTTLE,
+  HTTP_API_OPERATOR_ROUTES,
+};
