@@ -138,6 +138,7 @@ const apiStack = new ApiStack(app, `${prefix}-Api`, {
   recordingBucketName: streamingStack.recordingBucket.bucketName,
   recordingCloudfrontDomain: streamingStack.recordingDistribution.distributionDomainName,
   transcriptionFunction: transcriptionStack.transcriptionFunction,
+  chatReviewFunction: streamingStack.chatReviewFunction,
 });
 apiStack.addDependency(authStack);
 apiStack.addDependency(dataStack);
