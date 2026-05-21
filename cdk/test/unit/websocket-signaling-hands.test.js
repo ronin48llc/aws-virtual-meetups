@@ -9,14 +9,13 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: jest.fn(() => ({ send: mockSend })),
   },
+  // GetCommand also covers the issue #70 dispatcher authz check on
+  // lowerAllHands / acknowledgeHand / dismissHand.
   GetCommand: jest.fn((params) => ({ type: 'Get', params })),
   PutCommand: jest.fn((params) => ({ type: 'Put', params })),
   DeleteCommand: jest.fn((params) => ({ type: 'Delete', params })),
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
   BatchWriteCommand: jest.fn((params) => ({ type: 'BatchWrite', params })),
-  // GetCommand needed for the issue #70 dispatcher authz check on
-  // lowerAllHands / acknowledgeHand / dismissHand.
-  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
 }));
 
 // Mock broadcast
