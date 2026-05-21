@@ -38,6 +38,19 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   RATE_WINDOW_SECONDS: 60,
 }));
 
+// After #84 ($connect verifies the Cognito ID token), connect.js requires
+// `verifyIdToken` to return claims. The test passes a fake 'jwt' string so
+// it must mock the verifier to return identity claims that match the
+// queryStringParameters.userId/email below — otherwise $connect returns
+// 401 before the ATTENDEE_JOINED broadcast we're actually asserting.
+jest.mock('../../lambda/shared/jwt-verifier', () => ({
+  verifyIdToken: jest.fn().mockResolvedValue({
+    sub: 'user-new',
+    email: 'newcomer@example.com',
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  }),
+}));
+
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
 process.env.WEBSOCKET_ENDPOINT = 'https://test.example.com/prod';
@@ -76,6 +89,12 @@ describe('Attendee list / ATTENDEE_JOINED — no email leak (issue #85)', () => 
   });
 
   test('$connect ATTENDEE_JOINED broadcast carries no email field', async () => {
+    // Event metadata Get — #144 added a server-side role verification that
+    // checks ownerUserId vs the verified JWT sub. Owner is a DIFFERENT
+    // user so connect downgrades the claimed role to 'attendee' (the test
+    // asserts role='attendee' in the broadcast). Without this mock,
+    // $connect returns 401 "event not found".
+    mockSend.mockResolvedValueOnce({ Item: { PK: 'EVENT#evt_x', SK: 'METADATA', ownerUserId: 'user-organizer' } });
     // Ban check — no ban
     mockSend.mockResolvedValueOnce({ Item: undefined });
     // EventConnections Query — no existing connections
