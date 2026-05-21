@@ -40,10 +40,15 @@ cdk.Tags.of(app).add('ManagedBy', 'CDK');
 // Stack 0: DNS (no dependencies)
 // Route53 Hosted Zone + ACM Certificate for awsvirtualmeetups.com
 // Requirements: 9.1, 9.2, 9.4
+//
+// Issue #147: ACM certificates used by CloudFront MUST live in us-east-1
+// regardless of where the rest of the deployment lives. Pin DnsStack here
+// so a `-c region=us-west-2` (or similar non-default region) deploy still
+// produces a usable cert for FrontendStack's CloudFront distribution.
 // -------------------------------------------------------
 const dnsStack = new DnsStack(app, `${prefix}-Dns`, {
-  env,
-  description: 'Virtual Meetup Platform - DNS (Route53 Hosted Zone + ACM Certificate)',
+  env: { ...env, region: 'us-east-1' },
+  description: 'Virtual Meetup Platform - DNS (Route53 Hosted Zone + ACM Certificate, us-east-1)',
 });
 
 // -------------------------------------------------------
