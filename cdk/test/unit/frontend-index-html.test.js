@@ -90,7 +90,17 @@ describe('frontend/index.html security guards (issue #22)', () => {
       return src && isExternalSrc(src);
     });
     expect(external.length).toBeGreaterThan(0);
-    const missing = external.filter((t) => !hasIntegrity(t.attrs) || !hasCrossorigin(t.attrs));
+    // The Amazon IVS Web Broadcast SDK (web-broadcast.live-video.net) is exempt
+    // from SRI: live-video.net does not send Access-Control-Allow-Origin, so a
+    // crossorigin="anonymous" + integrity attribute makes the browser BLOCK the
+    // load even when the hash is correct (commit 9b8b2e7). SRI stays required on
+    // every other CDN script.
+    const SRI_EXEMPT_HOSTS = ['web-broadcast.live-video.net'];
+    const missing = external.filter((t) => {
+      const src = getSrc(t.attrs);
+      if (SRI_EXEMPT_HOSTS.some((host) => src.includes(host))) return false;
+      return !hasIntegrity(t.attrs) || !hasCrossorigin(t.attrs);
+    });
     if (missing.length > 0) {
       const detail = missing
         .map((t) => `  - ${getSrc(t.attrs)} (integrity=${hasIntegrity(t.attrs)}, crossorigin=${hasCrossorigin(t.attrs)})`)

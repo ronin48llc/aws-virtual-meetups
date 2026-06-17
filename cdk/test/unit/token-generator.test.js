@@ -18,11 +18,11 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
 jest.mock('@aws-sdk/client-ivs-realtime', () => ({
   IVSRealTimeClient: jest.fn(() => ({ send: mockIvsRealTimeSend })),
   CreateParticipantTokenCommand: jest.fn((params) => ({ type: 'CreateParticipantToken', params })),
-}), { virtual: true });
+}));
 jest.mock('@aws-sdk/client-ivschat', () => ({
   IvschatClient: jest.fn(() => ({ send: mockIvsChatSend })),
   CreateChatTokenCommand: jest.fn((params) => ({ type: 'CreateChatToken', params })),
-}), { virtual: true });
+}));
 
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';

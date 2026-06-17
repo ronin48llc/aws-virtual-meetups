@@ -44,7 +44,10 @@ jobs:
         working-directory: cdk
 
       - name: CDK synth (validate templates)
-        run: npx cdk synth --quiet
+        # DnsStack fail-fasts without domainName/hostedZoneId context (#147).
+        # These are throwaway placeholders for template validation only — synth
+        # does not contact Route53, so any well-formed values suffice.
+        run: npx cdk synth --quiet -c domainName=example.com -c hostedZoneId=Z00000000000000000000
         working-directory: cdk
         env:
           AWS_DEFAULT_REGION: us-east-1

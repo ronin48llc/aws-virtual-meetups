@@ -34,30 +34,14 @@ describe('ApiStack — WAF association (#103)', () => {
     template = Template.fromStack(apiStack);
   });
 
-  // Issue #103: previously, ApiStack passed resourceArns:[] to the WafConstruct
-  // and the WebACL was attached to nothing. Every WAF rule was dead weight.
-  test('synthesizes exactly two WebACLAssociations — one per API stage', () => {
-    template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 2);
-  });
-
-  test('one WebACLAssociation targets the HTTP API stage ARN shape', () => {
-    // The ARN is built from the apiId at synth time as a CFN intrinsic, so
-    // we can't match a literal string. Instead, walk the associations and
-    // assert one of them references the HTTP API resource via Fn::Sub or
-    // Fn::Join including the /apis/ path.
-    const associations = template.findResources('AWS::WAFv2::WebACLAssociation');
-    const arns = Object.values(associations).map((res) => JSON.stringify(res.Properties.ResourceArn));
-
-    // Each stage ARN string contains `/apis/` and `/stages/` literals from
-    // the template we synthesized.
-    const httpStageMatches = arns.filter((s) => s.includes('/apis/') && s.includes('/stages/'));
-    expect(httpStageMatches.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test('both WebACLAssociations reference the same WebACL', () => {
-    const associations = template.findResources('AWS::WAFv2::WebACLAssociation');
-    const aclRefs = Object.values(associations).map((res) => JSON.stringify(res.Properties.WebACLArn));
-    expect(aclRefs[0]).toBe(aclRefs[1]);
+  // Issue #103 / fix 8c5fe3d: WAFv2 REGIONAL cannot be associated with API
+  // Gateway *v2* (HTTP / WebSocket) stages — the `/apis/.../stages/...` ARN is
+  // rejected ("The ARN isn't valid"); only REST API (`/restapis/`) ARNs are
+  // supported. So ApiStack intentionally passes resourceArns:[] and creates no
+  // WebACLAssociations. The WebACL itself is still defined (see the REGIONAL
+  // scope test below) so associations can be added if/when v2 support lands.
+  test('creates no WebACLAssociations (WAFv2 cannot attach to API GW v2 stages)', () => {
+    template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
   });
 
   test('WebACL is REGIONAL scope (matches API Gateway v2 stages)', () => {

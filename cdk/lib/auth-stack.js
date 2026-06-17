@@ -37,11 +37,11 @@ class AuthStack extends Stack {
           maxLen: 9,
         }),
       },
-      // NOTE: CDK has minLength:12 per NIST SP 800-63B (#34), but the deployed
-      // pool was created with minLength:8. Reverting to match deployed state.
-      // To enforce the stricter policy, pool would need to be recreated.
+      // Enforce the NIST SP 800-63B minimum length of 12 (#34). A password
+      // policy is updatable in place on an existing User Pool, so re-hardening
+      // here applies on the next deploy without recreating the pool.
       passwordPolicy: {
-        minLength: 8,
+        minLength: 12,
         requireLowercase: true,
         requireUppercase: true,
         requireDigits: true,

@@ -25,11 +25,11 @@ jest.mock('@aws-sdk/client-ivs-realtime', () => ({
   StartCompositionCommand: jest.fn((params) => ({ type: 'StartComposition', params })),
   StopCompositionCommand: jest.fn((params) => ({ type: 'StopComposition', params })),
   GetCompositionCommand: jest.fn((params) => ({ type: 'GetComposition', params })),
-}), { virtual: true });
+}));
 jest.mock('@aws-sdk/client-ivschat', () => ({
   IvschatClient: jest.fn(() => ({ send: mockIvsChatSend })),
   CreateRoomCommand: jest.fn((params) => ({ type: 'CreateRoom', params })),
-}), { virtual: true });
+}));
 jest.mock('@aws-sdk/client-lambda', () => ({
   LambdaClient: jest.fn(() => ({ send: mockLambdaSend })),
   InvokeCommand: jest.fn((params) => ({ type: 'Invoke', params })),
@@ -92,9 +92,19 @@ const liveEvent = {
   compositionArn: 'arn:aws:ivs:us-east-1:123456789:composition/existing-comp',
 };
 
+// The per-call "send" spies — reset fully between tests so a mockResolvedValue
+// (or a leftover *Once queue) from one test can't bleed into the next. That
+// cross-test bleed was the original failure. We deliberately do NOT call
+// jest.resetAllMocks(): that also wipes the jest.mock() factory implementations
+// above (client constructors return { send: mock... }, command constructors
+// return { type, params }), which silently breaks the WebSocket broadcast and
+// DDB command shapes the handler relies on.
+const SEND_MOCKS = [mockDdbSend, mockIvsRealTimeSend, mockIvsChatSend, mockApiGwSend, mockLambdaSend];
+
 describe('Session Manager Lambda handler', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.clearAllMocks();              // drop call history everywhere (keeps factory impls)
+    SEND_MOCKS.forEach((m) => m.mockReset()); // fully reset only the send spies (impl + queues)
   });
 
   describe('POST /events/{id}/start - Start Event', () => {
@@ -547,14 +557,19 @@ describe('Session Manager Lambda handler', () => {
         const result = await handler(event);
         expect(result.statusCode).toBe(200);
 
-        // The final UpdateCommand must persist the SUMMED totals.
-        const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
-        const finalUpdate = UpdateCommand.mock.calls
+        // Assert via the stable send spy, NOT a late require() of UpdateCommand:
+        // the env-config tests above call jest.resetModules(), which would hand a
+        // fresh require() an empty mock (passes in isolation, fails in the full
+        // suite). mockDdbSend is a top-level const the mock factory closes over,
+        // so it always captures the handler's real calls. Each command is the
+        // { type, params } shape returned by the UpdateCommand mock factory.
+        const finalUpdate = mockDdbSend.mock.calls
           .map((c) => c[0])
-          .find((p) => p && p.ExpressionAttributeValues && p.ExpressionAttributeValues[':totalAttendees'] !== undefined);
+          .find((cmd) => cmd && cmd.params && cmd.params.ExpressionAttributeValues
+            && cmd.params.ExpressionAttributeValues[':totalAttendees'] !== undefined);
         expect(finalUpdate).toBeDefined();
-        expect(finalUpdate.ExpressionAttributeValues[':totalAttendees']).toBe(3200);
-        expect(finalUpdate.ExpressionAttributeValues[':totalQuestions']).toBe(850);
+        expect(finalUpdate.params.ExpressionAttributeValues[':totalAttendees']).toBe(3200);
+        expect(finalUpdate.params.ExpressionAttributeValues[':totalQuestions']).toBe(850);
       });
     });
   });
