@@ -1,0 +1,16 @@
+{
+  "name": "virtual-meetup-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Layer 2 UI tests — Playwright E2E against a locally-served frontend with mocked REST/WS/SDKs. Kept OUTSIDE frontend/ so `aws s3 sync ../frontend` never publishes test code to the public bucket.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.1",
+    "@playwright/test": "^1.55.0"
+  }
+}
