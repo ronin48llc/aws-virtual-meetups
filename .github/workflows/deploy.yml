@@ -15,6 +15,28 @@ env:
   AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
 jobs:
+  # Gate the credential-dependent deploy/smoke jobs on whether the AWS deploy
+  # role is actually configured. Secrets can't be referenced in a job-level
+  # `if:`, so surface presence as a job output that downstream jobs gate on.
+  # When AWS_DEPLOY_ROLE_ARN is absent, deploy + smoke-test skip cleanly (no
+  # failure); add the secret and they run automatically. See #165.
+  check-deploy-secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check whether AWS_DEPLOY_ROLE_ARN is set
+        id: check
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          if [ -n "$AWS_DEPLOY_ROLE_ARN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::AWS_DEPLOY_ROLE_ARN secret not set — skipping deploy and smoke-test."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -37,7 +59,8 @@ jobs:
         working-directory: cdk
 
   deploy:
-    needs: test
+    needs: [test, check-deploy-secrets]
+    if: ${{ needs.check-deploy-secrets.outputs.configured == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
