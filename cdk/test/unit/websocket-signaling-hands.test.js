@@ -9,6 +9,9 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: jest.fn(() => ({ send: mockSend })),
   },
+  // GetCommand also covers the issue #70 dispatcher authz check on
+  // lowerAllHands / acknowledgeHand / dismissHand.
+  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
   PutCommand: jest.fn((params) => ({ type: 'Put', params })),
   DeleteCommand: jest.fn((params) => ({ type: 'Delete', params })),
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
@@ -28,6 +31,21 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   RATE_WINDOW_SECONDS: 60,
 }));
 
+// Issue #4: signaling.js calls checkConnectionAuth at the top of every
+// request. In unit tests we always want it to allow through; specific
+// expiry/reject paths are covered in websocket-signaling-tokenexp.test.js.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
+// Mock API Gateway Management API (used by sendToConnection for the
+// getHandsList pagination test added in issue #66).
+const mockApiSend = jest.fn().mockResolvedValue({});
+jest.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
+  ApiGatewayManagementApiClient: jest.fn(() => ({ send: mockApiSend })),
+  PostToConnectionCommand: jest.fn((params) => ({ type: 'PostToConnection', params })),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
@@ -44,6 +62,13 @@ function buildEvent({ action, eventId, data, userId, timestamp, connectionId = '
     requestContext: { connectionId },
     body: JSON.stringify(body),
   };
+}
+
+// Issue #70: prepend a presenter Item to satisfy the dispatcher's authz
+// check on presenter-only actions (lowerAllHands, acknowledgeHand,
+// dismissHand). Tests for non-presenter actions don't call this.
+function presenterAuth() {
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-123', role: 'presenter', eventId: 'evt_abc123' } });
 }
 
 describe('WebSocket Signaling Handler — Hand Raising', () => {
@@ -290,6 +315,12 @@ describe('WebSocket Signaling Handler — Hand Raising', () => {
   });
 
   describe('lowerAllHands', () => {
+    beforeEach(() => {
+      // lowerAllHands is in PRESENTER_ONLY_ACTIONS (issue #70). Each test
+      // here needs the dispatcher's authz GET satisfied first.
+      presenterAuth();
+    });
+
     it('queries all HAND# items, batch deletes them, and broadcasts HANDS_CLEARED', async () => {
       // Mock query returning 2 hand items
       mockSend.mockResolvedValueOnce({
@@ -449,6 +480,50 @@ describe('WebSocket Signaling Handler — Hand Raising', () => {
       const result = await handler(event);
       expect(result.statusCode).toBe(500);
       expect(result.body).toBe('Internal server error');
+    });
+  });
+
+  describe('getHandsList pagination (issue #66)', () => {
+    it('paginates HAND# queries and accumulates across pages before sending', async () => {
+      // Page 1: 2 hands + LastEvaluatedKey
+      mockSend.mockResolvedValueOnce({
+        Items: [
+          { userId: 'u1', displayName: 'Alice', timestamp: '2024-01-01T10:00:00Z' },
+          { userId: 'u2', displayName: 'Bob', timestamp: '2024-01-01T10:01:00Z' },
+        ],
+        LastEvaluatedKey: { PK: 'EVENT#evt_abc', SK: 'HAND#2024-01-01T10:01:00Z' },
+      });
+      // Page 2: 1 hand, no LastEvaluatedKey (terminates)
+      mockSend.mockResolvedValueOnce({
+        Items: [
+          { userId: 'u3', displayName: 'Carol', timestamp: '2024-01-01T10:02:00Z' },
+        ],
+      });
+      // PostToConnectionCommand (sendToConnection) — assume success.
+      mockApiSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        action: 'getHandsList',
+        eventId: 'evt_abc123',
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+
+      // The push to the requesting connection must include ALL 3 hands.
+      const { PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      const sentPayload = JSON.parse(PostToConnectionCommand.mock.calls[0][0].Data);
+      expect(sentPayload.type).toBe('HANDS_LIST');
+      expect(sentPayload.data.hands).toHaveLength(3);
+      expect(sentPayload.data.count).toBe(3);
+
+      // Second Query must have carried the first page's ExclusiveStartKey.
+      const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
+      const queryCalls = QueryCommand.mock.calls.filter(
+        (c) => c[0] && c[0].ExpressionAttributeValues && c[0].ExpressionAttributeValues[':skPrefix'] === 'HAND#',
+      );
+      expect(queryCalls.length).toBe(2);
+      expect(queryCalls[0][0].ExclusiveStartKey).toBeUndefined();
+      expect(queryCalls[1][0].ExclusiveStartKey).toEqual({ PK: 'EVENT#evt_abc', SK: 'HAND#2024-01-01T10:01:00Z' });
     });
   });
 });

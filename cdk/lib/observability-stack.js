@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { Stack, Duration, CfnOutput, RemovalPolicy } = require('aws-cdk-lib');
+const { Stack, Duration, CfnOutput } = require('aws-cdk-lib');
 const cloudwatch = require('aws-cdk-lib/aws-cloudwatch');
 const cloudwatchActions = require('aws-cdk-lib/aws-cloudwatch-actions');
 const sns = require('aws-cdk-lib/aws-sns');
@@ -23,13 +23,17 @@ class ObservabilityStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    const { httpApi, webSocketApi, mainTable, connectionsTable } = props;
+    const { httpApi, webSocketApi, mainTable, connectionsTable, publicationDlq, emailDlq } = props;
     const envName = this.node.tryGetContext('env') || 'dev';
     const alarmEmails = this.node.tryGetContext('alarmEmails') || [];
 
-    // -------------------------------------------------------
-    // Lambda function names (must match api-stack.js)
-    // -------------------------------------------------------
+    // Lambda function names — used below to build dashboard widgets and
+    // Logs Insights query definitions. Log RETENTION on these groups is
+    // now configured per-Lambda via the canonical `logRetention:` prop on
+    // each lambda.Function across the other stacks; the previous pattern
+    // of pre-creating LogGroup constructs here raced with Lambda's
+    // auto-create-on-first-invoke behavior on fresh deploys (CFN cannot
+    // adopt an already-existing log group). See issue #30.
     const lambdaFunctionNames = [
       'VirtualMeetup-EventCrud',
       'VirtualMeetup-SessionManager',
@@ -39,17 +43,6 @@ class ObservabilityStack extends Stack {
       'VirtualMeetup-WsDisconnect',
       'VirtualMeetup-WsSignaling',
     ];
-
-    // -------------------------------------------------------
-    // Log Retention — 30 days for all Lambda Log Groups
-    // -------------------------------------------------------
-    const logGroups = lambdaFunctionNames.map((fnName) => {
-      return new logs.LogGroup(this, `LogGroup-${fnName}`, {
-        logGroupName: `/aws/lambda/${fnName}`,
-        retention: logs.RetentionDays.ONE_MONTH,
-        removalPolicy: RemovalPolicy.RETAIN,
-      });
-    });
 
     // -------------------------------------------------------
     // SNS Topic for Alarms
@@ -70,10 +63,13 @@ class ObservabilityStack extends Stack {
     // CloudWatch Alarms
     // -------------------------------------------------------
 
-    // Alarm: API Error Rate > 5%
+    // Issue #109: description previously claimed "rate exceeds 5%" but
+    // the metric is a raw Sum with threshold 5 — alarm fires on the
+    // 6th 5xx in a 5-minute window regardless of total traffic. That's
+    // still a reasonable signal, but the description was misleading.
     const apiErrorAlarm = new cloudwatch.Alarm(this, 'ApiErrorRateAlarm', {
       alarmName: `VirtualMeetup-${envName}-ApiErrorRate`,
-      alarmDescription: 'API 5xx error rate exceeds 5%',
+      alarmDescription: 'HTTP API: more than 5 server-side (5xx) errors in 5 minutes',
       metric: new cloudwatch.Metric({
         namespace: 'AWS/ApiGateway',
         metricName: '5xx',
@@ -90,50 +86,75 @@ class ObservabilityStack extends Stack {
     });
     apiErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
-    // Alarm: Lambda Error Rate > 1%
-    const lambdaErrorAlarm = new cloudwatch.Alarm(this, 'LambdaErrorRateAlarm', {
-      alarmName: `VirtualMeetup-${envName}-LambdaErrorRate`,
-      alarmDescription: 'Lambda error rate exceeds 1%',
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/Lambda',
-        metricName: 'Errors',
-        statistic: 'Sum',
-        period: Duration.minutes(5),
-      }),
-      threshold: 1,
-      evaluationPeriods: 1,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    // Issue #109: per-function Lambda error alarms. Previously a single
+    // alarm with no FunctionName dimension aggregated AWS/Lambda Errors
+    // across the whole account — noise from unrelated workloads would
+    // trip our pager and real platform errors got lost in the noise.
+    // Per-function alarms give the operator the broken function's name
+    // directly in the alarm. Threshold kept at "≥1 error per 5min" —
+    // the description now states the actual semantic (not the previous
+    // misleading "1% rate" wording).
+    lambdaFunctionNames.forEach((fnName) => {
+      const fnErrorAlarm = new cloudwatch.Alarm(this, `LambdaErrorAlarm-${fnName}`, {
+        alarmName: `VirtualMeetup-${envName}-${fnName}-Errors`,
+        alarmDescription: `${fnName} produced ≥1 error in 5 minutes`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Lambda',
+          metricName: 'Errors',
+          dimensionsMap: { FunctionName: fnName },
+          statistic: 'Sum',
+          period: Duration.minutes(5),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      fnErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
-    lambdaErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
-    // Alarm: DynamoDB Throttling
-    const dynamoThrottleAlarm = new cloudwatch.Alarm(this, 'DynamoThrottleAlarm', {
-      alarmName: `VirtualMeetup-${envName}-DynamoThrottling`,
-      alarmDescription: 'DynamoDB throttled requests detected',
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/DynamoDB',
-        metricName: 'ThrottledRequests',
-        statistic: 'Sum',
-        period: Duration.minutes(1),
-      }),
-      threshold: 0,
-      evaluationPeriods: 1,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    // Issue #109: per-table DynamoDB throttle alarms. The previous alarm
+    // omitted TableName and aggregated across every DDB table in the
+    // account — including CDK bootstrap tables and other apps' tables.
+    [mainTable, connectionsTable].filter(Boolean).forEach((table) => {
+      const tableName = table.tableName;
+      const throttleAlarm = new cloudwatch.Alarm(this, `DynamoThrottleAlarm-${table.node.id}`, {
+        alarmName: `VirtualMeetup-${envName}-${table.node.id}-Throttling`,
+        alarmDescription: `DynamoDB throttled requests on ${table.node.id}`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/DynamoDB',
+          metricName: 'ThrottledRequests',
+          dimensionsMap: { TableName: tableName },
+          statistic: 'Sum',
+          period: Duration.minutes(1),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      throttleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
     });
-    dynamoThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
-    // Alarm: WebSocket Failures > 10/min
-    const wsFailureAlarm = new cloudwatch.Alarm(this, 'WebSocketFailureAlarm', {
-      alarmName: `VirtualMeetup-${envName}-WebSocketFailures`,
-      alarmDescription: 'WebSocket connection errors exceed 10 per minute',
+    // Issue #113: the previous WebSocketFailureAlarm referenced
+    // `ConnectError`, which is NOT a real CloudWatch metric for API
+    // Gateway v2 WebSocket APIs. The actual metric names are
+    // ClientError (4xx, e.g. auth failures on $connect) and
+    // ExecutionError (5xx, integration / Lambda failures). The old
+    // alarm sat in INSUFFICIENT_DATA forever, giving the operator a
+    // false sense that WS failures were being monitored.
+    //
+    // 'prod' must match the WebSocketStage stageName in api-stack.js.
+    const wsStageName = 'prod';
+    const wsApiId = webSocketApi ? webSocketApi.apiId : 'placeholder';
+
+    const wsClientErrorAlarm = new cloudwatch.Alarm(this, 'WebSocketClientErrorAlarm', {
+      alarmName: `VirtualMeetup-${envName}-WebSocketClientErrors`,
+      alarmDescription: 'WebSocket API client errors (4xx — auth failures, bad messages) exceed 10/min',
       metric: new cloudwatch.Metric({
         namespace: 'AWS/ApiGateway',
-        metricName: 'ConnectError',
-        dimensionsMap: {
-          ApiId: webSocketApi ? webSocketApi.apiId : 'placeholder',
-        },
+        metricName: 'ClientError',
+        dimensionsMap: { ApiId: wsApiId, Stage: wsStageName },
         statistic: 'Sum',
         period: Duration.minutes(1),
       }),
@@ -142,24 +163,130 @@ class ObservabilityStack extends Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    wsFailureAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+    wsClientErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
 
-    // Alarm: High Lambda Duration (p99 > 5s)
-    const lambdaDurationAlarm = new cloudwatch.Alarm(this, 'LambdaDurationAlarm', {
-      alarmName: `VirtualMeetup-${envName}-LambdaHighDuration`,
-      alarmDescription: 'Lambda p99 duration exceeds 5 seconds',
+    const wsExecutionErrorAlarm = new cloudwatch.Alarm(this, 'WebSocketExecutionErrorAlarm', {
+      alarmName: `VirtualMeetup-${envName}-WebSocketExecutionErrors`,
+      alarmDescription: 'WebSocket API execution errors (5xx — integration/Lambda failures) exceed 5/min',
       metric: new cloudwatch.Metric({
-        namespace: 'AWS/Lambda',
-        metricName: 'Duration',
-        statistic: 'p99',
-        period: Duration.minutes(5),
+        namespace: 'AWS/ApiGateway',
+        metricName: 'ExecutionError',
+        dimensionsMap: { ApiId: wsApiId, Stage: wsStageName },
+        statistic: 'Sum',
+        period: Duration.minutes(1),
       }),
-      threshold: 5000,
+      threshold: 5,
       evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    lambdaDurationAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+    wsExecutionErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+
+    // Issue #109: per-function p99 duration alarms. Same dimension fix as
+    // the error alarms above — without FunctionName, this aggregated p99
+    // across every Lambda in the account.
+    lambdaFunctionNames.forEach((fnName) => {
+      const fnDurationAlarm = new cloudwatch.Alarm(this, `LambdaDurationAlarm-${fnName}`, {
+        alarmName: `VirtualMeetup-${envName}-${fnName}-Duration`,
+        alarmDescription: `${fnName} p99 duration exceeds 5 seconds over a 5-minute window`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Lambda',
+          metricName: 'Duration',
+          dimensionsMap: { FunctionName: fnName },
+          statistic: 'p99',
+          period: Duration.minutes(5),
+        }),
+        threshold: 5000,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      fnDurationAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+    });
+
+    // Per-function Lambda Throttles alarms (Issue #130).
+    //
+    // Originally introduced by PR #51 as a single account-wide alarm
+    // with no FunctionName dimension. #109 fixed Errors + Duration with
+    // the same per-function pattern but Throttles slipped through — it
+    // also aggregated across every Lambda in the account, paging on
+    // unrelated teams' throttles while hiding our own.
+    //
+    // Throttles surface to clients as 502/503 at API GW but don't bump
+    // LambdaErrors since the underlying Lambda was never invoked. See #50.
+    lambdaFunctionNames.forEach((fnName) => {
+      const fnThrottleAlarm = new cloudwatch.Alarm(this, `LambdaThrottleAlarm-${fnName}`, {
+        alarmName: `VirtualMeetup-${envName}-${fnName}-Throttles`,
+        alarmDescription: `${fnName} hit a Lambda concurrency throttle`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Lambda',
+          metricName: 'Throttles',
+          dimensionsMap: { FunctionName: fnName },
+          statistic: 'Sum',
+          period: Duration.minutes(1),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      fnThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+    });
+
+    // Alarm: API 4xx rate > 50 per 5 min (~10/min). Catches scanning + broken
+    // client deploys + systemic authz issues that don't trip the 5xx alarm.
+    // Two eval periods so a single press-surge of wrong emails doesn't page.
+    const api4xxAlarm = new cloudwatch.Alarm(this, 'Api4xxRateAlarm', {
+      alarmName: `VirtualMeetup-${envName}-Api4xxRate`,
+      alarmDescription: 'API 4xx error rate elevated — possible client breakage or scanning',
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/ApiGateway',
+        metricName: '4xx',
+        dimensionsMap: { ApiId: httpApi ? httpApi.apiId : 'placeholder' },
+        statistic: 'Sum',
+        period: Duration.minutes(5),
+      }),
+      threshold: 50,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    api4xxAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+
+    // -------------------------------------------------------
+    // Issue #121: DLQ alarms — publication + email
+    //
+    // Both DLQs have 14-day retention but no alarms. Messages that land
+    // there expire silently — the operator finds out a meetup never
+    // published or a reminder email never went out only when a user
+    // reports it. With these alarms, ANY message visible in either DLQ
+    // pages the operator within 5 minutes.
+    //
+    // The DLQ refs come from PublicationStack / EmailStack via props.
+    // When the stack is constructed without them (e.g., in isolated unit
+    // tests) the loop is a no-op so synth still succeeds.
+    // -------------------------------------------------------
+    [
+      { queue: publicationDlq, label: 'PublicationDLQ' },
+      { queue: emailDlq, label: 'EmailDLQ' },
+    ].filter((entry) => entry.queue).forEach(({ queue, label }) => {
+      const dlqAlarm = new cloudwatch.Alarm(this, `${label}MessagesAlarm`, {
+        alarmName: `VirtualMeetup-${envName}-${label}-MessagesVisible`,
+        alarmDescription: `${label} has accumulated messages — investigate failed invocations`,
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateNumberOfMessagesVisible',
+          dimensionsMap: { QueueName: queue.queueName },
+          statistic: 'Maximum',
+          period: Duration.minutes(5),
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      dlqAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alarmTopic));
+    });
 
     // -------------------------------------------------------
     // CloudWatch Dashboard
@@ -386,17 +513,13 @@ class ObservabilityStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/ivs-metrics/')),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         ENVIRONMENT: envName,
       },
     });
 
-    // Log group for IVS metrics Lambda
-    new logs.LogGroup(this, 'IvsMetricsLogGroup', {
-      logGroupName: `/aws/lambda/VirtualMeetup-IvsMetrics-${envName}`,
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: RemovalPolicy.RETAIN,
-    });
+    // (Lambda log retention is set via logRetention: on the function above.)
 
     // EventBridge rule to capture IVS stage participant events
     const ivsEventRule = new events.Rule(this, 'IvsStageEventRule', {

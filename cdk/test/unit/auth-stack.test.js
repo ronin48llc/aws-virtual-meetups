@@ -107,11 +107,24 @@ describe('AuthStack', () => {
           Match.objectLike({
             Name: 'role',
             AttributeDataType: 'String',
-            Mutable: true,
             StringAttributeConstraints: {
               MinLength: '4',
               MaxLength: '9',
             },
+          }),
+        ]),
+      });
+    });
+
+    // Issue #91: custom:role is the authorization claim. If it is
+    // writable by the user, anyone who signs up can call
+    // UpdateUserAttributes and promote themselves to organizer.
+    test('custom:role attribute is NOT user-mutable (privilege escalation guard)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        Schema: Match.arrayWith([
+          Match.objectLike({
+            Name: 'role',
+            Mutable: false,
           }),
         ]),
       });
@@ -137,6 +150,50 @@ describe('AuthStack', () => {
     test('creates an App Client with prevent user existence errors', () => {
       template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
         PreventUserExistenceErrors: 'ENABLED',
+      });
+    });
+
+    test('App Client has explicit token validity overrides (issue #44)', () => {
+      // CDK normalizes everything to minutes in the synthesized template:
+      //   id/access: Duration.hours(1) -> 60 minutes.
+      //   refresh:   Duration.days(14) -> 20160 minutes (14 * 24 * 60).
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        IdTokenValidity: 60,
+        AccessTokenValidity: 60,
+        RefreshTokenValidity: 20160,
+        TokenValidityUnits: Match.objectLike({
+          IdToken: 'minutes',
+          AccessToken: 'minutes',
+          RefreshToken: 'minutes',
+        }),
+      });
+    });
+
+    // Issue #99: CDK's default OAuth config (implicit + code grants, scope
+    // aws.cognito.signin.user.admin, callback https://example.com) is dead
+    // surface on this platform — the frontend uses SRP exclusively. The
+    // assertions below trip if a future change re-introduces those defaults.
+    test('App Client has OAuth disabled (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        AllowedOAuthFlowsUserPoolClient: false,
+      });
+    });
+
+    test('App Client does NOT emit an AllowedOAuthFlows property (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        AllowedOAuthFlows: Match.absent(),
+      });
+    });
+
+    test('App Client does NOT emit AllowedOAuthScopes (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        AllowedOAuthScopes: Match.absent(),
+      });
+    });
+
+    test('App Client does NOT emit a placeholder CallbackURLs entry (#99)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        CallbackURLs: Match.absent(),
       });
     });
   });
@@ -196,6 +253,30 @@ describe('AuthStack', () => {
     test('exports Identity Pool ID', () => {
       template.hasOutput('IdentityPoolId', {
         Export: { Name: 'VirtualMeetupIdentityPoolId' },
+      });
+    });
+  });
+
+  describe('Password policy (issue #34)', () => {
+    test('User Pool MinimumLength is 12 (NIST SP 800-63B)', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        Policies: Match.objectLike({
+          PasswordPolicy: Match.objectLike({
+            MinimumLength: 12,
+          }),
+        }),
+      });
+    });
+
+    test('User Pool requires lowercase + uppercase + digits', () => {
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        Policies: Match.objectLike({
+          PasswordPolicy: Match.objectLike({
+            RequireLowercase: true,
+            RequireUppercase: true,
+            RequireNumbers: true,
+          }),
+        }),
       });
     });
   });

@@ -1,6 +1,7 @@
 const path = require('path');
 const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const { SqsDestination } = require('aws-cdk-lib/aws-lambda-destinations');
 const iam = require('aws-cdk-lib/aws-iam');
 const sqs = require('aws-cdk-lib/aws-sqs');
@@ -20,8 +21,9 @@ class EmailStack extends Stack {
     // otherwise fall back to the legacy email-address identity.
     // Requirements: 6.1, 6.2, 6.4
     // -------------------------------------------------------
+    let sesIdentity;
     if (hostedZone) {
-      const sesIdentity = new ses.EmailIdentity(this, 'SenderDomainIdentity', {
+      sesIdentity = new ses.EmailIdentity(this, 'SenderDomainIdentity', {
         identity: ses.Identity.publicHostedZone(hostedZone),
       });
 
@@ -39,7 +41,7 @@ class EmailStack extends Stack {
     } else {
       // Fallback: verify a specific email address when no domain is configured
       const fallbackEmail = this.node.tryGetContext('sesVerifiedEmail') || 'noreply@example.com';
-      const sesIdentity = new ses.EmailIdentity(this, 'SenderEmailIdentity', {
+      sesIdentity = new ses.EmailIdentity(this, 'SenderEmailIdentity', {
         identity: ses.Identity.email(fallbackEmail),
       });
     }
@@ -68,6 +70,7 @@ class EmailStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/email-sender')),
       timeout: Duration.seconds(60),
       memorySize: 256,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: tableName,
         SES_SENDER: sesSender,
@@ -83,6 +86,13 @@ class EmailStack extends Stack {
 
     // -------------------------------------------------------
     // Email Lambda Permissions — SES SendEmail/SendRawEmail
+    //
+    // Scoped to the verified sender identity ARN only (the identity is
+    // created above — domain identity when hostedZone is provided, email-
+    // address identity otherwise). Issue #111 also adds the
+    // ses:FromAddress condition so even within that identity a compromised
+    // Lambda can only send mail with the platform's exact From address —
+    // defense-in-depth against any sub-identity / address-aliasing leak.
     // -------------------------------------------------------
     emailSenderFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -90,7 +100,12 @@ class EmailStack extends Stack {
         'ses:SendEmail',
         'ses:SendRawEmail',
       ],
-      resources: ['*'],
+      resources: [sesIdentity.emailIdentityArn],
+      conditions: {
+        StringEquals: {
+          'ses:FromAddress': sesSender,
+        },
+      },
     }));
 
     // -------------------------------------------------------

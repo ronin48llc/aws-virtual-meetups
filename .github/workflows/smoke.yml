@@ -1,0 +1,50 @@
+name: Smoke tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 06:00 UTC (after typical deploy windows have finished)
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: test/smoke/package-lock.json
+
+      - name: Install smoke-test dependencies
+        # `ws` is required by websocket.smoke.js. Without this step, that
+        # smoke file silently skips itself and the WebSocket layer goes
+        # untested — exactly the "looks healthy in CI but actually broken"
+        # gap this PR was meant to close.
+        run: npm ci
+        working-directory: test/smoke
+
+      - name: Run smoke tests
+        run: node run.js
+        working-directory: test/smoke
+        env:
+          # Each smoke file skips itself if its required config is absent,
+          # so partial configurations still produce useful output.
+          CLOUDFRONT_URL: ${{ secrets.CLOUDFRONT_URL }}
+          API_URL: ${{ secrets.API_URL }}
+          WS_URL: ${{ secrets.WS_URL }}
+          USER_POOL_ID: ${{ secrets.USER_POOL_ID }}
+          USER_POOL_CLIENT_ID: ${{ secrets.USER_POOL_CLIENT_ID }}
+          IVS_TOKEN_GENERATOR_FN: ${{ secrets.IVS_TOKEN_GENERATOR_FN }}
+          SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+          SMOKE_RETRY_MAX: '3'
+          SMOKE_RETRY_DELAY_MS: '1000'

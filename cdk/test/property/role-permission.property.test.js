@@ -16,6 +16,8 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
   UpdateCommand: jest.fn((params) => ({ type: 'Update', params })),
   BatchWriteCommand: jest.fn((params) => ({ type: 'BatchWrite', params })),
+  // GetCommand needed for issue #70 dispatcher authz on presenter-only actions.
+  GetCommand: jest.fn((params) => ({ type: 'Get', params })),
 }));
 
 // Mock broadcast
@@ -29,6 +31,15 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   checkRateLimit: jest.fn().mockResolvedValue({ allowed: true, count: 1 }),
   RATE_LIMIT: 60,
   RATE_WINDOW_SECONDS: 60,
+}));
+
+// Mock per-message auth check (issue #4). The dispatcher calls
+// checkConnectionAuth at the top of every action; without this mock,
+// the auth-check's internal DDB Get consumes the mockSend chain the
+// presenter-authz check (#70) and the handler bodies (#79) rely on
+// for their senderConn lookups, and every action returns 403 or 500.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
 }));
 
 // Set env before requiring handler
@@ -95,6 +106,7 @@ describe('Role and Permission Management Property Tests', () => {
             mockBroadcast.mockResolvedValue({ sent: 2, failed: 0, cleaned: 0 });
 
             // Step 1: Promote user to co-presenter
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand for promote
 
             const promoteEvent = buildWebSocketEvent({
@@ -112,6 +124,7 @@ describe('Role and Permission Management Property Tests', () => {
             expect(promoteCall.ExpressionAttributeValues[':role']).toBe('co-presenter');
 
             // Step 2: Demote user back to attendee
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand for demote
 
             const demoteEvent = buildWebSocketEvent({
@@ -159,6 +172,7 @@ describe('Role and Permission Management Property Tests', () => {
             mockBroadcast.mockResolvedValue({ sent: 2, failed: 0, cleaned: 0 });
 
             // Toggle chat with the given enabled value
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
             const toggleEvent = buildWebSocketEvent({
@@ -225,6 +239,7 @@ describe('Role and Permission Management Property Tests', () => {
             const action = shouldGrant ? 'grantSpeak' : 'revokeSpeak';
 
             // Execute the speak permission action
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId } }); // issue #70 authz
             mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
             const speakEvent = buildWebSocketEvent({

@@ -1,6 +1,7 @@
 const path = require('path');
 const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const events = require('aws-cdk-lib/aws-events');
 const targets = require('aws-cdk-lib/aws-events-targets');
 const secretsmanager = require('aws-cdk-lib/aws-secretsmanager');
@@ -11,7 +12,7 @@ class PublicationStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    const { recordingBucket, emailSenderFunction } = props;
+    const { recordingBucket, emailSenderFunction, recordingCloudfrontDomain } = props;
 
     // -------------------------------------------------------
     // Secrets Manager — GitHub Token
@@ -43,12 +44,20 @@ class PublicationStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/publisher/')),
       timeout: Duration.minutes(5),
       memorySize: 512,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         RECORDING_BUCKET_NAME: recordingBucket.bucketName,
         GITHUB_TOKEN_SECRET_ARN: githubTokenSecret.secretArn,
         GITHUB_REPO: 'aws-community-meetup-recordings',
         GITHUB_OWNER: 'aws-community',
-        CLOUDFRONT_DOMAIN: '',
+        // Issue #107: the publisher builds hls_url as
+        //   https://${CLOUDFRONT_DOMAIN}/recordings/${eventId}/media/master.m3u8
+        // and embeds the same URL in the Jekyll post's <script>. Leaving this
+        // empty (the prior default) produces `https:///recordings/...` —
+        // invalid URL, video player breaks on every published recording.
+        // session-manager already gets the real domain piped through; this
+        // closes the symmetric wire-up for the publisher.
+        CLOUDFRONT_DOMAIN: recordingCloudfrontDomain || '',
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
       },
       deadLetterQueue: publicationDlq,

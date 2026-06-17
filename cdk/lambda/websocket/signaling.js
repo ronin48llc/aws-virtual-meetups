@@ -19,8 +19,9 @@ const { IVSRealTimeClient, DisconnectParticipantCommand } = require('@aws-sdk/cl
 const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
 const { broadcast, getConnectionsForEvent } = require('./broadcast');
 const { checkRateLimit } = require('./rate-limiter');
+const { checkConnectionAuth } = require('./auth-check');
 const { buildEventPK, buildHandSK, buildQuestionSK, chunk } = require('../shared/dynamo-utils');
-const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS } = require('../shared/constants');
+const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS, MAX_DISPLAY_NAME_LENGTH, MAX_QUESTION_TEXT_LENGTH, MAX_ANSWER_TEXT_LENGTH } = require('../shared/constants');
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
@@ -30,6 +31,55 @@ const ivsChatClient = new IvschatClient({});
 const TABLE_NAME = process.env.TABLE_NAME;
 const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
 const WEBSOCKET_ENDPOINT = process.env.WEBSOCKET_ENDPOINT;
+
+// Moderation actions that require the sender to be a presenter or
+// co-presenter. Centralized in the dispatcher so the per-handler check
+// can't be forgotten on future additions. See #70.
+const PRESENTER_ONLY_ACTIONS = new Set([
+  'promoteUser',
+  'demoteUser',
+  'grantSpeak',
+  'revokeSpeak',
+  'toggleChat',
+  'restrictChat',
+  'restrictQuestions',
+  'globalMuteAudio',
+  'globalMuteVideo',
+  'kickUser',
+  'banUser',
+  'unbanUser',
+  'listBans',
+  'acknowledgeHand',
+  'dismissHand',
+  'lowerAllHands',
+  'pinQuestion',
+  'unpinQuestion',
+  'dismissQuestion',
+]);
+
+/**
+ * Run a Query and loop through DynamoDB's LastEvaluatedKey until the
+ * full result is accumulated. DDB caps a single Query page at 1 MB;
+ * without this, snapshot handlers like getQuestionQueue / getHandsList
+ * silently truncate past ~1500 items. See issue #66.
+ *
+ * @param {Object} params - QueryCommand params (no ExclusiveStartKey).
+ * @returns {Promise<Array<Object>>}
+ */
+async function paginatedQuery(params) {
+  const items = [];
+  let exclusiveStartKey;
+  do {
+    const queryParams = { ...params };
+    if (exclusiveStartKey) {
+      queryParams.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(queryParams));
+    items.push(...(result.Items || []));
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return items;
+}
 
 /**
  * Main handler — routes WebSocket messages by action.
@@ -57,6 +107,18 @@ async function handler(event) {
   }
 
   // -------------------------------------------------------
+  // Per-message auth check (issue #4)
+  // The $connect handler captured the Cognito ID-token's `exp` claim onto
+  // the connection record. We verify it hasn't passed before dispatching
+  // any action — expired tokens are rejected even if the WebSocket is
+  // still open.
+  // -------------------------------------------------------
+  const auth = await checkConnectionAuth(connectionId);
+  if (!auth.allowed) {
+    return { statusCode: 401, body: 'Unauthorized: token expired' };
+  }
+
+  // -------------------------------------------------------
   // Rate Limiting: max 60 actions per connection per minute
   // Uses the connections table with TTL for automatic cleanup.
   // -------------------------------------------------------
@@ -64,6 +126,55 @@ async function handler(event) {
   if (!rateCheck.allowed) {
     console.warn('Rate limit exceeded', { connectionId, action, eventId, count: rateCheck.count });
     return { statusCode: 429, body: 'Rate limit exceeded. Please slow down.' };
+  }
+
+  // Centralized displayName length validation. 6+ handlers read
+  // body.data?.displayName || body.displayName and write/broadcast it
+  // without bounds — same DDB-bloat / broadcast-amplification pattern
+  // PR #47 fixed for HTTP signup. Validating once here covers every
+  // current handler that reads this shape AND any future addition.
+  // Absent/empty displayName is fine — many handlers don't need one.
+  // See #60.
+  const dn = (body.data && body.data.displayName) || body.displayName;
+  if (dn !== undefined && dn !== null && dn !== '') {
+    if (typeof dn !== 'string' || dn.length > MAX_DISPLAY_NAME_LENGTH) {
+      return { statusCode: 400, body: `displayName must be <= ${MAX_DISPLAY_NAME_LENGTH} characters` };
+    }
+  }
+
+  // -------------------------------------------------------
+  // Authorization: 19 moderation actions require presenter or
+  // co-presenter role. Without this centralized check, any
+  // authenticated attendee can promote themselves to co-presenter,
+  // kick the actual presenter, globally mute everyone, etc. See #70.
+  // -------------------------------------------------------
+  if (PRESENTER_ONLY_ACTIONS.has(action)) {
+    let senderConn;
+    try {
+      const senderResult = await docClient.send(new GetCommand({
+        TableName: CONNECTIONS_TABLE_NAME,
+        Key: { connectionId },
+      }));
+      senderConn = senderResult.Item || null;
+    } catch (authErr) {
+      console.error('Failed to fetch connection for authz', { connectionId, action, error: authErr.message });
+      return { statusCode: 500, body: 'Internal server error' };
+    }
+    // Issue #75: verify the connection's eventId matches the body's.
+    // Without this, an attendee/co-presenter of event A could act on event B
+    // by spoofing body.eventId. PR #71's role check covers the action being
+    // gated, but it's gating the WRONG event.
+    if (senderConn && senderConn.eventId !== eventId) {
+      console.warn('Cross-event presenter action denied', {
+        connectionId, action, bodyEventId: eventId, connEventId: senderConn.eventId,
+      });
+      return { statusCode: 403, body: 'Connection is for a different event' };
+    }
+    const role = senderConn && senderConn.role;
+    if (role !== SESSION_ROLE.PRESENTER && role !== SESSION_ROLE.CO_PRESENTER) {
+      console.warn('Presenter-only action denied', { connectionId, action, eventId, role });
+      return { statusCode: 403, body: 'Only presenters can perform this action' };
+    }
   }
 
   try {
@@ -315,6 +426,13 @@ async function handleSubmitQuestion(eventId, body, connectionId) {
     return { statusCode: 400, body: 'Missing question text' };
   }
 
+  // Length cap matches the DDB item-bloat fixes from #32/#33 and #46/#47.
+  // text is broadcast to every connection on the event, so the cap also
+  // bounds outbound bandwidth amplification. See #48.
+  if (typeof text !== 'string' || text.trim().length === 0 || text.length > MAX_QUESTION_TEXT_LENGTH) {
+    return { statusCode: 400, body: `question text must be 1-${MAX_QUESTION_TEXT_LENGTH} characters` };
+  }
+
   // Check if the sender's question submission is restricted
   const senderConn = await docClient.send(new GetCommand({
     TableName: CONNECTIONS_TABLE_NAME,
@@ -388,6 +506,12 @@ async function handleAnswerQuestion(eventId, body, connectionId) {
 
   if (!questionId || !timestamp) {
     return { statusCode: 400, body: 'Missing questionId or timestamp' };
+  }
+
+  // Empty answer is intentionally allowed (marks the question answered
+  // without a written reply); only cap when an answer is supplied. See #48.
+  if (answer && (typeof answer !== 'string' || answer.length > MAX_ANSWER_TEXT_LENGTH)) {
+    return { statusCode: 400, body: `answer text must be <= ${MAX_ANSWER_TEXT_LENGTH} characters` };
   }
 
   const pk = buildEventPK(eventId);
@@ -692,23 +816,25 @@ async function sendToConnection(connectionId, message) {
  * @returns {Object} Response with statusCode 200.
  */
 async function handleSendGroupMessage(eventId, body, connectionId) {
-  const userId = body.data?.userId || body.userId;
-  const displayName = body.data?.displayName || body.displayName || '';
   const message = body.data?.message || body.message;
-
-  if (!userId) {
-    return { statusCode: 400, body: 'Missing userId' };
-  }
 
   if (!message) {
     return { statusCode: 400, body: 'Missing message' };
   }
 
-  // Check if the sender's chat is restricted
+  // Issue #79: derive sender identity from the connection record, not the
+  // body. Without this, an attendee can spoof body.userId / body.displayName
+  // and the broadcast carries fake "from" attribution — phishing inside the
+  // chat surface. The body's userId / displayName are now ignored.
   const senderConn = await docClient.send(new GetCommand({
     TableName: CONNECTIONS_TABLE_NAME,
     Key: { connectionId },
   }));
+  if (!senderConn.Item) {
+    return { statusCode: 403, body: 'Connection not found' };
+  }
+  const userId = senderConn.Item.userId;
+  const displayName = senderConn.Item.displayName || senderConn.Item.email || userId || 'Unknown';
 
   if (senderConn.Item?.chatRestricted) {
     await sendToConnection(connectionId, {
@@ -775,8 +901,6 @@ async function handleSendGroupMessage(eventId, body, connectionId) {
  * @returns {Object} Response with statusCode 200.
  */
 async function handleSendDirectMessage(eventId, body, connectionId) {
-  const userId = body.data?.userId || body.userId;
-  const displayName = body.data?.displayName || body.displayName || '';
   const message = body.data?.message || body.message;
   const targetConnectionId = body.data?.targetConnectionId || body.targetConnectionId;
 
@@ -784,27 +908,26 @@ async function handleSendDirectMessage(eventId, body, connectionId) {
     return { statusCode: 400, body: 'Missing message' };
   }
 
-  const timestamp = new Date().toISOString();
-
-  // Get sender's display name from their connection record
-  let senderDisplayName = displayName;
-  if (!senderDisplayName) {
-    try {
-      const senderConn = await docClient.send(new GetCommand({
-        TableName: CONNECTIONS_TABLE_NAME,
-        Key: { connectionId },
-      }));
-      senderDisplayName = senderConn.Item?.displayName || senderConn.Item?.email || userId || 'Unknown';
-    } catch (e) {
-      senderDisplayName = userId || 'Unknown';
-    }
+  // Issue #79: derive sender identity from the connection record, not the
+  // body. The body's userId / displayName are ignored to prevent
+  // sender-spoofing / phishing inside the DM surface.
+  const senderConn = await docClient.send(new GetCommand({
+    TableName: CONNECTIONS_TABLE_NAME,
+    Key: { connectionId },
+  }));
+  if (!senderConn.Item) {
+    return { statusCode: 403, body: 'Connection not found' };
   }
+  const userId = senderConn.Item.userId;
+  const senderDisplayName = senderConn.Item.displayName || senderConn.Item.email || userId || 'Unknown';
+
+  const timestamp = new Date().toISOString();
 
   const directMessage = {
     type: 'DIRECT_MESSAGE',
     eventId,
     data: {
-      userId: userId || connectionId,
+      userId,
       displayName: senderDisplayName,
       message,
       timestamp,
@@ -812,6 +935,22 @@ async function handleSendDirectMessage(eventId, body, connectionId) {
   };
 
   if (targetConnectionId) {
+    // Issue #89: verify the target connection is in THIS event before
+    // delivering. Without this, any logged-in user can DM into another
+    // event by supplying a connectionId from elsewhere — cross-event
+    // message leak. PR #76 closed the sender-side cross-event hole;
+    // this closes the target side.
+    const targetConn = await docClient.send(new GetCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId: targetConnectionId },
+    }));
+    if (!targetConn.Item || targetConn.Item.eventId !== eventId) {
+      console.warn('DM target not in this event', {
+        eventId, targetConnectionId, targetEventId: targetConn.Item && targetConn.Item.eventId,
+      });
+      return { statusCode: 403, body: 'Target connection not in this event' };
+    }
+
     // Presenter sending to a specific attendee
     try {
       await sendToConnection(targetConnectionId, directMessage);
@@ -871,6 +1010,20 @@ async function handleMuteAudio(eventId, body, connectionId) {
     return { statusCode: 400, body: 'Missing targetConnectionId or userId' };
   }
 
+  // Self-mute is allowed for anyone; third-party mute requires presenter
+  // role. PR #71's centralized dispatcher check skipped this handler to
+  // preserve the self-mute UX. See #72.
+  if (targetConnectionId !== connectionId) {
+    const senderConn = await docClient.send(new GetCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId },
+    }));
+    const role = senderConn.Item && senderConn.Item.role;
+    if (role !== SESSION_ROLE.PRESENTER && role !== SESSION_ROLE.CO_PRESENTER) {
+      return { statusCode: 403, body: 'Only presenters can mute other attendees' };
+    }
+  }
+
   await docClient.send(new UpdateCommand({
     TableName: CONNECTIONS_TABLE_NAME,
     Key: { connectionId: targetConnectionId },
@@ -907,6 +1060,19 @@ async function handleMuteVideo(eventId, body, connectionId) {
 
   if (!targetConnectionId || !userId) {
     return { statusCode: 400, body: 'Missing targetConnectionId or userId' };
+  }
+
+  // Self-mute (video off) is allowed for anyone; third-party requires
+  // presenter role. See #72.
+  if (targetConnectionId !== connectionId) {
+    const senderConn = await docClient.send(new GetCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId },
+    }));
+    const role = senderConn.Item && senderConn.Item.role;
+    if (role !== SESSION_ROLE.PRESENTER && role !== SESSION_ROLE.CO_PRESENTER) {
+      return { statusCode: 403, body: 'Only presenters can disable other attendees\' video' };
+    }
   }
 
   await docClient.send(new UpdateCommand({
@@ -1433,10 +1599,13 @@ async function handleDismissHand(eventId, body, connectionId) {
  */
 async function handleGetAttendeeList(eventId, body, connectionId) {
   const connections = await getConnectionsForEvent(eventId);
+  // Issue #85: do not include email in the WS response. Every attendee can
+  // call this action, so emails would be harvested by any participant. The
+  // presenter's auth-gated GET /events/{id}/signups endpoint is the place
+  // for email visibility.
   const attendees = connections.map(c => ({
     userId: c.userId,
     displayName: c.displayName || '',
-    email: c.email || '',
     role: c.role,
     connectionId: c.connectionId,
   }));
@@ -1463,7 +1632,7 @@ async function handleGetAttendeeList(eventId, body, connectionId) {
 async function handleGetQuestionQueue(eventId, body, connectionId) {
   const pk = buildEventPK(eventId);
 
-  const result = await docClient.send(new QueryCommand({
+  const items = await paginatedQuery({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
     ExpressionAttributeValues: {
@@ -1471,9 +1640,9 @@ async function handleGetQuestionQueue(eventId, body, connectionId) {
       ':skPrefix': KEY_PREFIX.QUESTION,
     },
     ScanIndexForward: true,
-  }));
+  });
 
-  const questions = (result.Items || [])
+  const questions = items
     .filter(q => q.status === QUESTION_STATUS.QUEUED)
     .map(q => ({
       questionId: q.questionId,
@@ -1485,7 +1654,7 @@ async function handleGetQuestionQueue(eventId, body, connectionId) {
       timestamp: q.submittedAt,
     }));
 
-  const answered = (result.Items || [])
+  const answered = items
     .filter(q => q.status === QUESTION_STATUS.ANSWERED)
     .map(q => ({
       questionId: q.questionId,
@@ -1519,7 +1688,7 @@ async function handleGetQuestionQueue(eventId, body, connectionId) {
 async function handleGetHandsList(eventId, body, connectionId) {
   const pk = buildEventPK(eventId);
 
-  const result = await docClient.send(new QueryCommand({
+  const items = await paginatedQuery({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
     ExpressionAttributeValues: {
@@ -1527,9 +1696,9 @@ async function handleGetHandsList(eventId, body, connectionId) {
       ':skPrefix': KEY_PREFIX.HAND,
     },
     ScanIndexForward: true,
-  }));
+  });
 
-  const hands = (result.Items || []).map(h => ({
+  const hands = items.map(h => ({
     userId: h.userId,
     displayName: h.displayName,
     timestamp: h.timestamp,

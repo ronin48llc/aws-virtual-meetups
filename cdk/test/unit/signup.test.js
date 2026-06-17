@@ -25,12 +25,13 @@ process.env.EMAIL_LAMBDA_ARN = 'arn:aws:lambda:us-east-1:123456789012:function:V
 
 const { handler } = require('../../lambda/signup/index');
 
-function buildEvent({ method, resource, body, pathParameters, claims }) {
+function buildEvent({ method, resource, body, pathParameters, queryStringParameters, claims }) {
   const event = {
     httpMethod: method,
     resource,
     body: body ? JSON.stringify(body) : null,
     pathParameters: pathParameters || null,
+    queryStringParameters: queryStringParameters || null,
     requestContext: {},
   };
   if (claims) {
@@ -152,11 +153,14 @@ describe('Sign-Up Lambda handler', () => {
     it('returns 400 when required fields are missing', async () => {
       mockSend.mockResolvedValueOnce({ Item: existingEvent });
 
+      // Issue #77: only displayName is required from the body now;
+      // email comes from the JWT claims. So missing-displayName is the
+      // single body-required-field case.
       const event = buildEvent({
         method: 'POST',
         resource: '/events/{id}/signup',
         pathParameters: { id: 'evt_abc123' },
-        body: { displayName: 'Test User' },
+        body: {},
         claims: validClaims,
       });
 
@@ -165,25 +169,45 @@ describe('Sign-Up Lambda handler', () => {
 
       const body = JSON.parse(result.body);
       expect(body.message).toContain('Missing required fields');
-      expect(body.message).toContain('email');
+      expect(body.message).toContain('displayName');
     });
 
-    it('returns 400 when email is invalid', async () => {
+    it('returns 400 when authenticated user has no email claim (issue #77)', async () => {
       mockSend.mockResolvedValueOnce({ Item: existingEvent });
 
       const event = buildEvent({
         method: 'POST',
         resource: '/events/{id}/signup',
         pathParameters: { id: 'evt_abc123' },
-        body: { displayName: 'Test User', email: 'not-an-email' },
-        claims: validClaims,
+        body: { displayName: 'Test User' },
+        // Claims without email — shouldn't happen with Cognito, but guard anyway.
+        claims: { sub: 'user-123', 'custom:role': 'organizer' },
       });
 
       const result = await handler(event);
       expect(result.statusCode).toBe(400);
+      expect(JSON.parse(result.body).message).toMatch(/email claim/);
+    });
 
+    it('uses claims.email even when body.email differs (issue #77 — email-spam fix)', async () => {
+      mockSend.mockResolvedValueOnce({ Item: existingEvent });
+      mockSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        method: 'POST',
+        resource: '/events/{id}/signup',
+        pathParameters: { id: 'evt_abc123' },
+        body: { displayName: 'Test User', email: 'victim@example.com' }, // attacker
+        claims: validClaims, // claims.email = 'user@example.com'
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(201);
       const body = JSON.parse(result.body);
-      expect(body.message).toContain('Invalid email');
+      // The response (and downstream DDB write + email invocation) uses the
+      // claim email, NOT the body email.
+      expect(body.email).toBe('user@example.com');
+      expect(body.email).not.toBe('victim@example.com');
     });
 
     it('returns 400 when body is empty', async () => {
@@ -213,6 +237,49 @@ describe('Sign-Up Lambda handler', () => {
       expect(result.statusCode).toBe(400);
       const body = JSON.parse(result.body);
       expect(body.message).toContain('Event ID is required');
+    });
+
+    describe('displayName length bounds (issue #46)', () => {
+      it('rejects displayName longer than 100 chars with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: { eventId: 'evt_abc', ownerUserId: 'owner', title: 'T' } });
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/signup',
+          pathParameters: { id: 'evt_abc' },
+          body: { displayName: 'x'.repeat(101), email: 'user@example.com' },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+        expect(JSON.parse(result.body).message).toMatch(/displayName/);
+      });
+
+      it('accepts displayName exactly at the 100-char cap', async () => {
+        mockSend.mockResolvedValueOnce({ Item: { eventId: 'evt_abc', ownerUserId: 'owner', title: 'T' } });
+        mockSend.mockResolvedValueOnce({});
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/signup',
+          pathParameters: { id: 'evt_abc' },
+          body: { displayName: 'x'.repeat(100), email: 'user@example.com' },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(201);
+      });
+
+      it('rejects whitespace-only displayName with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: { eventId: 'evt_abc', ownerUserId: 'owner', title: 'T' } });
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/signup',
+          pathParameters: { id: 'evt_abc' },
+          body: { displayName: '   ', email: 'user@example.com' },
+          claims: validClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+      });
     });
   });
 
@@ -403,6 +470,124 @@ describe('Sign-Up Lambda handler', () => {
           },
         })
       );
+    });
+
+    describe('pagination (issue #56)', () => {
+      function lastQueryParams() {
+        for (let i = mockSend.mock.calls.length - 1; i >= 0; i--) {
+          const cmd = mockSend.mock.calls[i][0];
+          if (cmd && cmd.type === 'Query') return cmd.params;
+        }
+        throw new Error('no QueryCommand was issued');
+      }
+
+      it('applies a default Limit of 100 when none is supplied', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [] });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        expect(lastQueryParams().Limit).toBe(100);
+      });
+
+      it('honors an explicit ?limit within the cap', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [] });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { limit: '25' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        expect(lastQueryParams().Limit).toBe(25);
+      });
+
+      it('rejects ?limit above the cap with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { limit: '99999' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+      });
+
+      it('rejects non-positive-integer ?limit with 400', async () => {
+        for (const bad of ['0', 'abc', '-1', '1.5']) {
+          mockSend.mockClear();
+          mockSend.mockResolvedValueOnce({ Item: existingEvent });
+          const event = buildEvent({
+            method: 'GET',
+            resource: '/events/{id}/signups',
+            pathParameters: { id: 'evt_abc123' },
+            queryStringParameters: { limit: bad },
+            claims: ownerClaims,
+          });
+          const result = await handler(event);
+          expect(result.statusCode).toBe(400);
+        }
+      });
+
+      it('returns nextCursor when DynamoDB returns a LastEvaluatedKey', async () => {
+        const lastKey = { PK: 'EVENT#evt_abc123', SK: 'SIGNUP#user-100' };
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [], LastEvaluatedKey: lastKey });
+
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        const body = JSON.parse(result.body);
+        expect(typeof body.nextCursor).toBe('string');
+        const decoded = JSON.parse(Buffer.from(body.nextCursor, 'base64url').toString('utf8'));
+        expect(decoded).toEqual(lastKey);
+      });
+
+      it('forwards a valid ?cursor as ExclusiveStartKey on the Query', async () => {
+        const startKey = { PK: 'EVENT#evt_abc123', SK: 'SIGNUP#user-050' };
+        const cursor = Buffer.from(JSON.stringify(startKey), 'utf8').toString('base64url');
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        mockSend.mockResolvedValueOnce({ Items: [] });
+
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { cursor },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+        expect(lastQueryParams().ExclusiveStartKey).toEqual(startKey);
+      });
+
+      it('rejects a malformed ?cursor with 400', async () => {
+        mockSend.mockResolvedValueOnce({ Item: existingEvent });
+        const event = buildEvent({
+          method: 'GET',
+          resource: '/events/{id}/signups',
+          pathParameters: { id: 'evt_abc123' },
+          queryStringParameters: { cursor: 'not-valid!!!' },
+          claims: ownerClaims,
+        });
+        const result = await handler(event);
+        expect(result.statusCode).toBe(400);
+      });
     });
   });
 

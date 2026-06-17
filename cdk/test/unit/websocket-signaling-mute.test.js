@@ -51,6 +51,13 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   RATE_WINDOW_SECONDS: 60,
 }));
 
+// Issue #4: signaling.js calls checkConnectionAuth at the top of every
+// request. In unit tests we always want it to allow through; specific
+// expiry/reject paths are covered in websocket-signaling-tokenexp.test.js.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
@@ -69,6 +76,12 @@ function buildEvent({ action, eventId, data, userId, targetConnectionId, connect
   };
 }
 
+// Issue #70: prepend a presenter Item to satisfy dispatcher authz on
+// presenter-only actions (restrictChat, restrictQuestions, globalMute*).
+function presenterAuth() {
+  mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-presenter', role: 'presenter', eventId: 'evt_abc123' } });
+}
+
 describe('WebSocket Signaling Handler — Mute and Participation Controls', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -77,6 +90,8 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
 
   describe('muteAudio', () => {
     it('updates connection record with audioMuted flag and notifies the user', async () => {
+      // Issue #72: third-party mute requires presenter authz GET first.
+      mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
       const event = buildEvent({
@@ -134,6 +149,8 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
     });
 
     it('accepts targetConnectionId and userId from top-level body fields', async () => {
+      // Issue #72: third-party mute authz GET.
+      mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
       mockSend.mockResolvedValueOnce({});
 
       const event = buildEvent({
@@ -149,8 +166,55 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
     });
   });
 
+  describe('muteAudio third-party authz (issue #72)', () => {
+    it('allows self-mute without an authz GET', async () => {
+      // Same connectionId for target and sender → no authz GET needed.
+      mockSend.mockResolvedValueOnce({}); // UpdateCommand only
+
+      const event = buildEvent({
+        action: 'muteAudio',
+        eventId: 'evt_abc123',
+        connectionId: 'conn-self',
+        data: { targetConnectionId: 'conn-self', userId: 'user_self' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects third-party mute from a non-presenter connection with 403', async () => {
+      mockSend.mockResolvedValueOnce({ Item: { role: 'attendee' } }); // authz GET
+
+      const event = buildEvent({
+        action: 'muteAudio',
+        eventId: 'evt_abc123',
+        connectionId: 'conn-attacker',
+        data: { targetConnectionId: 'conn-victim', userId: 'user_victim' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+      // No UpdateCommand issued — authz GET only.
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects third-party mute when the senderConn record is missing', async () => {
+      mockSend.mockResolvedValueOnce({ Item: undefined }); // authz GET
+
+      const event = buildEvent({
+        action: 'muteAudio',
+        eventId: 'evt_abc123',
+        connectionId: 'conn-ghost',
+        data: { targetConnectionId: 'conn-victim', userId: 'user_victim' },
+      });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+    });
+  });
+
   describe('muteVideo', () => {
     it('updates connection record with videoDisabled flag and notifies the user', async () => {
+      // Issue #72: third-party mute requires presenter authz GET first.
+      mockSend.mockResolvedValueOnce({ Item: { role: 'presenter' } });
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
       const event = buildEvent({
@@ -193,6 +257,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('restrictChat', () => {
+    beforeEach(presenterAuth);
     it('updates connection record with chatRestricted flag and notifies the user', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
@@ -235,6 +300,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('restrictQuestions', () => {
+    beforeEach(presenterAuth);
     it('updates connection record with questionsRestricted flag and notifies the user', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
@@ -276,6 +342,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('globalMuteAudio', () => {
+    beforeEach(presenterAuth);
     it('updates event metadata with globalAudioMute flag and broadcasts to all', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 
@@ -355,6 +422,7 @@ describe('WebSocket Signaling Handler — Mute and Participation Controls', () =
   });
 
   describe('globalMuteVideo', () => {
+    beforeEach(presenterAuth);
     it('updates event metadata with globalVideoMute flag and broadcasts to all', async () => {
       mockSend.mockResolvedValueOnce({}); // UpdateCommand
 

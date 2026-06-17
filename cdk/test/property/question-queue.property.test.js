@@ -38,6 +38,10 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
 }));
 
 // Set env before requiring handler
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
 process.env.WEBSOCKET_ENDPOINT = 'https://test.execute-api.us-east-1.amazonaws.com/prod';
@@ -271,6 +275,8 @@ describe('Question Queue Property Tests', () => {
             mockBroadcast.mockReset();
             mockBroadcast.mockResolvedValue({ sent: 2, failed: 0, cleaned: 0 });
 
+            // Issue #70: dispatcher authz GET on the connections table.
+            mockSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId } });
             // Mock UpdateCommand
             mockSend.mockResolvedValueOnce({});
 

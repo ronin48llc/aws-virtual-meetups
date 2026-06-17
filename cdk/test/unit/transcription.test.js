@@ -2,8 +2,8 @@
 
 // Set env before requiring handler
 process.env.AWS_REGION = 'us-east-1';
-process.env.AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE';
-process.env.AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+process.env.AWS_ACCESS_KEY_ID = 'fake-test-access-key-id';
+process.env.AWS_SECRET_ACCESS_KEY = 'fake-test-secret-access-key';
 process.env.AWS_SESSION_TOKEN = 'FwoGZXIvYXdzEBYaDHqa0AP';
 
 const { handler, _internals } = require('../../lambda/transcription/index');
@@ -314,8 +314,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('generates a valid WebSocket URL with correct endpoint', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-US',
       sampleRate: 16000,
       mediaEncoding: 'pcm',
@@ -328,8 +328,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('includes required query parameters', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-west-2',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'es-US',
       sampleRate: 44100,
       mediaEncoding: 'ogg-opus',
@@ -349,8 +349,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('includes session token when provided', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       sessionToken: 'FwoGZXIvYXdzEBYaDHqa0AP',
       languageCode: 'en-US',
     });
@@ -361,8 +361,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('does not include session token when not provided', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-US',
     });
 
@@ -372,8 +372,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('uses correct region in endpoint', () => {
     const url = generateTranscribePresignedUrl({
       region: 'eu-west-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-GB',
     });
 
@@ -383,8 +383,8 @@ describe('generateTranscribePresignedUrl', () => {
   it('uses default sampleRate and mediaEncoding', () => {
     const url = generateTranscribePresignedUrl({
       region: 'us-east-1',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId: 'fake-test-access-key-id',
+      secretAccessKey: 'fake-test-secret-access-key',
       languageCode: 'en-US',
     });
 
@@ -435,5 +435,81 @@ describe('buildTranslateConfig', () => {
 
     expect(config.sourceLanguageCode).toBe('ja');
     expect(config.targetLanguageCodes).toEqual(['en', 'ko']);
+  });
+});
+
+// Issue #123: api-stack uses HttpApi (v2). The previous handler only
+// read v1 event fields (event.httpMethod, event.resource,
+// authorizer.claims) — every production transcription request returned
+// 401 → "Unsupported route". The existing tests didn't catch it because
+// they mock v1 too. These tests use the actual v2 event shape API
+// Gateway sends in production.
+describe('Transcription handler — API Gateway v2 event shape (#123)', () => {
+  function buildHttpV2Event({ method, routeKey, pathParameters, body, claims }) {
+    const event = {
+      rawPath: routeKey ? routeKey.split(' ')[1] : '/',
+      routeKey,
+      pathParameters: pathParameters || null,
+      body: body ? JSON.stringify(body) : null,
+      requestContext: {
+        http: { method },
+      },
+    };
+    if (claims) {
+      event.requestContext.authorizer = { jwt: { claims } };
+    }
+    return event;
+  }
+
+  it('routes a v2-shaped POST /events/{id}/transcription/start to the handler', async () => {
+    const event = buildHttpV2Event({
+      method: 'POST',
+      routeKey: 'POST /events/{id}/transcription/start',
+      pathParameters: { id: 'evt_abc' },
+      body: { sourceLanguage: 'en-US' },
+      claims: validClaims,
+    });
+
+    const result = await handler(event);
+
+    // Critical: the handler must NOT return 401 (auth shape works) and
+    // must NOT return 400 "Unsupported route" (routing shape works).
+    expect(result.statusCode).not.toBe(401);
+    expect(result.statusCode).not.toBe(400);
+
+    // Should succeed with a presigned URL payload.
+    expect(result.statusCode).toBe(200);
+    const body = JSON.parse(result.body);
+    expect(body.presignedUrl).toMatch(/^wss:\/\//);
+    expect(body.languageCode).toBe('en-US');
+    expect(body.eventId).toBe('evt_abc');
+  });
+
+  it('returns 401 on a v2 event with no authorizer at all', async () => {
+    const event = buildHttpV2Event({
+      method: 'POST',
+      routeKey: 'POST /events/{id}/transcription/start',
+      pathParameters: { id: 'evt_abc' },
+      body: { sourceLanguage: 'en-US' },
+      // claims omitted → no authorizer wrapper
+    });
+
+    const result = await handler(event);
+    expect(result.statusCode).toBe(401);
+  });
+
+  it('returns 400 "Unsupported route" for an unknown v2 route', async () => {
+    const event = buildHttpV2Event({
+      method: 'GET',
+      routeKey: 'GET /events',
+      claims: validClaims,
+    });
+
+    const result = await handler(event);
+    expect(result.statusCode).toBe(400);
+    const body = JSON.parse(result.body);
+    // The route message should include the normalized path, not "undefined".
+    expect(body.message).toContain('/events');
+    expect(body.message).not.toContain('undefined');
   });
 });

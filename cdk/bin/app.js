@@ -40,10 +40,15 @@ cdk.Tags.of(app).add('ManagedBy', 'CDK');
 // Stack 0: DNS (no dependencies)
 // Route53 Hosted Zone + ACM Certificate for awsvirtualmeetups.com
 // Requirements: 9.1, 9.2, 9.4
+//
+// Issue #147: ACM certificates used by CloudFront MUST live in us-east-1
+// regardless of where the rest of the deployment lives. Pin DnsStack here
+// so a `-c region=us-west-2` (or similar non-default region) deploy still
+// produces a usable cert for FrontendStack's CloudFront distribution.
 // -------------------------------------------------------
 const dnsStack = new DnsStack(app, `${prefix}-Dns`, {
-  env,
-  description: 'Virtual Meetup Platform - DNS (Route53 Hosted Zone + ACM Certificate)',
+  env: { ...env, region: 'us-east-1' },
+  description: 'Virtual Meetup Platform - DNS (Route53 Hosted Zone + ACM Certificate, us-east-1)',
 });
 
 // -------------------------------------------------------
@@ -74,13 +79,15 @@ const streamingStack = new StreamingStack(app, `${prefix}-Streaming`, {
 });
 
 // -------------------------------------------------------
-// Stack 5: Transcription (no dependencies)
+// Stack 5: Transcription (depends on Data for event-ownership lookup)
 // Transcription Lambda with Transcribe + Translate permissions
 // -------------------------------------------------------
 const transcriptionStack = new TranscriptionStack(app, `${prefix}-Transcription`, {
   env,
   description: 'Virtual Meetup Platform - Transcription (Amazon Transcribe + Translate)',
+  mainTable: dataStack.mainTable,
 });
+transcriptionStack.addDependency(dataStack);
 
 // -------------------------------------------------------
 // Stack 6: Frontend (depends on DNS)
@@ -136,6 +143,7 @@ const apiStack = new ApiStack(app, `${prefix}-Api`, {
   recordingBucketName: streamingStack.recordingBucket.bucketName,
   recordingCloudfrontDomain: streamingStack.recordingDistribution.distributionDomainName,
   transcriptionFunction: transcriptionStack.transcriptionFunction,
+  chatReviewFunction: streamingStack.chatReviewFunction,
 });
 apiStack.addDependency(authStack);
 apiStack.addDependency(dataStack);
@@ -153,6 +161,7 @@ const publicationStack = new PublicationStack(app, `${prefix}-Publication`, {
   description: 'Virtual Meetup Platform - Publication (recording to GitHub Pages)',
   recordingBucket: streamingStack.recordingBucket,
   emailSenderFunction: emailStack.emailSenderFunction,
+  recordingCloudfrontDomain: streamingStack.recordingDistribution.distributionDomainName,
 });
 publicationStack.addDependency(streamingStack);
 publicationStack.addDependency(emailStack);
@@ -168,6 +177,10 @@ const observabilityStack = new ObservabilityStack(app, `${prefix}-Observability`
   webSocketApi: apiStack.webSocketApi,
   mainTable: dataStack.mainTable,
   connectionsTable: dataStack.connectionsTable,
+  publicationDlq: publicationStack.publicationDlq,
+  emailDlq: emailStack.emailDlq,
 });
 observabilityStack.addDependency(apiStack);
 observabilityStack.addDependency(dataStack);
+observabilityStack.addDependency(publicationStack);
+observabilityStack.addDependency(emailStack);

@@ -55,6 +55,10 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
 }));
 
 // Set env before requiring handlers
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
 process.env.WEBSOCKET_ENDPOINT = 'https://test.execute-api.us-east-1.amazonaws.com/prod';
@@ -298,6 +302,9 @@ describe('Abuse Prevention Property Tests', () => {
 
             const stageArn = 'arn:aws:ivs:us-east-1:123456789:stage/test-stage';
             const chatRoomArn = 'arn:aws:ivschat:us-east-1:123456789:room/test-room';
+
+            // Issue #70: dispatcher authz GET on the connections table.
+            mockDdbSend.mockResolvedValueOnce({ Item: { role: 'presenter', eventId } });
 
             // Mock: GetCommand returns event metadata with IVS ARNs
             mockDdbSend.mockResolvedValueOnce({

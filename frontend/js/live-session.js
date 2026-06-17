@@ -2704,9 +2704,15 @@ const LiveSession = (() => {
   }
 
   function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
+    // Escapes all five HTML/attr-significant chars so the result is safe to
+    // interpolate into both element text and attribute contexts (incl.
+    // single- or double-quoted onclick="...").
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // --- Cleanup ---

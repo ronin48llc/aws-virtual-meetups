@@ -7,17 +7,20 @@
     "cdk": "cdk",
     "synth": "cdk synth",
     "deploy": "cdk deploy --all",
+    "lint": "eslint .",
     "test": "jest",
     "test:unit": "jest --testPathPattern=test/unit",
     "test:property": "jest --testPathPattern=test/property",
-    "test:integration": "jest --testPathPattern=test/integration"
+    "test:integration": "jest --testPathPattern=test/integration",
+    "postinstall": "cd lambda && npm install --omit=dev --silent"
   },
   "dependencies": {
-    "aws-cdk-lib": "^2.150.0",
+    "aws-cdk-lib": "^2.240.0",
     "constructs": "^10.3.0"
   },
   "devDependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1047.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1050.0",
     "@aws-sdk/client-dynamodb": "^3.1047.0",
     "@aws-sdk/client-ivs-realtime": "^3.1047.0",
     "@aws-sdk/client-ivschat": "^3.1047.0",
@@ -27,15 +30,23 @@
     "@aws-sdk/client-secrets-manager": "^3.1047.0",
     "@aws-sdk/client-ses": "^3.1047.0",
     "@aws-sdk/lib-dynamodb": "^3.1047.0",
+    "@eslint/js": "^9.39.4",
     "aws-cdk": "^2.150.0",
+    "aws-jwt-verify": "^5.1.1",
+    "eslint": "^9.39.4",
     "fast-check": "^3.19.0",
+    "globals": "^15.15.0",
     "jest": "^29.7.0",
+    "jest-environment-jsdom": "^30.4.1",
     "jsdom": "^29.1.1"
   },
   "jest": {
     "testEnvironment": "node",
     "testMatch": [
       "**/test/**/*.test.js"
-    ]
+    ],
+    "moduleNameMapper": {
+      "^aws-jwt-verify$": "<rootDir>/node_modules/aws-jwt-verify"
+    }
   }
 }

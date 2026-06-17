@@ -97,6 +97,15 @@ const CORS_HEADERS = Object.freeze({
 });
 
 /**
+ * Length bounds for user-supplied text fields written to DDB. See #32 / #46 / #48.
+ */
+const MAX_TITLE_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 5000;
+const MAX_DISPLAY_NAME_LENGTH = 100;
+const MAX_QUESTION_TEXT_LENGTH = 1000;
+const MAX_ANSWER_TEXT_LENGTH = 2000;
+
+/**
  * Anonymous session constants.
  */
 const ANONYMOUS = Object.freeze({
@@ -122,5 +131,10 @@ module.exports = {
   SESSION_ROLE,
   QUESTION_STATUS,
   CORS_HEADERS,
+  MAX_TITLE_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_QUESTION_TEXT_LENGTH,
+  MAX_ANSWER_TEXT_LENGTH,
   ANONYMOUS,
 };

@@ -10,26 +10,89 @@ const PLATFORM_NAME = 'AWS Virtual Meetups';
 const BRAND_COLOR = '#FF9900'; // AWS orange
 const PLATFORM_EMAIL = 'phannah@thenetwerk.net';
 
+const DEFAULT_LOCALE = 'en-US';
+
+/**
+ * Per-locale translations of recipient-facing strings (issue #9).
+ *
+ * Demonstration scope: only `signupConfirmation` strings are translated
+ * here. Other email types (reminders, recap, event-created) remain
+ * English-only until follow-up PRs migrate them — that work is mechanical
+ * once the per-locale lookup pattern (this object) is in place.
+ *
+ * If a locale is selected for which no entry exists, `getStrings()`
+ * falls back to en-US. Adding a locale = adding a key to this object.
+ */
+const STRINGS = {
+  'en-US': {
+    signupConfirmation: {
+      subjectPrefix: 'Sign-Up Confirmed',
+      heading: "You're Registered!",
+      greetingWithName: (name) => `Hi ${name},`,
+      greetingAnonymous: 'Hi,',
+      intro: 'You have successfully signed up for the following event:',
+      eventLabel: 'Event',
+      startLabel: 'Scheduled Start',
+      viewButton: 'View Event',
+      viewLine: (url) => `View Event: ${url}`,
+    },
+  },
+  'es-US': {
+    signupConfirmation: {
+      subjectPrefix: 'Inscripción confirmada',
+      heading: '¡Estás inscrito!',
+      greetingWithName: (name) => `Hola ${name},`,
+      greetingAnonymous: 'Hola,',
+      intro: 'Te has registrado correctamente al siguiente evento:',
+      eventLabel: 'Evento',
+      startLabel: 'Comienzo programado',
+      viewButton: 'Ver evento',
+      viewLine: (url) => `Ver evento: ${url}`,
+    },
+  },
+};
+
+/**
+ * Look up the per-locale strings dict, falling back to en-US.
+ * Exported via module.exports so tests can introspect.
+ *
+ * @param {string} locale
+ * @returns {object} the strings dictionary for that locale
+ */
+function getStrings(locale) {
+  return STRINGS[locale] || STRINGS[DEFAULT_LOCALE];
+}
+
 /**
  * Format an ISO 8601 date string for display in emails.
+ *
  * @param {string} isoDate - ISO 8601 date string
- * @returns {string} Human-readable date with timezone (e.g., "Saturday, March 15, 2024 at 6:00 PM UTC")
+ * @param {string} [locale=en-US] - BCP-47 locale code for Intl.DateTimeFormat
+ * @param {string} [timeZone=UTC] - IANA timezone name
+ * @returns {string} Human-readable date with timezone
  */
-function formatEmailDate(isoDate) {
+function formatEmailDate(isoDate, locale, timeZone) {
   const date = new Date(isoDate);
-  const options = {
+  const baseOptions = {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: 'UTC',
     timeZoneName: 'short',
   };
-  const formatted = date.toLocaleString('en-US', options);
-  // toLocaleString returns something like "Saturday, March 15, 2024 at 6:00 PM UTC"
-  return formatted;
+  const effectiveLocale = locale || DEFAULT_LOCALE;
+  const effectiveTz = timeZone || 'UTC';
+  try {
+    return date.toLocaleString(effectiveLocale, { ...baseOptions, timeZone: effectiveTz });
+  } catch (_) {
+    // Bad locale or invalid IANA timezone makes Intl throw RangeError. Fall
+    // back to UTC + DEFAULT_LOCALE rather than crashing the email send —
+    // the recipient gets a slightly different format, but that beats a
+    // dropped notification.
+    return date.toLocaleString(DEFAULT_LOCALE, { ...baseOptions, timeZone: 'UTC' });
+  }
 }
 
 /**
@@ -162,25 +225,30 @@ function renderEventCreated(data) {
 }
 
 function renderSignupConfirmation(data) {
-  const { eventTitle, scheduledStart, eventUrl, recipientName } = data;
-  const dateStr = formatEmailDate(scheduledStart);
-  const subject = `[${PLATFORM_NAME}] Sign-Up Confirmed: ${eventTitle}`;
+  const { eventTitle, scheduledStart, eventUrl, recipientName, locale, timeZone } = data;
+  // If `locale` isn't a locale we ship strings for, also use DEFAULT_LOCALE
+  // for the date formatter — otherwise an unrecognized code like
+  // `fictional-LOCALE` makes Intl.DateTimeFormat throw RangeError.
+  const effectiveLocale = STRINGS[locale] ? locale : DEFAULT_LOCALE;
+  const s = getStrings(effectiveLocale).signupConfirmation;
+  const dateStr = formatEmailDate(scheduledStart, effectiveLocale, timeZone);
+  const subject = `[${PLATFORM_NAME}] ${s.subjectPrefix}: ${eventTitle}`;
 
-  const greeting = recipientName ? `Hi ${escapeHtml(recipientName)},` : 'Hi,';
-  const greetingText = recipientName ? `Hi ${recipientName},` : 'Hi,';
+  const greeting = recipientName ? s.greetingWithName(escapeHtml(recipientName)) : s.greetingAnonymous;
+  const greetingText = recipientName ? s.greetingWithName(recipientName) : s.greetingAnonymous;
 
   const html = wrapHtml(subject, `
-    <h2 style="color: #333333; margin-top: 0;">You're Registered!</h2>
+    <h2 style="color: #333333; margin-top: 0;">${s.heading}</h2>
     <p style="color: #555555;">${greeting}</p>
-    <p style="color: #555555;">You have successfully signed up for the following event:</p>
+    <p style="color: #555555;">${s.intro}</p>
     <table style="width: 100%; margin: 20px 0;">
-      <tr><td style="padding: 8px 0; color: #333333; font-weight: bold;">Event:</td><td style="padding: 8px 0; color: #555555;">${escapeHtml(eventTitle)}</td></tr>
-      <tr><td style="padding: 8px 0; color: #333333; font-weight: bold;">Scheduled Start:</td><td style="padding: 8px 0; color: #555555;">${escapeHtml(dateStr)}</td></tr>
+      <tr><td style="padding: 8px 0; color: #333333; font-weight: bold;">${s.eventLabel}:</td><td style="padding: 8px 0; color: #555555;">${escapeHtml(eventTitle)}</td></tr>
+      <tr><td style="padding: 8px 0; color: #333333; font-weight: bold;">${s.startLabel}:</td><td style="padding: 8px 0; color: #555555;">${escapeHtml(dateStr)}</td></tr>
     </table>
-    <p><a href="${escapeHtml(eventUrl)}" style="display: inline-block; padding: 12px 24px; background-color: ${BRAND_COLOR}; color: #ffffff; text-decoration: none; border-radius: 4px;">View Event</a></p>
+    <p><a href="${escapeHtml(eventUrl)}" style="display: inline-block; padding: 12px 24px; background-color: ${BRAND_COLOR}; color: #ffffff; text-decoration: none; border-radius: 4px;">${s.viewButton}</a></p>
   `);
 
-  const text = `You're Registered!\n\n${greetingText}\n\nYou have successfully signed up for the following event:\n\nEvent: ${eventTitle}\nScheduled Start: ${dateStr}\n\nView Event: ${eventUrl}${textFooter()}`;
+  const text = `${s.heading}\n\n${greetingText}\n\n${s.intro}\n\n${s.eventLabel}: ${eventTitle}\n${s.startLabel}: ${dateStr}\n\n${s.viewLine(eventUrl)}${textFooter()}`;
 
   return { subject, html, text };
 }
@@ -339,4 +407,7 @@ module.exports = {
   renderTemplate,
   formatEmailDate,
   formatDurationMinutes,
+  getStrings,
+  STRINGS,
+  DEFAULT_LOCALE,
 };

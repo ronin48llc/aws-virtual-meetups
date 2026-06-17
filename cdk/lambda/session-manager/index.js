@@ -30,9 +30,34 @@ const TABLE_NAME = process.env.TABLE_NAME;
 const RECORDING_BUCKET_NAME = process.env.RECORDING_BUCKET_NAME;
 const RECORDING_CLOUDFRONT_DOMAIN = process.env.RECORDING_CLOUDFRONT_DOMAIN;
 const IVS_COMPOSITION_ROLE_ARN = process.env.IVS_COMPOSITION_ROLE_ARN;
+
+/**
+ * Sum the Count field across every page of a DynamoDB Query with
+ * Select:'COUNT'. DDB's COUNT mode still respects the 1 MB-per-page
+ * cap; without the loop, totalAttendees / totalQuestions undercount
+ * any event with ~1500+ items in the partition. See issue #64.
+ *
+ * @param {Object} params - QueryCommand params (without Select / ExclusiveStartKey).
+ * @returns {Promise<number>} The total count summed across all pages.
+ */
+async function sumPaginatedCount(params) {
+  let total = 0;
+  let exclusiveStartKey;
+  do {
+    const queryParams = { ...params, Select: 'COUNT' };
+    if (exclusiveStartKey) {
+      queryParams.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(queryParams));
+    total += result.Count || 0;
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return total;
+}
 const WEBSOCKET_ENDPOINT = process.env.WEBSOCKET_ENDPOINT;
 const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
 const EMAIL_LAMBDA_ARN = process.env.EMAIL_LAMBDA_ARN;
+const CHAT_REVIEW_LAMBDA_ARN = process.env.CHAT_REVIEW_LAMBDA_ARN;
 const SESSION_MANAGER_ARN = process.env.SESSION_MANAGER_ARN;
 const SCHEDULER_ROLE_ARN = process.env.SCHEDULER_ROLE_ARN;
 
@@ -169,10 +194,20 @@ async function startEvent(event, eventId) {
   }));
   const stageArn = stageResult.stage.arn;
 
-  // Create IVS Chat Room
-  const chatRoomResult = await ivsChatClient.send(new CreateRoomCommand({
-    name: `meetup-chat-${eventId}`,
-  }));
+  // Create IVS Chat Room.
+  // Issue #101: wire the chat-review Lambda as messageReviewHandler so
+  // every chat message is screened for length, base64 payloads, and the
+  // URL blocklist. fallbackResult:DENY means a Lambda failure blocks
+  // the message rather than letting it through — fail-closed is the
+  // right default for moderation.
+  const createRoomParams = { name: `meetup-chat-${eventId}` };
+  if (CHAT_REVIEW_LAMBDA_ARN) {
+    createRoomParams.messageReviewHandler = {
+      uri: CHAT_REVIEW_LAMBDA_ARN,
+      fallbackResult: 'DENY',
+    };
+  }
+  const chatRoomResult = await ivsChatClient.send(new CreateRoomCommand(createRoomParams));
   const chatRoomArn = chatRoomResult.arn;
 
   // Start server-side composition for recording to S3
@@ -441,29 +476,21 @@ async function stopEvent(event, eventId) {
     const startedAt = existing.Item.startedAt;
     const durationSeconds = startedAt ? Math.floor((new Date(now).getTime() - new Date(startedAt).getTime()) / 1000) : 0;
 
-    // Query signups count for the event
-    const signupsResult = await docClient.send(new QueryCommand({
+    // Sum Count across all pages. DDB's Select:COUNT still respects the
+    // 1 MB page cap — without this loop, totalAttendees / totalQuestions
+    // get the first-page count, not the true total, for any event with
+    // ~1500+ items in the partition. See issue #64.
+    const totalAttendees = await sumPaginatedCount({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
-      ExpressionAttributeValues: {
-        ':pk': buildEventPK(eventId),
-        ':skPrefix': 'SIGNUP#',
-      },
-      Select: 'COUNT',
-    }));
-    const totalAttendees = signupsResult.Count || 0;
+      ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'SIGNUP#' },
+    });
 
-    // Query questions count for the event
-    const questionsResult = await docClient.send(new QueryCommand({
+    const totalQuestions = await sumPaginatedCount({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
-      ExpressionAttributeValues: {
-        ':pk': buildEventPK(eventId),
-        ':skPrefix': 'QUESTION#',
-      },
-      Select: 'COUNT',
-    }));
-    const totalQuestions = questionsResult.Count || 0;
+      ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'QUESTION#' },
+    });
 
     await storeEngagementSummary(TABLE_NAME, eventId, {
       totalAttendees,

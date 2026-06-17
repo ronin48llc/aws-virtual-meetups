@@ -209,6 +209,68 @@ describe('Chat Review Handler', () => {
 
       expect(result.ReviewResult).toBe('DENY');
     });
+
+    // Issue #95: previously, the presence of any http(s) URL would skip the
+    // bare-domain scan entirely, so an attacker could pad a blocked
+    // bare-domain reference with any unrelated URL and evade moderation.
+    describe('Issue #95: bare-domain check must run even when URLs present', () => {
+      it('denies blocked bare-domain reference alongside a benign URL', async () => {
+        process.env.URL_BLOCKLIST = 'drive.google.com,dropbox.com';
+        loadHandler();
+
+        const event = buildEvent('http://example.com drive.google.com/evil');
+        const result = await handler(event);
+
+        expect(result.ReviewResult).toBe('DENY');
+      });
+
+      it('denies blocked bare-domain after a wikipedia link', async () => {
+        process.env.URL_BLOCKLIST = 'dropbox.com';
+        loadHandler();
+
+        const event = buildEvent('See https://en.wikipedia.org/wiki/X and also dropbox.com/share/abc');
+        const result = await handler(event);
+
+        expect(result.ReviewResult).toBe('DENY');
+      });
+
+      it('denies blocked domain mid-sentence among multiple URLs', async () => {
+        process.env.URL_BLOCKLIST = 'mega.nz';
+        loadHandler();
+
+        const event = buildEvent('Mirrors: https://archive.org https://example.com — original on mega.nz/file/abc — backup elsewhere');
+        const result = await handler(event);
+
+        expect(result.ReviewResult).toBe('DENY');
+      });
+
+      it('case-insensitive bare-domain bypass also blocked', async () => {
+        process.env.URL_BLOCKLIST = 'wetransfer.com';
+        loadHandler();
+
+        const event = buildEvent('https://example.com — file at WeTransfer.COM/downloads/xyz');
+        const result = await handler(event);
+
+        expect(result.ReviewResult).toBe('DENY');
+      });
+    });
+
+    describe('Issue #95: blocklist memoization', () => {
+      it('compiles the blocklist once at module load, not per invocation', () => {
+        process.env.URL_BLOCKLIST = 'drive.google.com';
+        const mod = loadHandler();
+        const first = mod._internals.CACHED_BLOCKLIST;
+
+        // Mutating the env var after module load must not change cached blocklist.
+        process.env.URL_BLOCKLIST = 'something-else.com';
+        const second = mod._internals.CACHED_BLOCKLIST;
+
+        expect(second).toBe(first);
+        expect(first).toHaveLength(1);
+        expect(first[0].test('drive.google.com')).toBe(true);
+        expect(first[0].test('something-else.com')).toBe(false);
+      });
+    });
   });
 
   describe('Edge cases', () => {

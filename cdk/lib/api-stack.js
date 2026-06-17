@@ -7,16 +7,26 @@ const { WebSocketApi, WebSocketStage } = require('aws-cdk-lib/aws-apigatewayv2')
 const { WebSocketLambdaIntegration } = require('aws-cdk-lib/aws-apigatewayv2-integrations');
 const apigatewayv2 = require('aws-cdk-lib/aws-apigatewayv2');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
+const { RemovalPolicy } = require('aws-cdk-lib');
 const iam = require('aws-cdk-lib/aws-iam');
 const route53 = require('aws-cdk-lib/aws-route53');
 const targets = require('aws-cdk-lib/aws-route53-targets');
 const { WafConstruct } = require('./waf-construct');
 
+/**
+ * Name of the EventBridge Scheduler group all virtual-meetup schedules live
+ * in. The group itself is created by EmailStack (see lib/email-stack.js); we
+ * only reference its name here to build a resource ARN pattern for IAM
+ * scoping. Must match `SCHEDULER_GROUP` in lambda/shared/scheduler-utils.js.
+ */
+const SCHEDULER_GROUP_NAME = 'VirtualMeetup-Reminders';
+
 class ApiStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    const { userPool, userPoolClient, mainTable, connectionsTable, emailSenderFunction, schedulerRole, hostedZone, certificate } = props;
+    const { userPool, userPoolClient, mainTable, connectionsTable, emailSenderFunction, schedulerRole, hostedZone, certificate, chatReviewFunction } = props;
     const domainName = props.domainName || 'yourdomain.com';
     // -------------------------------------------------------
     // Cognito Authorizer for HTTP API
@@ -44,6 +54,26 @@ class ApiStack extends Stack {
       },
     });
 
+    // Per-stage default throttle of 200 rps / 400 burst, well under the AWS
+    // account default of 10,000 rps. Operator-only routes are tightened
+    // further — they should only ever fire on the order of clicks-per-
+    // session, so a 5/10 cap catches a runaway client long before WAF
+    // (per-IP, 5-min eval) would. End-user routes (signup, join, GET) keep
+    // the 200/400 default since aggregate scales with audience size. Pairs
+    // with — does not replace — the WAF per-IP rules in waf-construct.js.
+    configureHttpApiThrottling(httpApi);
+
+    // Access logs for HTTP API $default stage. Lambda CloudWatch Logs cover
+    // handler execution but not routing/authz/throttle decisions; without
+    // these you can't drill into a specific request ("user got a 401 at
+    // 14:23") after an incident. See issue #36.
+    const httpApiAccessLogGroup = new logs.LogGroup(this, 'HttpApiAccessLogGroup', {
+      logGroupName: '/aws/apigateway/VirtualMeetupHttpApi/access',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    configureAccessLogs(httpApi.defaultStage, httpApiAccessLogGroup);
+
     // -------------------------------------------------------
     // Lambda Functions
     // All Lambdas use the full lambda/ directory as code asset
@@ -60,6 +90,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
@@ -76,6 +107,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -86,14 +118,19 @@ class ApiStack extends Stack {
     });
 
     // Token Generator Lambda
+    // Workload: 1-2 DDB GetItems, 1 DDB Query, IVS CreateParticipantToken +
+    // IVS CreateChatToken. Observed p99 well under 2s; 15s is ~7x margin
+    // for cold start + transient downstream slowness without sitting on
+    // a true hang. See #42.
     const tokenGeneratorFn = new lambda.Function(this, 'TokenGeneratorFunction', {
       functionName: 'VirtualMeetup-TokenGenerator',
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'token-generator/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
-      timeout: Duration.seconds(30),
+      timeout: Duration.seconds(15),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -115,14 +152,17 @@ class ApiStack extends Stack {
     });
 
     // Signup Lambda
+    // Workload: 1 DDB Put, 1 DDB Get, 1 fire-and-forget async Lambda invoke.
+    // Observed p99 under 1s; 15s is comfortable margin. See #42.
     const signupFn = new lambda.Function(this, 'SignupFunction', {
       functionName: 'VirtualMeetup-Signup',
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'signup/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
-      timeout: Duration.seconds(30),
+      timeout: Duration.seconds(15),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
@@ -130,6 +170,8 @@ class ApiStack extends Stack {
     });
 
     // WebSocket Connect Lambda
+    // Needs Cognito user-pool / client IDs so it can verify the ID token
+    // presented in the $connect query string (issue #4).
     const wsConnectFn = new lambda.Function(this, 'WsConnectFunction', {
       functionName: 'VirtualMeetup-WsConnect',
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -138,9 +180,12 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(10),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
       },
     });
 
@@ -153,6 +198,7 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(10),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
@@ -160,6 +206,9 @@ class ApiStack extends Stack {
     });
 
     // WebSocket Signaling Lambda
+    // Cognito env vars carried for future use; today only the per-message
+    // tokenExp check needs them (sourced via the connection record), but
+    // any deeper validation (e.g., revocation lookup) will use them too.
     const wsSignalingFn = new lambda.Function(this, 'WsSignalingFunction', {
       functionName: 'VirtualMeetup-WsSignaling',
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -168,9 +217,12 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(10),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
         CONNECTIONS_TABLE_NAME: connectionsTable.tableName,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
       },
     });
 
@@ -201,13 +253,21 @@ class ApiStack extends Stack {
       emailSenderFunction.grantInvoke(sessionManagerFn);
     }
 
+    // -------------------------------------------------------
+    // Scope scheduler:Create/DeleteSchedule actions to schedules inside the
+    // VirtualMeetup-Reminders group only. The group itself is created by
+    // EmailStack; we just build the ARN pattern that scopes IAM here.
+    // -------------------------------------------------------
+    const scopedScheduleArn =
+      `arn:aws:scheduler:${this.region}:${this.account}:schedule/${SCHEDULER_GROUP_NAME}/*`;
+
     eventCrudFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
         'scheduler:CreateSchedule',
         'scheduler:DeleteSchedule',
       ],
-      resources: ['*'],
+      resources: [scopedScheduleArn],
     }));
 
     // Allow Event CRUD Lambda to pass the scheduler role
@@ -269,12 +329,17 @@ class ApiStack extends Stack {
     sessionManagerFn.addEnvironment('IVS_STORAGE_CONFIG_ARN', props.ivsStorageConfigArn || '');
     sessionManagerFn.addEnvironment('IVS_ENCODER_CONFIG_ARN', props.ivsEncoderConfigArn || '');
     sessionManagerFn.addEnvironment('RECORDING_CLOUDFRONT_DOMAIN', props.recordingCloudfrontDomain || '');
+    // Issue #101: session-manager wires this ARN as messageReviewHandler on
+    // every IVS Chat room it creates. Empty value means no review handler
+    // (fail-open) — only acceptable for non-prod or staging deploys that
+    // explicitly opt out.
+    sessionManagerFn.addEnvironment('CHAT_REVIEW_LAMBDA_ARN', chatReviewFunction ? chatReviewFunction.functionArn : '');
 
     // Session Manager needs scheduler permissions for auto-stop and warning schedules
     sessionManagerFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule'],
-      resources: ['*'],
+      resources: [scopedScheduleArn],
     }));
 
     // Session Manager needs iam:PassRole for the scheduler execution role
@@ -284,6 +349,24 @@ class ApiStack extends Stack {
         actions: ['iam:PassRole'],
         resources: [schedulerRole.roleArn],
       }));
+
+      // Issue #119: the EventBridge Scheduler role (defined in
+      // email-stack.js) was only granted lambda:InvokeFunction on the
+      // email Lambda. Auto-stop and time-warning schedules that
+      // session-manager creates pointing at itself failed at firing time
+      // because the role couldn't invoke session-manager. Add the grant
+      // here via an explicit iam.Policy resource owned by ApiStack so it
+      // doesn't create a cross-stack cycle (the role lives in EmailStack,
+      // the function lives in ApiStack — putting the policy in ApiStack
+      // means the dependency runs ApiStack → EmailStack only).
+      new iam.Policy(this, 'SchedulerInvokeSessionManagerPolicy', {
+        roles: [schedulerRole],
+        statements: [new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['lambda:InvokeFunction'],
+          resources: [sessionManagerFn.functionArn],
+        })],
+      });
     }
 
     tokenGeneratorFn.addToRolePolicy(new iam.PolicyStatement({
@@ -451,6 +534,14 @@ class ApiStack extends Stack {
       autoDeploy: true,
     });
 
+    // Access logs for the WebSocket prod stage (same rationale as HTTP).
+    const wsApiAccessLogGroup = new logs.LogGroup(this, 'WebSocketApiAccessLogGroup', {
+      logGroupName: '/aws/apigateway/VirtualMeetupWebSocketApi/access',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    configureAccessLogs(webSocketStage, wsApiAccessLogGroup);
+
     // Custom WebSocket routes
     const wsSignalingIntegration = new WebSocketLambdaIntegration('WsSignalingIntegration', wsSignalingFn);
 
@@ -576,14 +667,23 @@ class ApiStack extends Stack {
     // -------------------------------------------------------
     // AWS WAF - Web Application Firewall
     // Requirements: 23.1, 23.2, 23.3, 23.4
-    // Note: WAF v2 REGIONAL WebACL cannot be directly associated with API Gateway v2
-    // (HTTP API / WebSocket API). WAF protection is applied via CloudFront in the
-    // Frontend stack. API-level rate limiting is handled by API Gateway throttling.
+    // Issue #103: AWS added AWS::ApiGatewayV2::Stage to the WAF v2 REGIONAL
+    // supported-resource list in late 2021. Both HTTP API stages and
+    // WebSocket API stages can be associated. The prior `resourceArns: []`
+    // configuration left the WebACL attached to nothing — every WAF rule
+    // (rate limits, AWS managed Common/SQLi/KnownBadInputs, 4KB body cap)
+    // was dead weight while paying ~$11/month per environment.
+    //
+    // Stage ARN format for API Gateway v2:
+    //   arn:<partition>:apigateway:<region>::/apis/<api-id>/stages/<stage-name>
+    // HTTP API defaultStage is the `$default` stage CDK creates.
     // -------------------------------------------------------
+    const httpStageArn = `arn:${this.partition}:apigateway:${this.region}::/apis/${httpApi.apiId}/stages/${httpApi.defaultStage.stageName}`;
+    const wsStageArn = `arn:${this.partition}:apigateway:${this.region}::/apis/${webSocketApi.apiId}/stages/${webSocketStage.stageName}`;
+
     const waf = new WafConstruct(this, 'ApiWaf', {
       scope: 'REGIONAL',
-      // No resource ARNs — API Gateway v2 doesn't support WAF association directly
-      resourceArns: [],
+      resourceArns: [httpStageArn, wsStageArn],
     });
 
     this.webAcl = waf.webAcl;
@@ -624,4 +724,80 @@ class ApiStack extends Stack {
   }
 }
 
-module.exports = { ApiStack };
+// Stage-level default throttle. Well under the AWS account default of
+// 10,000 rps; sized to absorb a popular event's worth of audience-driven
+// traffic without protecting individual end-user-driven routes more
+// strictly than they need. Keys are PascalCase to match CloudFormation —
+// CfnStage's `routeSettings` is a passthrough map and does not perform
+// case transformation on inner objects, so we keep both shapes
+// PascalCase for consistency and use addPropertyOverride below.
+const HTTP_API_DEFAULT_THROTTLE = {
+  ThrottlingRateLimit: 200,
+  ThrottlingBurstLimit: 400,
+};
+
+// Tighter throttle for operator-only routes (start/stop/extend/create).
+// These should never fire faster than a presenter clicking a button.
+const HTTP_API_OPERATOR_THROTTLE = {
+  ThrottlingRateLimit: 5,
+  ThrottlingBurstLimit: 10,
+};
+
+// Route keys (METHOD + space + path) that get the operator throttle.
+// Format must match API Gateway's RouteKey format exactly.
+const HTTP_API_OPERATOR_ROUTES = [
+  'POST /events',
+  'POST /events/{id}/start',
+  'POST /events/{id}/stop',
+  'POST /events/{id}/go-live',
+  'POST /events/{id}/extend',
+  'POST /events/{id}/transcription/start',
+];
+
+function configureHttpApiThrottling(httpApi) {
+  const cfnStage = httpApi.defaultStage.node.defaultChild;
+  // Use addPropertyOverride so both the outer property names and the inner
+  // RouteSettings map values land in CloudFormation with PascalCase keys.
+  cfnStage.addPropertyOverride('DefaultRouteSettings', HTTP_API_DEFAULT_THROTTLE);
+  for (const routeKey of HTTP_API_OPERATOR_ROUTES) {
+    cfnStage.addPropertyOverride(`RouteSettings.${routeKey}`, HTTP_API_OPERATOR_THROTTLE);
+  }
+}
+
+// JSON format for API Gateway access logs. Captures the per-request facts
+// you actually need to debug a production incident: who, when, what, why
+// it failed. The $context.* variables are evaluated by API Gateway at log
+// emit time.
+const API_GATEWAY_ACCESS_LOG_FORMAT = JSON.stringify({
+  requestId: '$context.requestId',
+  ip: '$context.identity.sourceIp',
+  requestTime: '$context.requestTime',
+  httpMethod: '$context.httpMethod',
+  routeKey: '$context.routeKey',
+  status: '$context.status',
+  protocol: '$context.protocol',
+  responseLength: '$context.responseLength',
+  integrationStatus: '$context.integrationStatus',
+  integrationError: '$context.integration.error',
+  authorizerError: '$context.authorizer.error',
+  principalId: '$context.authorizer.principalId',
+  errorMessage: '$context.error.message',
+});
+
+function configureAccessLogs(stage, logGroup) {
+  const cfnStage = stage.node.defaultChild;
+  cfnStage.accessLogSettings = {
+    destinationArn: logGroup.logGroupArn,
+    format: API_GATEWAY_ACCESS_LOG_FORMAT,
+  };
+}
+
+module.exports = {
+  ApiStack,
+  configureHttpApiThrottling,
+  HTTP_API_DEFAULT_THROTTLE,
+  HTTP_API_OPERATOR_THROTTLE,
+  HTTP_API_OPERATOR_ROUTES,
+  configureAccessLogs,
+  API_GATEWAY_ACCESS_LOG_FORMAT,
+};

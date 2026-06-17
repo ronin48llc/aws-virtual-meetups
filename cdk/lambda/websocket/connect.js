@@ -2,13 +2,15 @@
 
 /**
  * WebSocket $connect handler.
- * Authenticates via query string token and stores connection in WebSocketConnections table.
+ * Verifies the Cognito ID token from the query string, stores connection
+ * metadata (including token expiry) in the WebSocketConnections table.
  * @module websocket/connect
  */
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, GetCommand, QueryCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
 const { broadcast } = require('./broadcast');
+const { verifyIdToken } = require('../shared/jwt-verifier');
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
@@ -32,25 +34,74 @@ async function handler(event) {
 
   const token = queryParams.token;
   const eventId = queryParams.eventId;
-  const userId = queryParams.userId;
-  const role = queryParams.role || 'attendee';
+  const claimedRole = queryParams.role || 'attendee';
   const displayName = queryParams.displayName || '';
-  const email = queryParams.email || '';
 
-  // Validate required parameters
-  if (!token || !eventId || !userId) {
-    console.error('Missing required query parameters', { connectionId, hasToken: !!token, hasEventId: !!eventId, hasUserId: !!userId });
+  // Required parameters
+  if (!token || !eventId) {
+    console.error('Missing required query parameters', { connectionId, hasToken: !!token, hasEventId: !!eventId });
     return { statusCode: 401, body: 'Unauthorized: missing required parameters' };
   }
 
-  // Validate role
+  // Verify the Cognito ID token. Identity (userId, email) comes from the
+  // verified claims, never the query string — the client cannot lie about
+  // who they are. (issue #4)
+  const claims = await verifyIdToken(token);
+  if (!claims) {
+    console.error('Token verification failed', { connectionId, eventId });
+    return { statusCode: 401, body: 'Unauthorized: invalid token' };
+  }
+  const userId = claims.sub;
+  const email = claims.email || '';
+  const tokenExp = typeof claims.exp === 'number' ? claims.exp : null;
+
+  // Validate the claimed role is one of the known values. The query string is
+  // client-controlled, so we still re-verify the actual role against event
+  // ownership below (issue #83).
   const validRoles = ['presenter', 'co-presenter', 'attendee'];
-  if (!validRoles.includes(role)) {
-    console.error('Invalid role', { connectionId, role });
+  if (!validRoles.includes(claimedRole)) {
+    console.error('Invalid role', { connectionId, claimedRole });
     return { statusCode: 401, body: 'Unauthorized: invalid role' };
   }
 
   try {
+    // Issue #83: verify the claimed role against the event's ownership data.
+    // The query string is client-controlled, so trusting `claimedRole` as-is
+    // means any attendee can connect with role=presenter and bypass every
+    // downstream connection.role check (PR #71, #80, token-generator).
+    // Minimum viable rule: owner -> presenter, everyone else -> attendee.
+    // Co-presenter persistence across reconnects is intentionally NOT
+    // supported here; promotion must be re-issued by the presenter via the
+    // `promoteUser` WS action each session.
+    let verifiedRole = 'attendee';
+    if (TABLE_NAME) {
+      const eventResult = await docClient.send(new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: `EVENT#${eventId}`, SK: 'METADATA' },
+      }));
+
+      if (!eventResult.Item) {
+        console.error('Event not found at $connect', { connectionId, eventId });
+        return { statusCode: 401, body: 'Unauthorized: event not found' };
+      }
+
+      if (eventResult.Item.ownerUserId === userId) {
+        verifiedRole = 'presenter';
+      }
+      // else: stays 'attendee' — co-presenter promotions must come from the
+      // server-mediated `promoteUser` action during the session.
+    } else {
+      // Test / pre-deploy environments without TABLE_NAME fall through with
+      // attendee role. Production stack ALWAYS sets TABLE_NAME.
+      verifiedRole = 'attendee';
+    }
+
+    if (claimedRole !== verifiedRole) {
+      console.warn('Role downgraded at $connect', {
+        connectionId, eventId, userId, claimedRole, verifiedRole,
+      });
+    }
+
     // Check if user is banned from this event
     if (TABLE_NAME) {
       const banRecord = await docClient.send(new GetCommand({
@@ -64,15 +115,29 @@ async function handler(event) {
       }
     }
 
-    // Remove stale connections for the same user+event (prevent duplicates)
-    const existingConnections = await docClient.send(new QueryCommand({
-      TableName: CONNECTIONS_TABLE_NAME,
-      IndexName: 'EventConnections',
-      KeyConditionExpression: 'eventId = :eventId',
-      ExpressionAttributeValues: { ':eventId': eventId },
-    }));
+    // Remove stale connections for the same user+event (prevent duplicates).
+    // Loop through DDB Query pages — single-page reads silently miss any
+    // stale connection past the 1 MB page cap, so on large events the
+    // reconnecting user accumulates duplicate connections and receives
+    // every broadcast twice. See issue #68.
+    const existingConnectionItems = [];
+    let dedupExclusiveStartKey;
+    do {
+      const dedupParams = {
+        TableName: CONNECTIONS_TABLE_NAME,
+        IndexName: 'EventConnections',
+        KeyConditionExpression: 'eventId = :eventId',
+        ExpressionAttributeValues: { ':eventId': eventId },
+      };
+      if (dedupExclusiveStartKey) {
+        dedupParams.ExclusiveStartKey = dedupExclusiveStartKey;
+      }
+      const dedupResult = await docClient.send(new QueryCommand(dedupParams));
+      existingConnectionItems.push(...(dedupResult.Items || []));
+      dedupExclusiveStartKey = dedupResult.LastEvaluatedKey;
+    } while (dedupExclusiveStartKey);
 
-    const staleConnections = (existingConnections.Items || []).filter(
+    const staleConnections = existingConnectionItems.filter(
       (conn) => conn.userId === userId && conn.connectionId !== connectionId
     );
 
@@ -97,22 +162,30 @@ async function handler(event) {
         connectionId,
         eventId,
         userId,
-        role,
+        role: verifiedRole,
         displayName,
         email,
         connectedAt: now.toISOString(),
         ttl,
+        // Per-message auth: signaling.js compares tokenExp against the
+        // current time on every message and rejects expired connections.
+        // See issue #4.
+        tokenExp,
       },
     }));
 
-    console.info('Connection stored', { connectionId, eventId, userId, role });
+    console.info('Connection stored', { connectionId, eventId, userId, role: verifiedRole });
 
-    // Broadcast ATTENDEE_JOINED to all connections for this event (exclude self — connection not fully established yet)
+    // Broadcast ATTENDEE_JOINED to all connections for this event (exclude
+    // self — connection not fully established yet). Issue #85: do NOT
+    // include email in the broadcast — every attendee receives this, and
+    // emails would be harvestable by any participant.
     try {
       await broadcast(eventId, {
         type: 'ATTENDEE_JOINED',
         eventId,
-        data: { userId, displayName, email, role, connectionId },
+        // Issue #85: do not include `email` in the broadcast payload.
+        data: { userId, displayName, role: verifiedRole, connectionId },
       }, { excludeConnectionId: connectionId });
     } catch (broadcastError) {
       console.error('Failed to broadcast ATTENDEE_JOINED', { connectionId, eventId, error: broadcastError.message });

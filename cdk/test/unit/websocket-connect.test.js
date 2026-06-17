@@ -1,5 +1,24 @@
 'use strict';
 
+// Mock the JWT verifier so connect.js trusts the test query-string token.
+// Tests can override mockVerifyIdToken.mockResolvedValueOnce(...) to exercise
+// the failure path (returns null).
+const mockVerifyIdToken = jest.fn();
+jest.mock('../../lambda/shared/jwt-verifier', () => ({
+  verifyIdToken: mockVerifyIdToken,
+}));
+
+// Default: every test sees a verifier that returns claims matching the
+// userId/email/exp the existing tests expect. Individual tests override
+// via mockResolvedValueOnce.
+beforeEach(() => {
+  mockVerifyIdToken.mockResolvedValue({
+    sub: 'user-456',
+    email: 'user-456@example.com',
+    exp: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+  });
+});
+
 // Mock AWS SDK
 const mockSend = jest.fn();
 jest.mock('@aws-sdk/client-dynamodb', () => ({
@@ -41,12 +60,23 @@ function buildDisconnectEvent({ connectionId = 'conn-123' }) {
   };
 }
 
+// Issue #83: $connect now does an event-metadata GET to verify the claimed
+// role against the event's ownership. Prepend a mock for that GET so each
+// test gets the right verifiedRole. Default = non-owner (verifiedRole stays
+// attendee); pass `{ ownerUserId: '<self>' }` to elevate to presenter.
+function mockEventMetadata({ ownerUserId = 'some-other-owner' } = {}) {
+  mockSend.mockResolvedValueOnce({
+    Item: { PK: 'EVENT#evt_abc123', SK: 'METADATA', ownerUserId },
+  });
+}
+
 describe('WebSocket Connect Handler', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
   it('stores connection with valid parameters and returns 200', async () => {
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
     // Ban check - no ban
     mockSend.mockResolvedValueOnce({ Item: undefined });
     // PutCommand for connection
@@ -80,6 +110,7 @@ describe('WebSocket Connect Handler', () => {
   });
 
   it('stores connection with connectedAt and ttl fields', async () => {
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
     // Ban check - no ban
     mockSend.mockResolvedValueOnce({ Item: undefined });
     // PutCommand
@@ -103,6 +134,7 @@ describe('WebSocket Connect Handler', () => {
   });
 
   it('defaults role to attendee when not provided', async () => {
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
     // Ban check - no ban
     mockSend.mockResolvedValueOnce({ Item: undefined });
     // PutCommand
@@ -124,11 +156,13 @@ describe('WebSocket Connect Handler', () => {
     expect(putCall.Item.role).toBe('attendee');
   });
 
-  it('accepts co-presenter role', async () => {
-    // Ban check - no ban
-    mockSend.mockResolvedValueOnce({ Item: undefined });
-    // PutCommand
-    mockSend.mockResolvedValueOnce({});
+  it('downgrades client-claimed co-presenter role to attendee at $connect (issue #83)', async () => {
+    // Issue #83: $connect no longer trusts the client's claimed role. A
+    // non-owner connecting with role=co-presenter gets stored as attendee.
+    // Promotion happens server-side via the `promoteUser` WS action.
+    mockEventMetadata({ ownerUserId: 'some-other-owner' });
+    mockSend.mockResolvedValueOnce({ Item: undefined }); // ban check
+    mockSend.mockResolvedValueOnce({});                  // put
 
     const event = buildConnectEvent({
       queryStringParameters: {
@@ -144,10 +178,49 @@ describe('WebSocket Connect Handler', () => {
 
     const { PutCommand } = require('@aws-sdk/lib-dynamodb');
     const putCall = PutCommand.mock.calls[0][0];
-    expect(putCall.Item.role).toBe('co-presenter');
+    expect(putCall.Item.role).toBe('attendee');
+  });
+
+  it('elevates event owner to presenter regardless of claimed role (issue #83)', async () => {
+    mockEventMetadata({ ownerUserId: 'user-456' });        // owner = caller
+    mockSend.mockResolvedValueOnce({ Item: undefined });   // ban check
+    mockSend.mockResolvedValueOnce({});                    // put
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token-123',
+        eventId: 'evt_abc123',
+        userId: 'user-456',
+        role: 'attendee',  // claim attendee — gets elevated to presenter.
+      },
+    });
+
+    const result = await connectHandler(event);
+    expect(result.statusCode).toBe(200);
+
+    const { PutCommand } = require('@aws-sdk/lib-dynamodb');
+    const putCall = PutCommand.mock.calls[0][0];
+    expect(putCall.Item.role).toBe('presenter');
+  });
+
+  it('returns 401 when the event does not exist (issue #83)', async () => {
+    mockSend.mockResolvedValueOnce({ Item: undefined }); // event-metadata GET — not found
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token-123',
+        eventId: 'evt_missing',
+        userId: 'user-456',
+      },
+    });
+
+    const result = await connectHandler(event);
+    expect(result.statusCode).toBe(401);
+    expect(result.body).toMatch(/event not found/);
   });
 
   it('returns 401 when user is banned from the event', async () => {
+    mockEventMetadata(); // issue #83
     // Ban check - ban exists
     mockSend.mockResolvedValueOnce({
       Item: { PK: 'EVENT#evt_abc123', SK: 'BAN#user-456', userId: 'user-456', bannedAt: '2024-01-01T00:00:00Z' },
@@ -168,6 +241,7 @@ describe('WebSocket Connect Handler', () => {
   });
 
   it('allows connection when user is not banned', async () => {
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
     // Ban check - no ban
     mockSend.mockResolvedValueOnce({ Item: undefined });
     // PutCommand
@@ -212,16 +286,80 @@ describe('WebSocket Connect Handler', () => {
     expect(result.statusCode).toBe(401);
   });
 
-  it('returns 401 when userId is missing', async () => {
+  it('returns 401 when token verification fails (issue #4)', async () => {
+    // Override the default verifier mock for this test only — returning
+    // null means the JWT was invalid or expired.
+    mockVerifyIdToken.mockResolvedValueOnce(null);
+
     const event = buildConnectEvent({
       queryStringParameters: {
-        token: 'valid-token-123',
+        token: 'forged-or-expired-token',
         eventId: 'evt_abc123',
       },
     });
 
     const result = await connectHandler(event);
     expect(result.statusCode).toBe(401);
+    expect(result.body).toMatch(/invalid token/i);
+  });
+
+  it('uses claims.sub for userId — never the query string (issue #4)', async () => {
+    mockVerifyIdToken.mockResolvedValueOnce({
+      sub: 'verified-user-from-jwt',
+      email: 'verified@example.com',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
+    // Ban check
+    mockSend.mockResolvedValueOnce({ Item: undefined });
+    // Query for stale connections
+    mockSend.mockResolvedValueOnce({ Items: [] });
+    // Put for new connection
+    mockSend.mockResolvedValueOnce({});
+    // Broadcast Query
+    mockSend.mockResolvedValue({ Items: [] });
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token',
+        eventId: 'evt_abc123',
+        userId: 'attacker-claimed-id', // should be ignored
+      },
+    });
+
+    await connectHandler(event);
+
+    const { PutCommand } = require('@aws-sdk/lib-dynamodb');
+    const putCall = PutCommand.mock.calls[0][0];
+    expect(putCall.Item.userId).toBe('verified-user-from-jwt');
+    expect(putCall.Item.userId).not.toBe('attacker-claimed-id');
+  });
+
+  it('stores tokenExp on the connection record for per-message validation (issue #4)', async () => {
+    const exp = Math.floor(Date.now() / 1000) + 1800;
+    mockVerifyIdToken.mockResolvedValueOnce({
+      sub: 'user-456',
+      email: 'user-456@example.com',
+      exp,
+    });
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
+    mockSend.mockResolvedValueOnce({ Item: undefined });
+    mockSend.mockResolvedValueOnce({ Items: [] });
+    mockSend.mockResolvedValueOnce({});
+    mockSend.mockResolvedValue({ Items: [] });
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token',
+        eventId: 'evt_abc123',
+      },
+    });
+
+    await connectHandler(event);
+
+    const { PutCommand } = require('@aws-sdk/lib-dynamodb');
+    const putCall = PutCommand.mock.calls[0][0];
+    expect(putCall.Item.tokenExp).toBe(exp);
   });
 
   it('returns 401 when queryStringParameters is null', async () => {
@@ -249,6 +387,7 @@ describe('WebSocket Connect Handler', () => {
   });
 
   it('returns 500 when DynamoDB put fails', async () => {
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
     // Ban check - no ban
     mockSend.mockResolvedValueOnce({ Item: undefined });
     // PutCommand fails
@@ -265,6 +404,59 @@ describe('WebSocket Connect Handler', () => {
     const result = await connectHandler(event);
     expect(result.statusCode).toBe(500);
     expect(result.body).toContain('Internal server error');
+  });
+
+  it('paginates the existing-connections dedup query — finds and deletes a stale connection on page 2 (issue #68)', async () => {
+    mockEventMetadata(); // issue #83 — prepend event-metadata for role verification
+    // 1. Ban check
+    mockSend.mockResolvedValueOnce({ Item: undefined });
+    // 2. Query page 1 — different user's connection + LastEvaluatedKey
+    mockSend.mockResolvedValueOnce({
+      Items: [
+        { connectionId: 'conn-other-1', userId: 'other-user', eventId: 'evt_abc123' },
+      ],
+      LastEvaluatedKey: { connectionId: 'conn-other-1', eventId: 'evt_abc123' },
+    });
+    // 3. Query page 2 — our user's stale connection, no LastEvaluatedKey (terminates)
+    mockSend.mockResolvedValueOnce({
+      Items: [
+        { connectionId: 'conn-stale', userId: 'user-456', eventId: 'evt_abc123' },
+      ],
+    });
+    // 4. DeleteCommand for the stale connection
+    mockSend.mockResolvedValueOnce({});
+    // 5. PutCommand for the new connection
+    mockSend.mockResolvedValueOnce({});
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        token: 'valid-token-123',
+        eventId: 'evt_abc123',
+        userId: 'user-456',
+      },
+    });
+
+    const result = await connectHandler(event);
+    expect(result.statusCode).toBe(200);
+
+    // Verify DeleteCommand was issued for the page-2 stale connection.
+    const { DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+    expect(DeleteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        TableName: 'TestConnectionsTable',
+        Key: { connectionId: 'conn-stale' },
+      }),
+    );
+
+    // First two QueryCommands against EventConnections are the dedup loop:
+    // page 1 with no ExclusiveStartKey, page 2 with the first page's LEK.
+    // (A third QueryCommand is fired later by the ATTENDEE_JOINED broadcast
+    // for the same GSI; not part of the dedup loop, so don't assert on it.)
+    const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
+    const queryCalls = QueryCommand.mock.calls.filter((c) => c[0] && c[0].IndexName === 'EventConnections');
+    expect(queryCalls.length).toBeGreaterThanOrEqual(2);
+    expect(queryCalls[0][0].ExclusiveStartKey).toBeUndefined();
+    expect(queryCalls[1][0].ExclusiveStartKey).toEqual({ connectionId: 'conn-other-1', eventId: 'evt_abc123' });
   });
 });
 

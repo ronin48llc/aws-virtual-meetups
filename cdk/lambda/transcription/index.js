@@ -12,10 +12,18 @@
  */
 
 const crypto = require('crypto');
-const { success, badRequest, unauthorized, forbidden, serverError } = require('../shared/response');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, GetCommand } = require('@aws-sdk/lib-dynamodb');
+const { success, badRequest, unauthorized, forbidden, notFound, serverError } = require('../shared/response');
 const { parseBody, validateRequiredFields } = require('../shared/validation');
+const { SK } = require('../shared/constants');
+const { buildEventPK } = require('../shared/dynamo-utils');
 
 const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
+const TABLE_NAME = process.env.TABLE_NAME;
+
+const ddbClient = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(ddbClient);
 
 /**
  * Supported source languages for Amazon Transcribe Streaming.
@@ -35,11 +43,18 @@ const SUPPORTED_TARGET_LANGUAGES = [
 
 /**
  * Extract authenticated user claims from the request context.
+ *
+ * Issue #123: api-stack mounts the route on an HttpApi (API Gateway v2),
+ * which passes claims under `authorizer.jwt.claims`, not the v1
+ * `authorizer.claims`. Handle both shapes so the Lambda also works
+ * against v1 (REST API) integrations and test mocks.
+ *
  * @param {Object} event - API Gateway event.
  * @returns {Object|null} User claims or null if unauthenticated.
  */
 function getAuthClaims(event) {
-  const claims = event.requestContext && event.requestContext.authorizer && event.requestContext.authorizer.claims;
+  const authorizer = event.requestContext && event.requestContext.authorizer;
+  const claims = authorizer && (authorizer.claims || (authorizer.jwt && authorizer.jwt.claims));
   if (!claims || !claims.sub) {
     return null;
   }
@@ -212,6 +227,23 @@ async function startTranscription(event) {
     return badRequest('Event ID is required');
   }
 
+  // Issue #81: verify the requester owns the event before issuing
+  // SigV4-signed Transcribe credentials. Without this any logged-in
+  // user could mint Transcribe Streaming sessions on the platform's
+  // AWS account (cost amplification).
+  if (TABLE_NAME) {
+    const eventResult = await docClient.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
+    }));
+    if (!eventResult.Item) {
+      return notFound('Event not found');
+    }
+    if (eventResult.Item.ownerUserId !== claims.userId) {
+      return forbidden('Only the event owner can start transcription');
+    }
+  }
+
   const { valid, data, error } = parseBody(event.body);
   if (!valid) {
     return badRequest(error);
@@ -281,18 +313,26 @@ async function startTranscription(event) {
 /**
  * Main Lambda handler.
  * Routes requests based on HTTP method and path.
+ *
+ * Issue #123: api-stack uses HttpApi (API Gateway v2), which sends
+ *   - method as event.requestContext.http.method (not event.httpMethod)
+ *   - resource as event.routeKey ("POST /events/{id}/...") (not event.resource)
+ * Other handlers in this codebase (event-crud, signup, session-manager,
+ * token-generator) already dual-route; transcription was the only outlier
+ * and every production request returned `Unsupported route: undefined undefined`.
  */
 exports.handler = async (event) => {
   try {
-    const method = event.httpMethod;
-    const resource = event.resource;
+    const method = event.httpMethod || (event.requestContext && event.requestContext.http && event.requestContext.http.method);
+    const resource = event.resource || event.routeKey || '';
+    const normalizedResource = resource.includes(' ') ? resource.split(' ')[1] : resource;
 
     // Route: POST /events/{id}/transcription/start
-    if (method === 'POST' && resource === '/events/{id}/transcription/start') {
+    if (method === 'POST' && normalizedResource === '/events/{id}/transcription/start') {
       return await startTranscription(event);
     }
 
-    return badRequest(`Unsupported route: ${method} ${resource}`);
+    return badRequest(`Unsupported route: ${method} ${normalizedResource}`);
   } catch (err) {
     console.error('Transcription orchestrator error:', err);
     return serverError('An unexpected error occurred');

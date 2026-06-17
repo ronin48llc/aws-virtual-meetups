@@ -1,6 +1,8 @@
+const path = require('path');
 const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
 const s3 = require('aws-cdk-lib/aws-s3');
 const iam = require('aws-cdk-lib/aws-iam');
+const lambda = require('aws-cdk-lib/aws-lambda');
 const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
 
@@ -8,12 +10,50 @@ class StreamingStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    // S3 bucket for IVS recordings with lifecycle rules
+    // Recording retention: operators can override via cdk context
+    // (`recordingsRetentionDays`) in cdk.context.json. Default is 3 years —
+    // conservative for AWS user-group meetup archives. Lifecycle changes
+    // apply to existing objects on next S3 daily evaluation, so bumping
+    // this DOWN on a deployed account will queue older recordings for
+    // deletion within ~24h. Set higher before deploying if existing
+    // content predates the chosen retention.
+    const retentionDays = this.node.tryGetContext('recordingsRetentionDays') ?? 1095;
+
+    // Server access logs target bucket for the recording bucket. Kept
+    // separate (S3 requires the log target bucket be different from the
+    // source) and RETAIN'd on destroy so forensic logs survive a stack
+    // teardown. Capped at 365 days so the bucket doesn't grow unbounded.
+    // See issue #52.
+    const recordingAccessLogsBucket = new s3.Bucket(this, 'RecordingAccessLogsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: RemovalPolicy.RETAIN,
+      lifecycleRules: [
+        {
+          id: 'ExpireAccessLogs',
+          enabled: true,
+          expiration: Duration.days(365),
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+      ],
+    });
+
+    // S3 bucket for IVS recordings with lifecycle rules.
+    // Issue #115: eventBridgeEnabled is required for the PublicationStack's
+    // EventBridge Rule (RecordingCreatedRule) to fire. Without it S3 does
+    // NOT publish Object Created events to EventBridge — the publisher
+    // Lambda never gets invoked, recordings sit in S3 forever, no Jekyll
+    // post gets committed, no recap email goes out. The publication-stack
+    // file's comment "The recording bucket must have EventBridge
+    // notifications enabled" was an assumption that was never enforced.
     const recordingBucket = new s3.Bucket(this, 'RecordingBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
+      serverAccessLogsBucket: recordingAccessLogsBucket,
+      serverAccessLogsPrefix: 'recordings/',
+      eventBridgeEnabled: true,
       lifecycleRules: [
         {
           id: 'IntelligentTiering',
@@ -28,6 +68,18 @@ class StreamingStack extends Stack {
               transitionAfter: Duration.days(90),
             },
           ],
+          // Cap current-version retention so Glacier storage doesn't grow
+          // forever. Operators override via cdk context recordingsRetentionDays.
+          expiration: Duration.days(retentionDays),
+          // versioned: true means every overwrite (HLS manifest churn during
+          // a live session) creates a noncurrent version. Without this, those
+          // sit in Standard storage forever — typically a bigger leak than
+          // the recordings themselves.
+          noncurrentVersionExpiration: Duration.days(30),
+          // Abort any IVS Composition multipart upload that didn't finish
+          // (failed composition, network drop). Otherwise the fragments are
+          // invisible in the console and bill silently.
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
         },
       ],
     });
@@ -47,6 +99,25 @@ class StreamingStack extends Stack {
 
     recordingBucket.grantRead(recordingOAI);
 
+    // CloudFront access logs target for the recording distribution.
+    // Separate bucket from the S3 server-access logs (#52), retained on
+    // teardown, OBJECT_WRITER (CloudFront requires it), 365-day expiry.
+    // See issue #58.
+    const recordingDistributionAccessLogsBucket = new s3.Bucket(this, 'RecordingDistributionAccessLogsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: RemovalPolicy.RETAIN,
+      objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
+      lifecycleRules: [
+        {
+          id: 'ExpireRecordingDistributionAccessLogs',
+          enabled: true,
+          expiration: Duration.days(365),
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+      ],
+    });
+
     // CloudFront distribution for serving recordings via HTTPS with CORS
     const recordingDistribution = new cloudfront.Distribution(this, 'RecordingDistribution', {
       defaultBehavior: {
@@ -57,6 +128,9 @@ class StreamingStack extends Stack {
         responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS_WITH_PREFLIGHT,
       },
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      enableLogging: true,
+      logBucket: recordingDistributionAccessLogsBucket,
+      logFilePrefix: 'recording-cf/',
     });
 
     // IVS Storage Configuration — links the S3 bucket for composition recording
@@ -100,7 +174,47 @@ class StreamingStack extends Stack {
       ],
     });
 
+    // -------------------------------------------------------
+    // Chat Review Lambda (Issue #101)
+    //
+    // The chat-review handler enforces length, base64, and URL-blocklist
+    // moderation rules on every IVS Chat message. Before #101 the source
+    // existed but no CDK code deployed it and no chat room referenced it
+    // as a messageReviewHandler — live meetups shipped with zero moderation.
+    //
+    // The blocklist is sourced from CDK context (-c urlBlocklist=...) with
+    // a conservative default targeting common phishing/file-share domains.
+    // -------------------------------------------------------
+    const urlBlocklist = this.node.tryGetContext('urlBlocklist')
+      || 'drive.google.com,dropbox.com,wetransfer.com,mega.nz';
+
+    const chatReviewFunction = new lambda.Function(this, 'ChatReviewFunction', {
+      functionName: 'VirtualMeetup-ChatReview',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/chat-review/')),
+      timeout: Duration.seconds(5),
+      memorySize: 128,
+      environment: {
+        URL_BLOCKLIST: urlBlocklist,
+      },
+    });
+
+    // IVS Chat must be able to invoke the review handler for every message.
+    // Without this resource-based permission, CreateRoom with
+    // messageReviewHandler fails synchronously.
+    chatReviewFunction.addPermission('AllowIvsChatInvoke', {
+      principal: new iam.ServicePrincipal('ivschat.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+    });
+
     // CloudFormation outputs
+    new CfnOutput(this, 'ChatReviewFunctionArn', {
+      value: chatReviewFunction.functionArn,
+      description: 'ARN of the IVS Chat message-review Lambda',
+      exportName: 'ChatReviewFunctionArn',
+    });
+
     new CfnOutput(this, 'RecordingBucketName', {
       value: recordingBucket.bucketName,
       description: 'S3 bucket name for IVS recordings',
@@ -130,6 +244,7 @@ class StreamingStack extends Stack {
     this.ivsCompositionRole = ivsCompositionRole;
     this.ivsManagementPolicy = ivsManagementPolicy;
     this.recordingDistribution = recordingDistribution;
+    this.chatReviewFunction = chatReviewFunction;
   }
 }
 

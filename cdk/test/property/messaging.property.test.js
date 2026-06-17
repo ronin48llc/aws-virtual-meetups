@@ -43,6 +43,16 @@ jest.mock('../../lambda/websocket/rate-limiter', () => ({
   RATE_WINDOW_SECONDS: 60,
 }));
 
+// Mock per-message auth check (issue #4) — the signaling dispatcher calls
+// checkConnectionAuth before any handler. Without this mock, the auth
+// check's internal DDB Get consumes the mockSend chain that handlers
+// downstream rely on (specifically the senderConn lookup from #79),
+// and handleSendDirectMessage's GetCommand then sees `undefined` and
+// returns 403/500.
+jest.mock('../../lambda/websocket/auth-check', () => ({
+  checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
@@ -187,6 +197,7 @@ describe('Messaging Property Tests', () => {
             ];
 
             // Mock getConnectionsForEvent to return all connections
+            mockSend.mockResolvedValueOnce({ Item: { connectionId: senderConnId, userId: senderUserId, displayName } }); // issue #79
             mockGetConnectionsForEvent.mockResolvedValueOnce(allConnections);
 
             const event = buildWebSocketEvent({
@@ -267,6 +278,7 @@ describe('Messaging Property Tests', () => {
               { connectionId: 'conn_att_3', userId: 'user_att_3', eventId, role: 'attendee' },
             ];
 
+            mockSend.mockResolvedValueOnce({ Item: { connectionId: senderConnId, userId: senderUserId, displayName } }); // issue #79
             mockGetConnectionsForEvent.mockResolvedValueOnce(connections);
 
             const event = buildWebSocketEvent({
@@ -390,6 +402,9 @@ describe('Messaging Property Tests', () => {
             const timestamps = [];
 
             for (const msg of messages) {
+              // Issue #79: senderConn drives displayed identity. Use the
+              // message's userId/displayName so the broadcast carries them.
+              mockSend.mockResolvedValueOnce({ Item: { connectionId: senderConnId, userId: msg.userId, displayName: msg.displayName } });
               mockGetConnectionsForEvent.mockResolvedValueOnce(connections);
 
               const event = buildWebSocketEvent({

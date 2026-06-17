@@ -1,4 +1,4 @@
-const { Stack, CfnOutput, RemovalPolicy } = require('aws-cdk-lib');
+const { Stack, CfnOutput, Duration, RemovalPolicy } = require('aws-cdk-lib');
 const s3 = require('aws-cdk-lib/aws-s3');
 const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
@@ -58,10 +58,95 @@ class FrontendStack extends Stack {
     });
 
     // -------------------------------------------------------
+    // CloudFront Response Headers Policy — adds CSP, HSTS, X-Frame-Options,
+    // X-Content-Type-Options, and Referrer-Policy to every response.
+    //
+    // CSP scope notes:
+    // - script-src whitelists the IVS Web Broadcast SDK
+    //   (web-broadcast.live-video.net), hls.js + Cognito SDK
+    //   (cdn.jsdelivr.net). `'unsafe-inline'` is currently required because
+    //   index.html still has `onclick="..."` handlers — follow-up will
+    //   migrate those to addEventListener and drop unsafe-inline.
+    // - connect-src wildcards over amazonaws.com (API Gateway HTTP +
+    //   WebSocket, Transcribe Streaming) and live-video.net (IVS RTC +
+    //   Chat). Tighten to exact endpoints once they're known at deploy time.
+    // - frame-ancestors 'none' blocks clickjacking. X-Frame-Options DENY is
+    //   set in parallel for older browsers.
+    // -------------------------------------------------------
+    const cspDirectives = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://web-broadcast.live-video.net",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "media-src 'self' blob: https://*.amazonaws.com https://*.live-video.net",
+      "font-src 'self' data:",
+      // transcribestreaming.<region>.amazonaws.com is already covered by
+      // the broader wss://*.amazonaws.com entry — listing it explicitly
+      // would hardcode a region and break deploys outside us-east-1.
+      "connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join('; ');
+
+    // HSTS is conditional — only set when a real ACM certificate + custom
+    // domain are wired (issue #105). HSTS on the auto-assigned *.cloudfront.net
+    // domain would lock the shared domain into a year-long HTTPS-only state
+    // we can't back out of from this app.
+    const useHsts = Boolean(props.domainNames && props.certificate);
+    const securityHeadersBehavior = {
+      contentSecurityPolicy: {
+        contentSecurityPolicy: cspDirectives,
+        override: true,
+      },
+      contentTypeOptions: { override: true },
+      frameOptions: {
+        frameOption: cloudfront.HeadersFrameOption.DENY,
+        override: true,
+      },
+      referrerPolicy: {
+        referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+        override: true,
+      },
+    };
+    if (useHsts) {
+      securityHeadersBehavior.strictTransportSecurity = {
+        accessControlMaxAge: Duration.days(365),
+        includeSubdomains: true,
+        preload: true,
+        override: true,
+      };
+    }
+    const securityHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'FrontendSecurityHeaders', {
+      responseHeadersPolicyName: `VirtualMeetupFrontendSecurityHeaders-${this.stackName}`,
+      securityHeadersBehavior,
+    });
+
+    // -------------------------------------------------------
     // CloudFront Distribution
     // Requirements: 3.1, 3.2
     // -------------------------------------------------------
     const { hostedZone, certificate, domainNames } = props;
+
+    // CloudFront access logs target bucket. Retained on stack destroy so
+    // forensic logs survive teardown. OBJECT_WRITER ownership is required
+    // for CloudFront log delivery (CDK warns otherwise). Capped at 365
+    // days. See issue #54.
+    const frontendAccessLogsBucket = new s3.Bucket(this, 'FrontendAccessLogsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: RemovalPolicy.RETAIN,
+      objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
+      lifecycleRules: [
+        {
+          id: 'ExpireFrontendAccessLogs',
+          enabled: true,
+          expiration: Duration.days(365),
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+      ],
+    });
 
     const distributionProps = {
       defaultBehavior: {
@@ -69,8 +154,21 @@ class FrontendStack extends Stack {
           originAccessIdentity,
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: securityHeadersPolicy,
+        // CachePolicy.CACHING_DISABLED: every viewer request goes to S3.
+        // The SPA's JS/CSS asset names are NOT content-hashed (frontend/
+        // index.html references js/app.js, css/styles.css by stable name),
+        // so the default CACHING_OPTIMIZED policy (24h DefaultTTL) would
+        // serve stale shells for up to a day after each deploy. Latency
+        // hit at this scale (~50ms) is acceptable; once the build emits
+        // hashed asset filenames, switch this back to CACHING_OPTIMIZED
+        // and add a short-TTL behavior for *.html / `/`. See issue #38.
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
       },
       defaultRootObject: 'index.html',
+      enableLogging: true,
+      logBucket: frontendAccessLogsBucket,
+      logFilePrefix: 'frontend/',
       errorResponses: [
         {
           httpStatus: 403,

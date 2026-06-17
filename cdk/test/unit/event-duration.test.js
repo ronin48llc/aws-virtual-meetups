@@ -70,7 +70,7 @@ describe('Duration Computation and Validation', () => {
           scheduledEnd: '2024-06-15T11:00:00.000Z',
           durationMinutes: 60,
         });
-        fail('Should have thrown');
+        throw new Error('Expected validation to throw');
       } catch (err) {
         expect(err.name).toBe('ValidationError');
       }

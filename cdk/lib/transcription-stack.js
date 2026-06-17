@@ -1,11 +1,14 @@
 const path = require('path');
 const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const lambda = require('aws-cdk-lib/aws-lambda');
+const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 
 class TranscriptionStack extends Stack {
-  constructor(scope, id, props) {
+  constructor(scope, id, props = {}) {
     super(scope, id, props);
+
+    const { mainTable } = props;
 
     // -------------------------------------------------------
     // IAM Role for Transcription Lambda
@@ -43,8 +46,20 @@ class TranscriptionStack extends Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/transcription/')),
       timeout: Duration.seconds(30),
       memorySize: 256,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       role: transcriptionRole,
+      environment: {
+        // Issue #81: the Lambda checks event ownership against the main
+        // table before issuing Transcribe presigned URLs.
+        TABLE_NAME: mainTable ? mainTable.tableName : '',
+      },
     });
+
+    // Grant the Lambda permission to read the event metadata for the
+    // ownership check.
+    if (mainTable) {
+      mainTable.grantReadData(transcriptionFunction);
+    }
 
     // -------------------------------------------------------
     // CloudFormation Outputs
