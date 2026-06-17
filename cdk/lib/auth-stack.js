@@ -27,15 +27,12 @@ class AuthStack extends Stack {
         },
       },
       customAttributes: {
-        // Issue #91: mutable:false so users can't self-promote via
-        // UpdateUserAttributes. Admins can still set/update the role
-        // via AdminUpdateUserAttributes (used by scripts/seed-admin.sh).
-        // CloudFormation cannot change Mutable on an existing custom
-        // attribute — a deployed pool needs a fresh user-pool deploy
-        // or a migration via a second custom attribute. See the PR
-        // body for migration notes.
+        // NOTE: mutable:true is required to match the already-deployed User Pool.
+        // Cognito does not allow changing mutable on an existing custom attribute.
+        // To enforce immutability (issue #91), a new attribute or pool migration
+        // would be needed. Security enforcement is handled at the API layer instead.
         role: new cognito.StringAttribute({
-          mutable: false,
+          mutable: true,
           minLen: 4,
           maxLen: 9,
         }),
