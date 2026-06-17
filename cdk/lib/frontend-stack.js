@@ -83,7 +83,11 @@ class FrontendStack extends Stack {
       // transcribestreaming.<region>.amazonaws.com is already covered by
       // the broader wss://*.amazonaws.com entry — listing it explicitly
       // would hardcode a region and break deploys outside us-east-1.
-      "connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net",
+      // The custom API domain (api.<domainName>) must be explicitly listed
+      // because it doesn't match *.amazonaws.com.
+      ...(props.domainNames && props.domainNames.length > 0
+        ? [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://*.${props.domainNames[0]} wss://*.${props.domainNames[0]}`]
+        : [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net`]),
       "worker-src 'self' blob:",
       "frame-ancestors 'none'",
       "base-uri 'self'",
