@@ -1242,6 +1242,18 @@ const App = (() => {
     // Listen for hash changes
     window.addEventListener('hashchange', render);
 
+    // While in a live session, open the Events nav link in a NEW TAB instead of
+    // routing the current tab away — otherwise an accidental click drops the user
+    // out of the webinar. The broader "warn before leaving" UX is tracked in #163.
+    document.addEventListener('click', function(e) {
+      var link = e.target && e.target.closest && e.target.closest('a.nav__link[data-route="/"]');
+      if (!link) return;
+      if (getCurrentPath().includes('/live')) {
+        e.preventDefault();
+        window.open(link.href, '_blank', 'noopener');
+      }
+    });
+
     // Prompt before closing/refreshing the page while in a live session
     window.addEventListener('beforeunload', function(e) {
       var path = getCurrentPath();
