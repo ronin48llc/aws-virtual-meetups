@@ -96,7 +96,13 @@ async function joinAnonymous(event, eventId) {
 
   const eventStatus = eventResult.Item.status && eventResult.Item.status.S;
   if (eventStatus !== EVENT_STATUS.LIVE) {
-    return badRequest('Event is not currently live');
+    // Pass the actual status back so the client can show the right message
+    // (e.g. "not started yet" vs "already ended")
+    return buildResponse(400, {
+      error: 'Bad Request',
+      message: 'Event is not currently live',
+      eventStatus: eventStatus,
+    });
   }
 
   // 3. Check rate limit counter for this fingerprint in the current minute

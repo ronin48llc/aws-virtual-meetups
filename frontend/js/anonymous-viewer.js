@@ -555,8 +555,16 @@ const AnonymousViewer = (() => {
         _showError('This link is invalid. The meeting or recording could not be found.');
         break;
       case 400:
-        if (message.toLowerCase().indexOf('not currently live') !== -1 ||
-            message.toLowerCase().indexOf('ended') !== -1) {
+        if (message.toLowerCase().indexOf('not currently live') !== -1) {
+          // Use eventStatus from response body if available to show the right message
+          var status = errorData.eventStatus || '';
+          if (status === 'ended' || status === 'published') {
+            _showEventEnded();
+          } else {
+            // scheduled, staging, or unknown — event hasn't started yet
+            _showNotLive();
+          }
+        } else if (message.toLowerCase().indexOf('ended') !== -1) {
           _showEventEnded();
         } else {
           _showError(message || 'Unable to join. The meeting may not be available.');
@@ -598,6 +606,24 @@ const AnonymousViewer = (() => {
           '<a href="#/" class="btn btn--primary" style="margin-top: 24px; display: inline-block; text-decoration: none;">Back to Home</a>' +
         '</div>';
     }
+  }
+
+  /**
+   * Display a "not live yet" state for events that haven't started.
+   */
+  function _showNotLive() {
+    var container = document.getElementById('anonymous-viewer-container') ||
+                    document.getElementById('live-session-container') ||
+                    document.getElementById('app');
+    if (!container) return;
+
+    container.innerHTML =
+      '<div style="max-width: 600px; margin: 80px auto; padding: 32px; text-align: center;">' +
+        '<div style="font-size: 48px; margin-bottom: 16px;">🕐</div>' +
+        '<h2 style="margin-bottom: 12px; color: #1a202c;">Not Live Yet</h2>' +
+        '<p style="color: #4a5568; font-size: 16px; line-height: 1.6;">This event hasn\'t started yet. Check back when the presenter goes live.</p>' +
+        '<a href="#/" class="btn btn--primary" style="margin-top: 24px; display: inline-block; text-decoration: none;">Back to Home</a>' +
+      '</div>';
   }
 
   /**
