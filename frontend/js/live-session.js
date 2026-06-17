@@ -888,7 +888,18 @@ const LiveSession = (() => {
    * Req 12.1: Display raised-hand indicator visible to presenter.
    * Req 12.2: Remove indicator when lowered.
    */
+  let handRaiseDebounce = false;
+
+  /**
+   * Toggle hand raise/lower with debounce.
+   * Req 12.1: Display raised-hand indicator visible to presenter.
+   * Req 12.2: Remove indicator when lowered.
+   */
   function toggleHandRaise() {
+    if (handRaiseDebounce) return;
+    handRaiseDebounce = true;
+    setTimeout(function() { handRaiseDebounce = false; }, 2000);
+
     isHandRaised = !isHandRaised;
     var action = isHandRaised ? 'raiseHand' : 'lowerHand';
     sendWebSocketMessage(action, { userId: currentUserId, displayName: currentUserEmail });
@@ -1523,10 +1534,10 @@ const LiveSession = (() => {
         var moderationHtml = '';
         if (attendee.role !== 'presenter') {
           moderationHtml = '<div style="display: flex; gap: 2px; margin-top: 4px;">'
-            + '<button onclick="LiveSession.muteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Mute audio">🔇</button>'
-            + '<button onclick="LiveSession.restrictUserChat(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict chat">💬</button>'
-            + '<button onclick="LiveSession.kickUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #da3633; color: #fff; font-size: 10px; cursor: pointer;" title="Kick">❌</button>'
-            + '<button onclick="LiveSession.banUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #8b0000; color: #fff; font-size: 10px; cursor: pointer;" title="Ban">🚫</button>'
+            + '<button onclick="LiveSession.muteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Mute this user\'s audio — they won\'t be able to unmute until you grant permission again">🔇 Mute</button>'
+            + '<button onclick="LiveSession.restrictUserChat(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict chat — this user won\'t be able to send messages">💬 Chat Off</button>'
+            + '<button onclick="LiveSession.kickUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #da3633; color: #fff; font-size: 10px; cursor: pointer;" title="Kick — remove this user from the session immediately">❌ Kick</button>'
+            + '<button onclick="LiveSession.banUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #8b0000; color: #fff; font-size: 10px; cursor: pointer;" title="Ban — permanently block this user from rejoining this event">🚫 Ban</button>'
             + '</div>';
         }
 
