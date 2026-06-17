@@ -113,6 +113,16 @@ const LiveSession = (() => {
     renderUI();
     connectWebSocket(config.wsUrl);
 
+    // Belt-and-suspenders: if WS is already open (reconnect scenario),
+    // onopen won't fire again — request dashboard state after a short wait.
+    if (userRole === 'presenter') {
+      setTimeout(function() {
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+          requestDashboardState();
+        }
+      }, 2000);
+    }
+
     if (participantToken) {
       await joinStage();
       // Show device picker for presenters instead of auto-requesting
@@ -641,10 +651,10 @@ const LiveSession = (() => {
         stopScreenShare();
       };
     } catch (err) {
-      if (err.name === 'NotAllowedError') {
-        // User cancelled the picker — don't show an error, just silently stop
+      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
+        // User cancelled the picker — don't show an error
       } else {
-        showNotification('Failed to start screen sharing: ' + err.message);
+        showNotification('Screen sharing failed: ' + err.name + ' — ' + err.message);
       }
     }
   }
@@ -769,10 +779,10 @@ const LiveSession = (() => {
         stopDeviceAudio();
       };
     } catch (err) {
-      if (err.name === 'NotAllowedError') {
+      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
         // User cancelled — no error shown
       } else {
-        showNotification('Device audio sharing is unavailable in this browser. Try Chrome or Edge on desktop.');
+        showNotification('Device audio failed: ' + err.name + ' — ' + err.message);
       }
     }
   }
@@ -2192,7 +2202,6 @@ const LiveSession = (() => {
   function handleDurationExtended(data) {
     if (data.newScheduledEnd) {
       scheduledEnd = data.newScheduledEnd;
-      // Restart the countdown with the new end time
       if (countdownInterval) {
         clearInterval(countdownInterval);
       }
@@ -2202,8 +2211,68 @@ const LiveSession = (() => {
       }
       updateCountdownDisplay();
       countdownInterval = setInterval(updateCountdownDisplay, 1000);
-
       showNotification('Event extended by ' + data.additionalMinutes + ' minutes');
+    }
+  }
+
+  /**
+   * Handle EVENT_ENDED — clear the video container and show an ended message.
+   * If a recording URL is available, show a link to it.
+   */
+  function handleEventEnded(data) {
+    // Stop countdown
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+
+    // Clear all video/audio elements from the stage container
+    var videoContainer = document.getElementById('stage-video-container');
+    if (videoContainer) {
+      // Remove all video and audio children
+      var media = videoContainer.querySelectorAll('video, audio');
+      media.forEach(function(el) { el.srcObject = null; el.remove(); });
+
+      // Show ended message
+      var recordingHtml = '';
+      if (data && data.hlsPlaybackUrl) {
+        recordingHtml = '<a href="#/events/' + escapeHtml(eventId) + '" class="btn btn--outline" style="margin-top: 12px; display: inline-block;">View Recording</a>';
+      } else {
+        recordingHtml = '<p style="color: #8b949e; font-size: 13px; margin-top: 8px;">A recording will be available shortly.</p>';
+      }
+
+      videoContainer.innerHTML =
+        '<div style="text-align: center; padding: 40px;">' +
+          '<div style="font-size: 48px; margin-bottom: 16px;">📺</div>' +
+          '<h3 style="color: #e6edf3; margin: 0 0 8px 0;">This event has ended</h3>' +
+          '<p style="color: #8b949e;">Thanks for joining!</p>' +
+          recordingHtml +
+        '</div>';
+    }
+
+    // Show notification to all participants
+    if (userRole !== 'presenter') {
+      showNotification('The event has ended. Thank you for attending!');
+    }
+
+    // Fetch the event detail page to get the recording URL if not in the WS message
+    if (eventId && (!data || !data.hlsPlaybackUrl)) {
+      var apiBase = window.API_BASE_URL || '/api';
+      fetch(apiBase + '/events/' + encodeURIComponent(eventId))
+        .then(function(r) { return r.json(); })
+        .then(function(evt) {
+          if (evt.hlsPlaybackUrl || evt.recordingUrl) {
+            var url = evt.hlsPlaybackUrl || evt.recordingUrl;
+            var recordingBtn = videoContainer && videoContainer.querySelector('a.btn--outline');
+            if (!recordingBtn && videoContainer) {
+              var p = videoContainer.querySelector('p:last-child');
+              if (p) {
+                p.innerHTML = '<a href="#/events/' + escapeHtml(eventId) + '" class="btn btn--outline" style="margin-top: 12px; display: inline-block;">View Recording</a>';
+              }
+            }
+          }
+        })
+        .catch(function() {});
     }
   }
 
@@ -2454,6 +2523,9 @@ const LiveSession = (() => {
           break;
         case 'FINAL_WARNING':
           showTimeWarning('FINAL_WARNING', msg.data || {});
+          break;
+        case 'EVENT_ENDED':
+          handleEventEnded(msg.data || {});
           break;
         case 'DURATION_EXTENDED':
           handleDurationExtended(msg.data || {});
