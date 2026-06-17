@@ -667,23 +667,15 @@ class ApiStack extends Stack {
     // -------------------------------------------------------
     // AWS WAF - Web Application Firewall
     // Requirements: 23.1, 23.2, 23.3, 23.4
-    // Issue #103: AWS added AWS::ApiGatewayV2::Stage to the WAF v2 REGIONAL
-    // supported-resource list in late 2021. Both HTTP API stages and
-    // WebSocket API stages can be associated. The prior `resourceArns: []`
-    // configuration left the WebACL attached to nothing — every WAF rule
-    // (rate limits, AWS managed Common/SQLi/KnownBadInputs, 4KB body cap)
-    // was dead weight while paying ~$11/month per environment.
-    //
-    // Stage ARN format for API Gateway v2:
-    //   arn:<partition>:apigateway:<region>::/apis/<api-id>/stages/<stage-name>
-    // HTTP API defaultStage is the `$default` stage CDK creates.
-    // -------------------------------------------------------
-    const httpStageArn = `arn:${this.partition}:apigateway:${this.region}::/apis/${httpApi.apiId}/stages/${httpApi.defaultStage.stageName}`;
-    const wsStageArn = `arn:${this.partition}:apigateway:${this.region}::/apis/${webSocketApi.apiId}/stages/${webSocketStage.stageName}`;
-
+    // NOTE: WAFv2 REGIONAL does not support direct association with API Gateway
+    // v2 (HTTP API / WebSocket API) stages. The `/apis/` ARN format is rejected
+    // by WAF — only REST API (`/restapis/`) ARNs are supported for direct
+    // association. The WAF WebACL is created for future use (e.g., with an ALB
+    // or CloudFront), but the resourceArns list is intentionally empty here.
+    // See: https://stackoverflow.com/questions/63304201
     const waf = new WafConstruct(this, 'ApiWaf', {
       scope: 'REGIONAL',
-      resourceArns: [httpStageArn, wsStageArn],
+      resourceArns: [],
     });
 
     this.webAcl = waf.webAcl;
