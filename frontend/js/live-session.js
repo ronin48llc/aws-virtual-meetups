@@ -369,7 +369,7 @@ const LiveSession = (() => {
                   <option value="">Select recipient...</option>
                 </select>
               </div>
-              <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 12px 16px; font-size: 13px; line-height: 1.6;" role="log" aria-live="polite" aria-label="Chat messages"></div>
+              <div id="chat-messages" style="flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; font-size: 13px; line-height: 1.6;" role="log" aria-live="polite" aria-label="Chat messages"></div>
               <form id="chat-form" onsubmit="LiveSession.sendChatMessage(event)" style="padding: 12px 16px; border-top: 1px solid #30363d;">
                 <div style="display: flex; gap: 8px;">
                   <input type="text" id="chat-input" placeholder="Type a message..." required style="flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #fff; font-size: 13px;" aria-label="Chat message">
@@ -391,7 +391,8 @@ const LiveSession = (() => {
       showElement('presenter-controls');
       showElement('presenter-dashboard');
       hideElement('attendee-controls');
-      requestDashboardState();
+      // Dashboard state is requested in connectWebSocket onopen — don't call here
+      // as WS isn't connected yet when renderUI runs.
 
       // Show Green Room banner and Go Live button when in staging
       if (eventStatus === 'staging') {
@@ -641,7 +642,7 @@ const LiveSession = (() => {
       };
     } catch (err) {
       if (err.name === 'NotAllowedError') {
-        showNotification('Screen sharing requires browser permission. Please allow access and try again.');
+        // User cancelled the picker — don't show an error, just silently stop
       } else {
         showNotification('Failed to start screen sharing: ' + err.message);
       }
@@ -769,9 +770,9 @@ const LiveSession = (() => {
       };
     } catch (err) {
       if (err.name === 'NotAllowedError') {
-        showNotification('Permission denied for device audio capture.');
+        // User cancelled — no error shown
       } else {
-        showNotification('Device audio sharing is unavailable in this browser.');
+        showNotification('Device audio sharing is unavailable in this browser. Try Chrome or Edge on desktop.');
       }
     }
   }
@@ -1142,6 +1143,17 @@ const LiveSession = (() => {
   }
 
   /**
+   * Linkify plain text — converts URLs to clickable links that open in a new tab.
+   * Safely handles HTML entities already escaped.
+   */
+  function linkifyText(text) {
+    var escaped = escapeHtml(text);
+    return escaped.replace(/(https?:\/\/[^\s<>"']+)/g, function(url) {
+      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer" style="color: ' + AWS_ORANGE + '; text-decoration: underline;">' + url + '</a>';
+    });
+  }
+
+  /**
    * Append a chat message to the messages container.
    */
   function appendChatMessage(sender, text, type) {
@@ -1157,9 +1169,12 @@ const LiveSession = (() => {
       msgDiv.style.display = 'none';
     }
     var prefix = type === 'direct' ? '[DM] ' : '';
-    msgDiv.innerHTML = '<span style="color: ' + AWS_ORANGE + '; font-weight: 600;">' + prefix + escapeHtml(sender) + '</span>: ' + escapeHtml(text);
+    msgDiv.innerHTML = '<span style="color: ' + AWS_ORANGE + '; font-weight: 600;">' + prefix + escapeHtml(sender) + '</span>: ' + linkifyText(text);
     messagesEl.appendChild(msgDiv);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    // Use requestAnimationFrame so the DOM has updated before measuring scrollHeight
+    requestAnimationFrame(function() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    });
 
     // Notification sound for messages not from self (Fix #2)
     var isSelf = (sender === currentUserEmail || sender === currentUserId || sender === 'You (DM)');
@@ -2207,10 +2222,12 @@ const LiveSession = (() => {
 
       websocket.onclose = function() {
         console.log('LiveSession: WebSocket disconnected');
-        // Attempt reconnect after 3 seconds
-        setTimeout(function() {
-          connectWebSocket(wsUrl);
-        }, 3000);
+        // Only reconnect if not intentionally disconnected
+        if (websocket !== null) {
+          setTimeout(function() {
+            connectWebSocket(wsUrl);
+          }, 3000);
+        }
       };
 
       websocket.onerror = function(err) {
@@ -2789,8 +2806,9 @@ const LiveSession = (() => {
       chatRoom = null;
     }
     if (websocket) {
-      websocket.close();
-      websocket = null;
+      var ws = websocket;
+      websocket = null; // null first so onclose doesn't trigger reconnect
+      ws.close();
     }
     if (countdownInterval) {
       clearInterval(countdownInterval);

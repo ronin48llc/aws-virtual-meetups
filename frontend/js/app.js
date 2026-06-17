@@ -86,13 +86,17 @@ const App = (() => {
   function render() {
     const path = getCurrentPath();
 
+    // Prompt before leaving a live session
+    const wasOnLive = currentRoute && currentRoute.path && currentRoute.path.includes('/live');
+    const goingToLive = path.includes('/live');
+
     // Clean up live session when navigating away
-    if (typeof LiveSession !== 'undefined' && currentRoute && currentRoute.path && currentRoute.path.includes('/live')) {
+    if (typeof LiveSession !== 'undefined' && wasOnLive) {
       LiveSession.disconnect();
     }
 
     // Clean up anonymous viewer when navigating away
-    if (typeof AnonymousViewer !== 'undefined' && currentRoute && currentRoute.path && currentRoute.path.includes('/live')) {
+    if (typeof AnonymousViewer !== 'undefined' && wasOnLive) {
       AnonymousViewer.disconnect();
     }
 
@@ -1207,6 +1211,16 @@ const App = (() => {
 
     // Listen for hash changes
     window.addEventListener('hashchange', render);
+
+    // Prompt before closing/refreshing the page while in a live session
+    window.addEventListener('beforeunload', function(e) {
+      var path = getCurrentPath();
+      if (path.includes('/live')) {
+        e.preventDefault();
+        e.returnValue = 'You are in a live session. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    });
 
     // Initial render
     render();
