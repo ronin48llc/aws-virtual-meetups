@@ -396,7 +396,7 @@ const App = (() => {
           <section class="mt-lg">
             <h2>Live Now</h2>
             <div class="grid grid--events mt-md" id="events-live">
-              <div class="card"><p class="card__description" style="color: #8b949e;">No live events right now.</p></div>
+              <div class="card"><p class="card__description" style="color: #5a6b7b;">No live events right now.</p></div>
             </div>
           </section>
           <section class="mt-lg">
@@ -410,7 +410,7 @@ const App = (() => {
           <section class="mt-lg">
             <h2>Past Events</h2>
             <div class="grid grid--events mt-md" id="events-past">
-              <div class="card"><p class="card__description" style="color: #8b949e;">Loading past events...</p></div>
+              <div class="card"><p class="card__description" style="color: #5a6b7b;">Loading past events...</p></div>
             </div>
           </section>
         </div>
@@ -501,7 +501,7 @@ const App = (() => {
       if (liveContainer) {
         liveContainer.innerHTML = live.length
           ? live.map(renderEventCard).join('')
-          : '<div class="card"><p class="card__description" style="color: #8b949e;">No live events right now.</p></div>';
+          : '<div class="card"><p class="card__description" style="color: #5a6b7b;">No live events right now.</p></div>';
       }
 
       // Upcoming section
@@ -539,7 +539,7 @@ const App = (() => {
       if (pastContainer) {
         pastContainer.innerHTML = past.length
           ? past.map(renderEventCard).join('')
-          : '<div class="card"><p class="card__description" style="color: #8b949e;">No past events yet.</p></div>';
+          : '<div class="card"><p class="card__description" style="color: #5a6b7b;">No past events yet.</p></div>';
       }
 
       renderPopular(accumulated, popularContainer);

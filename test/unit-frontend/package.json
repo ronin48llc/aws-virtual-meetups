@@ -1,0 +1,17 @@
+{
+  "name": "virtual-meetup-frontend-unit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Layer 1 UI tests — jsdom unit tests for the static frontend modules (i18n, fingerprint, websocket). Kept OUTSIDE frontend/ so `aws s3 sync ../frontend` never publishes test code or node_modules to the public bucket.",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/user-event": "^14.5.2",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  }
+}

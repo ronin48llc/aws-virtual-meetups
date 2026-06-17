@@ -239,7 +239,8 @@ h4 { font-size: var(--font-size-lg); }
 
 .btn--primary {
   background-color: var(--color-primary);
-  color: var(--color-text-inverse);
+  /* Dark ink on Smile Orange — white fails WCAG AA (2.14:1); #232F3E is 5.9:1. */
+  color: var(--color-text);
 }
 
 .btn--primary:hover {
@@ -330,7 +331,8 @@ h4 { font-size: var(--font-size-lg); }
 
 .badge--upcoming {
   background-color: var(--color-upcoming);
-  color: white;
+  /* Dark ink on Smile Orange for WCAG AA (white was 2.14:1). */
+  color: var(--color-text);
 }
 
 .badge--ended {
@@ -409,7 +411,8 @@ h4 { font-size: var(--font-size-lg); }
   align-items: center;
   gap: var(--space-sm);
   font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  /* Muted text on the dark Squid Ink footer: #5A6B7B was 2.47:1; #AEB8C2 is 6.7:1. */
+  color: #AEB8C2;
 }
 
 .footer__badge-icon {

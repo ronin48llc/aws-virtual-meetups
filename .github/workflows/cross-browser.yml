@@ -1,0 +1,43 @@
+name: Cross-browser UI (Selenium)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 06:30 UTC — just after the smoke run, against the same deployed
+    # stack. Real cross-browser/-device coverage; not part of the PR gate.
+    - cron: '30 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  cross-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: test/cross-browser/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: test/cross-browser
+
+      - name: Run cross-browser smoke
+        # run.js skips cleanly (exit 0) when TARGET_URL / grid creds are absent,
+        # so this job is a no-op until the secrets below are configured.
+        run: npm test
+        working-directory: test/cross-browser
+        env:
+          TARGET_URL: ${{ secrets.CLOUDFRONT_URL }}
+          SELENIUM_REMOTE_URL: ${{ secrets.SELENIUM_REMOTE_URL }}
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          SAUCE_USERNAME: ${{ secrets.SAUCE_USERNAME }}
+          SAUCE_ACCESS_KEY: ${{ secrets.SAUCE_ACCESS_KEY }}
