@@ -1381,17 +1381,18 @@ const LiveSession = (() => {
    * @param {string} presignedUrl - The pre-signed WebSocket URL for Transcribe.
    */
   async function connectToTranscribe(presignedUrl) {
-    // Set up audio capture from the presenter's microphone
+    // Set up audio capture from the presenter's microphone.
+    // Do NOT request a specific sampleRate in getUserMedia — it's ignored
+    // on most platforms and causes "operation is insecure" errors on some.
+    // We capture at the browser's native rate and resample to 16kHz in the
+    // onaudioprocess callback.
     var stream;
     if (localStreams.mic) {
-      // Use the existing mic track
       stream = new MediaStream([localStreams.mic]);
     } else {
-      // Request mic access
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
         }
@@ -1399,11 +1400,12 @@ const LiveSession = (() => {
     }
     captionSourceStream = stream;
 
-    // Create AudioContext for PCM encoding
-    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    // Use the browser's native sample rate — forcing 16000 on AudioContext
+    // causes NotSupportedError / "operation is insecure" on many platforms.
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    var nativeSampleRate = audioContext.sampleRate;
     var source = audioContext.createMediaStreamSource(stream);
 
-    // Use ScriptProcessorNode (widely supported) to capture raw PCM
     var bufferSize = 4096;
     audioProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
@@ -1415,11 +1417,7 @@ const LiveSession = (() => {
 
     transcribeWs.onopen = function() {
       console.log('Transcribe WebSocket connected');
-      // Connect source → processor → silent gain node (NOT destination).
-      // Connecting to audioContext.destination with a mic source triggers
-      // "The operation is insecure" in Chrome/Firefox as an echo/feedback
-      // security guard. A zero-gain node keeps the graph alive so
-      // onaudioprocess fires without routing mic audio to the speakers.
+      // Route through silent gain so mic audio doesn't feed back to speakers.
       var silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
       silentGain.connect(audioContext.destination);
@@ -1482,14 +1480,26 @@ const LiveSession = (() => {
       console.log('Transcribe WebSocket closed');
     };
 
-    // Send audio frames to Transcribe
+    // Send audio frames to Transcribe — resample to 16kHz if needed
     audioProcessor.onaudioprocess = function(e) {
       if (!transcribeWs || transcribeWs.readyState !== WebSocket.OPEN) return;
 
       var inputData = e.inputBuffer.getChannelData(0);
-      // Convert Float32 to Int16 PCM
-      var pcmData = float32ToInt16(inputData);
-      // Wrap in event-stream frame and send
+
+      // Resample from native browser rate to 16kHz (required by Transcribe)
+      var samples;
+      if (nativeSampleRate !== 16000) {
+        var ratio = nativeSampleRate / 16000;
+        var newLength = Math.round(inputData.length / ratio);
+        samples = new Float32Array(newLength);
+        for (var i = 0; i < newLength; i++) {
+          samples[i] = inputData[Math.round(i * ratio)] || 0;
+        }
+      } else {
+        samples = inputData;
+      }
+
+      var pcmData = float32ToInt16(samples);
       var frame = encodeAudioEvent(pcmData);
       transcribeWs.send(frame);
     };
