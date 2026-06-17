@@ -655,36 +655,27 @@ const App = (() => {
       } else if (evt.displayMode === 'ended' || evt.status === 'ended') {
         if (evt.recordingUrl || evt.hlsPlaybackUrl) {
           var playbackUrl = evt.hlsPlaybackUrl || evt.recordingUrl;
-          if (Auth.isAuthenticated()) {
-            html += '<div class="mt-lg"><h3>Recording</h3>'
-              + '<div style="background: #0d1117; border-radius: 8px; overflow: hidden; margin-top: 12px;">'
-              + '<video id="recording-player" controls style="width: 100%; max-height: 480px;" playsinline></video>'
-              + '</div></div>';
-            // Initialize HLS.js after render
-            setTimeout(function() {
-              var video = document.getElementById('recording-player');
-              if (video && window.Hls && Hls.isSupported()) {
-                var hls = new Hls();
-                hls.loadSource(playbackUrl);
-                hls.attachMedia(video);
-              } else if (video) {
-                video.src = playbackUrl;
-              }
-            }, 100);
-          } else {
-            // Anonymous playback access — route to AnonymousViewer
-            html += '<div class="mt-lg"><h3>Recording</h3>'
-              + '<div id="anon-playback-mount" style="margin-top: 12px;"></div>'
-              + '</div>';
-            setTimeout(function() {
-              if (typeof AnonymousViewer !== 'undefined' && typeof Fingerprint !== 'undefined') {
-                AnonymousViewer.initPlayback({ eventId: eventId });
-              }
-            }, 100);
-          }
+          // Show recording player for everyone (authenticated or anonymous)
+          html += '<div class="mt-lg"><h3>Recording</h3>'
+            + '<div style="background: #0d1117; border-radius: 8px; overflow: hidden; margin-top: 12px;">'
+            + '<video id="recording-player" controls style="width: 100%; max-height: 480px;" playsinline></video>'
+            + '</div></div>';
+          // Initialize HLS.js after render
+          setTimeout(function() {
+            var video = document.getElementById('recording-player');
+            if (video && window.Hls && Hls.isSupported()) {
+              var hls = new Hls();
+              hls.loadSource(playbackUrl);
+              hls.attachMedia(video);
+            } else if (video) {
+              video.src = playbackUrl;
+            }
+          }, 100);
         } else {
-          html += '<div class="mt-lg"><p class="text-muted">This event has ended.</p></div>';
+          html += '<div class="mt-lg"><p class="text-muted">This event has ended. A recording may be available shortly.</p></div>';
         }
+      } else if (evt.displayMode === 'cancelled' || evt.status === 'cancelled') {
+        html += '<div class="mt-lg"><p class="text-muted">This event was cancelled.</p></div>';
       } else {
         // Scheduled — show countdown + registration
         if (evt.countdown && evt.countdown > 0) {
