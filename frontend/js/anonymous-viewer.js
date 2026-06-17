@@ -552,13 +552,17 @@ const AnonymousViewer = (() => {
 
     switch (res.status) {
       case 404:
-        _showError('This link is invalid. The meeting or recording could not be found.');
+        if (message.toLowerCase().indexOf('recording') !== -1) {
+          _showError('The recording for this event is not yet available. Check back later.');
+        } else {
+          _showError('This link is invalid. The meeting or recording could not be found.');
+        }
         break;
       case 400:
         if (message.toLowerCase().indexOf('not currently live') !== -1) {
           // Use eventStatus from response body if available to show the right message
           var status = errorData.eventStatus || '';
-          if (status === 'ended' || status === 'published') {
+          if (status === 'ended' || status === 'published' || status === 'cancelled') {
             _showEventEnded();
           } else {
             // scheduled, staging, or unknown — event hasn't started yet

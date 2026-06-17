@@ -209,15 +209,20 @@ async function playbackAnonymous(event, eventId) {
     TableName: TABLE_NAME,
     Key: {
       PK: { S: buildEventPK(eventId) },
-      SK: { S: SK.RECORDING },
+      SK: { S: SK.METADATA },
     },
   }));
 
   if (!recordingResult.Item) {
-    return notFound('Recording not found');
+    return notFound('Event not found');
   }
 
-  const playbackUrl = recordingResult.Item.playbackUrl && recordingResult.Item.playbackUrl.S;
+  const eventStatus = recordingResult.Item.status && recordingResult.Item.status.S;
+  if (eventStatus !== EVENT_STATUS.ENDED && eventStatus !== 'published') {
+    return badRequest('Recording not available for this event');
+  }
+
+  const playbackUrl = recordingResult.Item.hlsPlaybackUrl && recordingResult.Item.hlsPlaybackUrl.S;
   if (!playbackUrl) {
     return notFound('Recording not yet available');
   }
