@@ -100,6 +100,20 @@ class ApiStack extends Stack {
       },
     });
 
+    // Anonymous Token Lambda
+    const anonymousTokenFn = new lambda.Function(this, 'AnonymousTokenFunction', {
+      functionName: 'VirtualMeetup-AnonymousToken',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'anonymous-token/index.handler',
+      code: lambda.Code.fromAsset(lambdaCodePath),
+      timeout: Duration.seconds(30),
+      memorySize: 256,
+      tracing: lambda.Tracing.ACTIVE,
+      environment: {
+        TABLE_NAME: mainTable.tableName,
+      },
+    });
+
     // Signup Lambda
     const signupFn = new lambda.Function(this, 'SignupFunction', {
       functionName: 'VirtualMeetup-Signup',
@@ -166,6 +180,7 @@ class ApiStack extends Stack {
     mainTable.grantReadWriteData(eventCrudFn);
     mainTable.grantReadWriteData(sessionManagerFn);
     mainTable.grantReadWriteData(tokenGeneratorFn);
+    mainTable.grantReadWriteData(anonymousTokenFn);
     mainTable.grantReadWriteData(signupFn);
     mainTable.grantReadWriteData(wsConnectFn);
     mainTable.grantReadWriteData(wsDisconnectFn);
@@ -280,6 +295,14 @@ class ApiStack extends Stack {
       resources: ['*'],
     }));
 
+    anonymousTokenFn.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ivs:CreateParticipantToken',
+      ],
+      resources: ['*'],
+    }));
+
     // -------------------------------------------------------
     // HTTP API Routes — Lambda Integrations
     // -------------------------------------------------------
@@ -287,6 +310,7 @@ class ApiStack extends Stack {
     const sessionManagerIntegration = new HttpLambdaIntegration('SessionManagerIntegration', sessionManagerFn);
     const tokenGeneratorIntegration = new HttpLambdaIntegration('TokenGeneratorIntegration', tokenGeneratorFn);
     const signupIntegration = new HttpLambdaIntegration('SignupIntegration', signupFn);
+    const anonymousTokenIntegration = new HttpLambdaIntegration('AnonymousTokenIntegration', anonymousTokenFn);
 
     // Public routes (no auth)
     httpApi.addRoutes({
@@ -369,6 +393,27 @@ class ApiStack extends Stack {
       path: '/events/{id}/signups',
       methods: [HttpMethod.GET],
       integration: signupIntegration,
+      authorizer: cognitoAuthorizer,
+    });
+
+    // Anonymous access routes (unauthenticated — no authorizer)
+    httpApi.addRoutes({
+      path: '/events/{id}/join-anonymous',
+      methods: [HttpMethod.POST],
+      integration: anonymousTokenIntegration,
+    });
+
+    httpApi.addRoutes({
+      path: '/events/{id}/playback-anonymous',
+      methods: [HttpMethod.POST],
+      integration: anonymousTokenIntegration,
+    });
+
+    // Session upgrade route (authenticated — Cognito authorizer)
+    httpApi.addRoutes({
+      path: '/events/{id}/upgrade-session',
+      methods: [HttpMethod.POST],
+      integration: tokenGeneratorIntegration,
       authorizer: cognitoAuthorizer,
     });
 

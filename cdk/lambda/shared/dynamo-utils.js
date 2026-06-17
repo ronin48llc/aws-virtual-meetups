@@ -196,6 +196,161 @@ function buildQueryParams({ tableName, pk, skPrefix, indexName, scanForward = tr
   return params;
 }
 
+// --- Anonymous Session Helpers ---
+
+/**
+ * Build a sort key for an anonymous session record.
+ * Pattern: ANON#{fingerprint}#{sessionId}
+ * @param {string} fingerprint - The browser fingerprint (hex string).
+ * @param {string} sessionId - The unique session identifier.
+ * @returns {string} The formatted SK, e.g. "ANON#a3f8b2c1d4e5f6a7#sess_abc123".
+ */
+function buildAnonSessionSK(fingerprint, sessionId) {
+  return `${KEY_PREFIX.ANON}${fingerprint}#${sessionId}`;
+}
+
+/**
+ * Build a partition key for a rate limit record.
+ * Pattern: RATELIMIT#{fingerprint}
+ * @param {string} fingerprint - The browser fingerprint.
+ * @returns {string} The formatted PK, e.g. "RATELIMIT#a3f8b2c1d4e5f6a7".
+ */
+function buildRateLimitPK(fingerprint) {
+  return `${KEY_PREFIX.RATELIMIT}${fingerprint}`;
+}
+
+/**
+ * Build a sort key for a rate limit minute window.
+ * Pattern: MINUTE#{isoMinute}
+ * @param {string} isoMinute - ISO 8601 minute string (e.g. "2024-01-15T10:30").
+ * @returns {string} The formatted SK, e.g. "MINUTE#2024-01-15T10:30".
+ */
+function buildRateLimitSK(isoMinute) {
+  return `${KEY_PREFIX.MINUTE}${isoMinute}`;
+}
+
+/**
+ * Build DynamoDB PutItem params for creating an anonymous session record.
+ * @param {Object} options - Session options.
+ * @param {string} options.tableName - The DynamoDB table name.
+ * @param {string} options.eventId - The event identifier.
+ * @param {string} options.fingerprint - The browser fingerprint.
+ * @param {string} options.sessionId - The unique session identifier.
+ * @param {string} options.sessionType - Session type: 'live' or 'playback'.
+ * @returns {Object} DynamoDB PutItem params.
+ */
+function buildCreateAnonSessionParams({ tableName, eventId, fingerprint, sessionId, sessionType }) {
+  const now = new Date().toISOString();
+  const displayLabel = `Anon-${fingerprint.slice(0, 6)}`;
+  const ttl = Math.floor(Date.now() / 1000) + 86400; // 24 hours
+
+  return {
+    TableName: tableName,
+    Item: {
+      PK: { S: buildEventPK(eventId) },
+      SK: { S: buildAnonSessionSK(fingerprint, sessionId) },
+      fingerprint: { S: fingerprint },
+      sessionId: { S: sessionId },
+      displayLabel: { S: displayLabel },
+      joinedAt: { S: now },
+      sessionType: { S: sessionType },
+      status: { S: 'active' },
+      ttl: { N: String(ttl) },
+    },
+  };
+}
+
+/**
+ * Build DynamoDB Query params to retrieve active anonymous sessions for an event.
+ * Uses begins_with on SK prefix "ANON#" to get all anonymous sessions.
+ * @param {Object} options - Query options.
+ * @param {string} options.tableName - The DynamoDB table name.
+ * @param {string} options.eventId - The event identifier.
+ * @param {boolean} [options.activeOnly=true] - If true, filter to only active sessions.
+ * @returns {Object} DynamoDB Query params.
+ */
+function buildQueryAnonSessionsParams({ tableName, eventId, activeOnly = true }) {
+  const params = {
+    TableName: tableName,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
+    ExpressionAttributeValues: {
+      ':pk': { S: buildEventPK(eventId) },
+      ':skPrefix': { S: KEY_PREFIX.ANON },
+    },
+  };
+
+  if (activeOnly) {
+    params.FilterExpression = '#status = :active';
+    params.ExpressionAttributeNames = { '#status': 'status' };
+    params.ExpressionAttributeValues[':active'] = { S: 'active' };
+  }
+
+  return params;
+}
+
+/**
+ * Build DynamoDB UpdateItem params to increment a rate limit counter with TTL.
+ * Uses an atomic ADD operation to safely increment the counter.
+ * The TTL is set to 120 seconds from now to allow for clock skew.
+ * @param {Object} options - Rate limit options.
+ * @param {string} options.tableName - The DynamoDB table name.
+ * @param {string} options.fingerprint - The browser fingerprint.
+ * @param {string} options.isoMinute - The current ISO minute window (e.g. "2024-01-15T10:30").
+ * @returns {Object} DynamoDB UpdateItem params with ReturnValues set to return the new count.
+ */
+function buildIncrementRateLimitParams({ tableName, fingerprint, isoMinute }) {
+  const ttl = Math.floor(Date.now() / 1000) + 120; // 120 seconds TTL
+
+  return {
+    TableName: tableName,
+    Key: {
+      PK: { S: buildRateLimitPK(fingerprint) },
+      SK: { S: buildRateLimitSK(isoMinute) },
+    },
+    UpdateExpression: 'ADD #count :inc SET #ttl = :ttl',
+    ExpressionAttributeNames: {
+      '#count': 'count',
+      '#ttl': 'ttl',
+    },
+    ExpressionAttributeValues: {
+      ':inc': { N: '1' },
+      ':ttl': { N: String(ttl) },
+    },
+    ReturnValues: 'ALL_NEW',
+  };
+}
+
+/**
+ * Build DynamoDB UpdateItem params to update an anonymous session status on disconnect.
+ * Sets the status to 'disconnected' and records the leftAt timestamp.
+ * @param {Object} options - Update options.
+ * @param {string} options.tableName - The DynamoDB table name.
+ * @param {string} options.eventId - The event identifier.
+ * @param {string} options.fingerprint - The browser fingerprint.
+ * @param {string} options.sessionId - The session identifier.
+ * @returns {Object} DynamoDB UpdateItem params.
+ */
+function buildUpdateAnonSessionDisconnectParams({ tableName, eventId, fingerprint, sessionId }) {
+  const now = new Date().toISOString();
+
+  return {
+    TableName: tableName,
+    Key: {
+      PK: { S: buildEventPK(eventId) },
+      SK: { S: buildAnonSessionSK(fingerprint, sessionId) },
+    },
+    UpdateExpression: 'SET #status = :disconnected, #leftAt = :leftAt',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+      '#leftAt': 'leftAt',
+    },
+    ExpressionAttributeValues: {
+      ':disconnected': { S: 'disconnected' },
+      ':leftAt': { S: now },
+    },
+  };
+}
+
 module.exports = {
   buildEventPK,
   buildUserPK,
@@ -211,4 +366,12 @@ module.exports = {
   buildBatchWriteParams,
   buildBatchDeleteParams,
   buildQueryParams,
+  // Anonymous session helpers
+  buildAnonSessionSK,
+  buildRateLimitPK,
+  buildRateLimitSK,
+  buildCreateAnonSessionParams,
+  buildQueryAnonSessionsParams,
+  buildIncrementRateLimitParams,
+  buildUpdateAnonSessionDisconnectParams,
 };

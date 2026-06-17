@@ -91,6 +91,11 @@ const App = (() => {
       LiveSession.disconnect();
     }
 
+    // Clean up anonymous viewer when navigating away
+    if (typeof AnonymousViewer !== 'undefined' && currentRoute && currentRoute.path && currentRoute.path.includes('/live')) {
+      AnonymousViewer.disconnect();
+    }
+
     const matched = matchRoute(path);
 
     if (matched) {
@@ -582,10 +587,15 @@ const App = (() => {
               }
             }, 100);
           } else {
+            // Anonymous playback access — route to AnonymousViewer
             html += '<div class="mt-lg"><h3>Recording</h3>'
-              + '<p class="mt-sm text-muted">Sign in to watch the recording.</p>'
-              + '<button class="btn btn--primary mt-md" onclick="App.showAuthModal(\'signin\')">Sign In to Watch</button>'
+              + '<div id="anon-playback-mount" style="margin-top: 12px;"></div>'
               + '</div>';
+            setTimeout(function() {
+              if (typeof AnonymousViewer !== 'undefined' && typeof Fingerprint !== 'undefined') {
+                AnonymousViewer.initPlayback({ eventId: eventId });
+              }
+            }, 100);
           }
         } else {
           html += '<div class="mt-lg"><p class="text-muted">This event has ended.</p></div>';
@@ -681,6 +691,17 @@ const App = (() => {
     // Auto-join the live session after render
     setTimeout(function() { joinLiveSession(params.id); }, 0);
 
+    // For unauthenticated users, render a minimal container for AnonymousViewer
+    if (!Auth.isAuthenticated()) {
+      return `
+        <div id="live-session-container" class="live-session" style="min-height: 100vh;">
+          <div id="live-session-status" style="text-align: center; padding: 40px;">
+            <p style="color: #8b949e;">Connecting to live session...</p>
+          </div>
+        </div>
+      `;
+    }
+
     // Use the LiveSession module's renderPage if available
     if (typeof LiveSession !== 'undefined') {
       return LiveSession.renderPage(params);
@@ -703,12 +724,19 @@ const App = (() => {
 
   /**
    * Join a live session by calling the join API and initializing IVS.
+   * If the user is not authenticated, routes to AnonymousViewer for view-only access.
    */
   async function joinLiveSession(eventId) {
     var statusEl = document.getElementById('live-session-status') || document.getElementById('stage-placeholder');
 
     if (!Auth.isAuthenticated()) {
-      if (statusEl) statusEl.innerHTML = '<p style="color: #e63946;">You must be signed in to join a live session.</p><button class="btn btn--primary mt-md" onclick="App.showAuthModal(\'signin\')">Sign In</button>';
+      // Route unauthenticated users to anonymous live viewing
+      if (typeof AnonymousViewer !== 'undefined' && typeof Fingerprint !== 'undefined') {
+        var wsUrl = window.WS_BASE_URL || 'wss://ws.yourdomain.com';
+        AnonymousViewer.initLive({ eventId: eventId, wsUrl: wsUrl });
+      } else {
+        if (statusEl) statusEl.innerHTML = '<p style="color: #e63946;">Unable to load anonymous viewing module. Please reload the page.</p>';
+      }
       return;
     }
 

@@ -50,6 +50,7 @@ const LiveSession = (() => {
 
   // --- Presenter Dashboard State ---
   let dashboardAttendees = [];
+  let dashboardAnonymousAttendees = [];
   let dashboardQuestions = [];
   let dashboardAnsweredQuestions = [];
   let dashboardHands = [];
@@ -1756,57 +1757,96 @@ const LiveSession = (() => {
 
   /**
    * Render the attendees list in the dashboard panel.
+   * Shows two sections: registered users (top) and anonymous users (bottom).
+   * Req 4.1: Display anonymous users visually separated from registered users.
+   * Req 4.3: Display anonymous users with "Anon-{6 hex chars}" labels.
+   * Req 4.4: Display total count of currently connected anonymous users.
    */
   function renderDashboardAttendees() {
     var panel = document.getElementById('dashboard-panel-attendees');
     if (!panel) return;
 
+    var totalCount = dashboardAttendees.length + dashboardAnonymousAttendees.length;
     var countEl = document.getElementById('dashboard-count-attendees');
-    if (countEl) countEl.textContent = dashboardAttendees.length;
-
-    if (dashboardAttendees.length === 0) {
-      panel.innerHTML = '<p style="color: #8b949e; font-size: 13px; margin: 0;">No attendees connected</p>';
-      return;
-    }
+    if (countEl) countEl.textContent = totalCount;
 
     var html = '';
-    dashboardAttendees.forEach(function(attendee) {
-      var roleBadge = attendee.role === 'presenter'
-        ? '<span style="background: ' + AWS_ORANGE + '; color: #000; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;">PRESENTER</span>'
-        : '<span style="background: #21262d; color: #8b949e; padding: 2px 6px; border-radius: 3px; font-size: 10px;">' + escapeHtml(attendee.role || 'attendee') + '</span>';
 
-      var promoteHtml = '';
-      if (attendee.role !== 'presenter' && attendee.role !== 'co-presenter') {
-        promoteHtml = '<button onclick="LiveSession.promoteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 10px; cursor: pointer;" title="Promote to co-presenter">Promote</button>';
-      } else if (attendee.role === 'co-presenter') {
-        promoteHtml = '<button onclick="LiveSession.demoteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Demote to attendee">Demote</button>';
-      }
+    // --- Registered Users Section (top) ---
+    html += '<div style="margin-bottom: 8px; font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase;">Registered Users (' + dashboardAttendees.length + ')</div>';
 
-      var moderationHtml = '';
-      if (attendee.role !== 'presenter') {
-        moderationHtml = '<div style="display: flex; gap: 2px; margin-top: 4px;">'
-          + '<button onclick="LiveSession.muteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Mute audio">🔇</button>'
-          + '<button onclick="LiveSession.restrictUserChat(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict chat">💬</button>'
-          + '<button onclick="LiveSession.kickUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #da3633; color: #fff; font-size: 10px; cursor: pointer;" title="Kick">❌</button>'
-          + '<button onclick="LiveSession.banUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #8b0000; color: #fff; font-size: 10px; cursor: pointer;" title="Ban">🚫</button>'
+    if (dashboardAttendees.length === 0) {
+      html += '<p style="color: #8b949e; font-size: 13px; margin: 0 0 16px 0;">No registered attendees connected</p>';
+    } else {
+      dashboardAttendees.forEach(function(attendee) {
+        var roleBadge = attendee.role === 'presenter'
+          ? '<span style="background: ' + AWS_ORANGE + '; color: #000; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;">PRESENTER</span>'
+          : '<span style="background: #21262d; color: #8b949e; padding: 2px 6px; border-radius: 3px; font-size: 10px;">' + escapeHtml(attendee.role || 'attendee') + '</span>';
+
+        var promoteHtml = '';
+        if (attendee.role !== 'presenter' && attendee.role !== 'co-presenter') {
+          promoteHtml = '<button onclick="LiveSession.promoteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 10px; cursor: pointer;" title="Promote to co-presenter">Promote</button>';
+        } else if (attendee.role === 'co-presenter') {
+          promoteHtml = '<button onclick="LiveSession.demoteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Demote to attendee">Demote</button>';
+        }
+
+        var moderationHtml = '';
+        if (attendee.role !== 'presenter') {
+          moderationHtml = '<div style="display: flex; gap: 2px; margin-top: 4px;">'
+            + '<button onclick="LiveSession.muteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Mute audio">🔇</button>'
+            + '<button onclick="LiveSession.restrictUserChat(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict chat">💬</button>'
+            + '<button onclick="LiveSession.kickUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #da3633; color: #fff; font-size: 10px; cursor: pointer;" title="Kick">❌</button>'
+            + '<button onclick="LiveSession.banUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #8b0000; color: #fff; font-size: 10px; cursor: pointer;" title="Ban">🚫</button>'
+            + '</div>';
+        }
+
+        html += '<div class="registered-attendee-entry" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 8px 0; border-bottom: 1px solid #21262d; position: relative; cursor: pointer;">'
+          + '<div style="display: flex; align-items: center; justify-content: space-between;">'
+          + '<div>'
+          + '<span style="color: #e6edf3; font-size: 13px; font-weight: 500;">' + escapeHtml(attendee.displayName || 'Unknown') + '</span>'
+          + '<span style="color: #8b949e; font-size: 12px; margin-left: 8px;">' + escapeHtml(attendee.email || '') + '</span>'
+          + '</div>'
+          + '<div style="display: flex; gap: 4px; align-items: center;">'
+          + promoteHtml
+          + roleBadge
+          + '</div>'
+          + '</div>'
+          + moderationHtml
           + '</div>';
-      }
+      });
+    }
 
-      html += '<div style="padding: 8px 0; border-bottom: 1px solid #21262d;">'
-        + '<div style="display: flex; align-items: center; justify-content: space-between;">'
-        + '<div>'
-        + '<span style="color: #e6edf3; font-size: 13px; font-weight: 500;">' + escapeHtml(attendee.displayName || 'Unknown') + '</span>'
-        + '<span style="color: #8b949e; font-size: 12px; margin-left: 8px;">' + escapeHtml(attendee.email || '') + '</span>'
-        + '</div>'
-        + '<div style="display: flex; gap: 4px; align-items: center;">'
-        + promoteHtml
-        + roleBadge
-        + '</div>'
-        + '</div>'
-        + moderationHtml
-        + '</div>';
-    });
+    // --- Anonymous Users Section (bottom) ---
+    html += '<div style="margin-top: 16px; margin-bottom: 8px; font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase;">Anonymous Viewers (<span id="dashboard-anonymous-count">' + dashboardAnonymousAttendees.length + '</span>)</div>';
+
+    if (dashboardAnonymousAttendees.length === 0) {
+      html += '<p style="color: #8b949e; font-size: 13px; margin: 0;">No anonymous viewers connected</p>';
+    } else {
+      dashboardAnonymousAttendees.forEach(function(anon) {
+        html += '<div style="padding: 8px 0; border-bottom: 1px solid #21262d;">'
+          + '<div style="display: flex; align-items: center; justify-content: space-between;">'
+          + '<div>'
+          + '<span style="color: #e6edf3; font-size: 13px; font-weight: 500;">👤 ' + escapeHtml(anon.displayLabel) + '</span>'
+          + '</div>'
+          + '<span style="background: #21262d; color: #8b949e; padding: 2px 6px; border-radius: 3px; font-size: 10px;">viewer</span>'
+          + '</div>'
+          + '</div>';
+      });
+    }
+
     panel.innerHTML = html;
+
+    // Attach hover event listeners to registered user entries for profile popover
+    var registeredEntries = panel.querySelectorAll('.registered-attendee-entry[data-user-id]');
+    registeredEntries.forEach(function(entry) {
+      var userId = entry.getAttribute('data-user-id');
+      entry.addEventListener('mouseenter', function() {
+        showUserProfilePopover(userId, entry);
+      });
+      entry.addEventListener('mouseleave', function() {
+        dismissProfilePopover();
+      });
+    });
   }
 
   /**
@@ -2222,6 +2262,38 @@ const LiveSession = (() => {
             renderDashboardAttendees();
           }
           break;
+        case 'ANON_JOINED':
+          if (msg.data && userRole === 'presenter') {
+            dashboardAnonymousAttendees.push({
+              fingerprint: msg.data.fingerprint,
+              displayLabel: msg.data.label || ('Anon-' + (msg.data.fingerprint || '').substring(0, 6)),
+              sessionId: msg.data.sessionId,
+              joinedAt: msg.data.joinedAt || new Date().toISOString()
+            });
+            renderDashboardAttendees();
+          }
+          break;
+        case 'ANON_LEFT':
+          if (msg.data && userRole === 'presenter') {
+            dashboardAnonymousAttendees = dashboardAnonymousAttendees.filter(function(a) {
+              return a.fingerprint !== msg.data.fingerprint;
+            });
+            renderDashboardAttendees();
+          }
+          break;
+        case 'ANON_LIST':
+          if (msg.data && userRole === 'presenter') {
+            dashboardAnonymousAttendees = (msg.data.anonymous || []).map(function(a) {
+              return {
+                fingerprint: a.fingerprint,
+                displayLabel: a.label || ('Anon-' + (a.fingerprint || '').substring(0, 6)),
+                sessionId: a.sessionId,
+                joinedAt: a.joinedAt
+              };
+            });
+            renderDashboardAttendees();
+          }
+          break;
         case 'QUESTION_SUBMITTED':
           if (msg.data && userRole === 'presenter') {
             dashboardQuestions.push({
@@ -2417,6 +2489,202 @@ const LiveSession = (() => {
     }, 5000);
   }
 
+  // --- User Profile Popover ---
+
+  // Cache for fetched user profiles to avoid redundant API calls
+  var profileCache = {};
+  // Reference to the currently active popover element
+  var activePopover = null;
+  // Timeout for dismissing the popover
+  var popoverDismissTimeout = null;
+  // Timeout for showing the popover (debounce rapid hovers)
+  var popoverShowTimeout = null;
+
+  /**
+   * Show a hover popover with registered user profile details.
+   * Fetches user profile from the API and displays it in a tooltip/popover within 1 second.
+   * Does NOT trigger for anonymous user entries.
+   * Works during both live meetings and recorded playback.
+   * Req 9.1, 9.2, 9.3, 9.4
+   *
+   * @param {string} userId - The registered user's ID
+   * @param {HTMLElement} targetEl - The element being hovered
+   */
+  function showUserProfilePopover(userId, targetEl) {
+    if (!userId || !targetEl) return;
+
+    // Clear any pending dismiss
+    if (popoverDismissTimeout) {
+      clearTimeout(popoverDismissTimeout);
+      popoverDismissTimeout = null;
+    }
+
+    // Clear any pending show from a previous hover
+    if (popoverShowTimeout) {
+      clearTimeout(popoverShowTimeout);
+      popoverShowTimeout = null;
+    }
+
+    // Dismiss any existing popover first
+    removeActivePopover();
+
+    // Check cache first for instant display
+    if (profileCache[userId]) {
+      renderPopover(profileCache[userId], targetEl);
+      return;
+    }
+
+    // Fetch profile from API (must display within 1 second per Req 9.1)
+    popoverShowTimeout = setTimeout(function() {}, 0);
+    fetchUserProfile(userId).then(function(profile) {
+      // Only render if the user is still hovering over the same element
+      if (targetEl.matches(':hover')) {
+        profileCache[userId] = profile;
+        renderPopover(profile, targetEl);
+      }
+    }).catch(function(err) {
+      // Req 9.7: On failure, show display name only with "details unavailable" indicator
+      if (targetEl.matches(':hover')) {
+        var fallbackProfile = { displayName: getFallbackDisplayName(userId, targetEl), loadFailed: true };
+        renderPopover(fallbackProfile, targetEl);
+      }
+    });
+  }
+
+  /**
+   * Fetch user profile from the API.
+   * @param {string} userId - The user ID to fetch profile for
+   * @returns {Promise<Object>} Profile data
+   */
+  function fetchUserProfile(userId) {
+    var apiBase = window.API_BASE_URL || '/api';
+    var token = typeof Auth !== 'undefined' && Auth.getIdToken ? Auth.getIdToken() : null;
+
+    var headers = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = 'Bearer ' + token;
+    }
+
+    return fetch(apiBase + '/users/' + encodeURIComponent(userId) + '/profile', {
+      method: 'GET',
+      headers: headers,
+    }).then(function(res) {
+      if (!res.ok) {
+        throw new Error('Profile fetch failed: ' + res.status);
+      }
+      return res.json();
+    });
+  }
+
+  /**
+   * Get a fallback display name from the attendee data or the target element text.
+   * @param {string} userId - The user ID
+   * @param {HTMLElement} targetEl - The hovered element
+   * @returns {string} Display name fallback
+   */
+  function getFallbackDisplayName(userId, targetEl) {
+    // Try to find the display name from the dashboardAttendees array
+    for (var i = 0; i < dashboardAttendees.length; i++) {
+      if (dashboardAttendees[i].userId === userId) {
+        return dashboardAttendees[i].displayName || 'Unknown';
+      }
+    }
+    // Fallback to text content of the element
+    var nameSpan = targetEl.querySelector('span[style*="font-weight: 500"]');
+    return nameSpan ? nameSpan.textContent : 'Unknown';
+  }
+
+  /**
+   * Render the profile popover positioned relative to the target element.
+   * Req 9.2: Display name, avatar, and other publicly available profile fields.
+   *
+   * @param {Object} profile - Profile data { displayName, email, avatar, role, loadFailed }
+   * @param {HTMLElement} targetEl - The element to position the popover near
+   */
+  function renderPopover(profile, targetEl) {
+    removeActivePopover();
+
+    var popover = document.createElement('div');
+    popover.id = 'user-profile-popover';
+    popover.setAttribute('role', 'tooltip');
+    popover.setAttribute('aria-label', 'User profile: ' + escapeHtml(profile.displayName || 'Unknown'));
+    popover.style.cssText = 'position: absolute; z-index: 1500; background: ' + SQUID_INK + '; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; min-width: 220px; max-width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); color: #fff; font-size: 13px; pointer-events: none;';
+
+    var html = '';
+
+    // Avatar and display name header
+    html += '<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">';
+    if (profile.avatar) {
+      html += '<img src="' + escapeHtml(profile.avatar) + '" alt="" style="width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 2px solid #30363d;">';
+    } else {
+      // Default avatar placeholder
+      html += '<div style="width: 36px; height: 36px; border-radius: 50%; background: #21262d; display: flex; align-items: center; justify-content: center; font-size: 16px; border: 2px solid #30363d;">👤</div>';
+    }
+    html += '<div>';
+    html += '<div style="font-weight: 600; color: #e6edf3;">' + escapeHtml(profile.displayName || 'Unknown') + '</div>';
+    if (profile.email && !profile.loadFailed) {
+      html += '<div style="font-size: 11px; color: #8b949e;">' + escapeHtml(profile.email) + '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+
+    if (profile.loadFailed) {
+      // Req 9.7: Show "details unavailable" indicator on failure
+      html += '<div style="font-size: 12px; color: #d29922; font-style: italic;">⚠ Profile details unavailable</div>';
+    } else {
+      // Show additional profile fields if available
+      if (profile.role) {
+        html += '<div style="margin-top: 4px; font-size: 12px; color: #8b949e;">Role: <span style="color: #e6edf3; text-transform: capitalize;">' + escapeHtml(profile.role) + '</span></div>';
+      }
+      if (profile.memberSince) {
+        html += '<div style="margin-top: 2px; font-size: 12px; color: #8b949e;">Member since: <span style="color: #e6edf3;">' + escapeHtml(profile.memberSince) + '</span></div>';
+      }
+      if (profile.bio) {
+        html += '<div style="margin-top: 6px; font-size: 12px; color: #8b949e; line-height: 1.4;">' + escapeHtml(profile.bio) + '</div>';
+      }
+    }
+
+    popover.innerHTML = html;
+
+    // Position the popover relative to the target element
+    targetEl.style.position = 'relative';
+    var rect = targetEl.getBoundingClientRect();
+    var panelEl = document.getElementById('dashboard-panel-attendees');
+    var panelRect = panelEl ? panelEl.getBoundingClientRect() : { top: 0, left: 0 };
+
+    popover.style.left = '0px';
+    popover.style.top = (targetEl.offsetHeight + 4) + 'px';
+
+    targetEl.appendChild(popover);
+    activePopover = popover;
+  }
+
+  /**
+   * Dismiss the profile popover within 500ms when cursor moves away.
+   * Req 9.5: Dismiss within 500 milliseconds.
+   */
+  function dismissProfilePopover() {
+    if (popoverShowTimeout) {
+      clearTimeout(popoverShowTimeout);
+      popoverShowTimeout = null;
+    }
+
+    // Dismiss within 500ms as per requirement
+    popoverDismissTimeout = setTimeout(function() {
+      removeActivePopover();
+    }, 300);
+  }
+
+  /**
+   * Immediately remove the active popover element from the DOM.
+   */
+  function removeActivePopover() {
+    if (activePopover) {
+      activePopover.remove();
+      activePopover = null;
+    }
+  }
+
   function setPlaceholder(text) {
     var el = document.getElementById('stage-placeholder');
     if (el) {
@@ -2560,6 +2828,8 @@ const LiveSession = (() => {
     kickUser: kickUser,
     banUser: banUser,
     goLive: goLive,
+    showUserProfilePopover: showUserProfilePopover,
+    dismissProfilePopover: dismissProfilePopover,
     disconnect: disconnect
   };
 })();

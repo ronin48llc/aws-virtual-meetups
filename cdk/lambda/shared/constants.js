@@ -27,6 +27,9 @@ const KEY_PREFIX = Object.freeze({
   CONN: 'CONN#',
   HAND: 'HAND#',
   QUESTION: 'QUESTION#',
+  ANON: 'ANON#',
+  RATELIMIT: 'RATELIMIT#',
+  MINUTE: 'MINUTE#',
 });
 
 /**
@@ -93,6 +96,22 @@ const CORS_HEADERS = Object.freeze({
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
 });
 
+/**
+ * Anonymous session constants.
+ */
+const ANONYMOUS = Object.freeze({
+  /** Maximum anonymous token requests per fingerprint per minute. */
+  RATE_LIMIT_MAX: 10,
+  /** TTL for rate limit records in seconds (2 minutes). */
+  RATE_LIMIT_TTL_SECONDS: 120,
+  /** TTL for anonymous session records in seconds (24 hours). */
+  SESSION_TTL_SECONDS: 86400,
+  /** Prefix for anonymous user display labels in the presenter dashboard. */
+  DISPLAY_LABEL_PREFIX: 'Anon-',
+  /** Number of hex characters from the fingerprint used in the display label. */
+  DISPLAY_LABEL_HEX_LENGTH: 6,
+});
+
 module.exports = {
   EVENT_STATUS,
   KEY_PREFIX,
@@ -103,4 +122,5 @@ module.exports = {
   SESSION_ROLE,
   QUESTION_STATUS,
   CORS_HEADERS,
+  ANONYMOUS,
 };

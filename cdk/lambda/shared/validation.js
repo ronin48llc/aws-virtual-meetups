@@ -184,6 +184,40 @@ function validateDurationFields(scheduledEnd, durationMinutes, scheduledStart) {
   return { valid: true, error: null };
 }
 
+/**
+ * Validate a browser fingerprint string.
+ * A valid fingerprint is a hexadecimal string between 8 and 64 characters.
+ * @param {string} fingerprint - The fingerprint value to validate.
+ * @returns {{ valid: boolean, error: string|null }} Validation result.
+ */
+function validateFingerprint(fingerprint) {
+  if (!fingerprint || typeof fingerprint !== 'string') {
+    return { valid: false, error: 'Browser fingerprint is required' };
+  }
+
+  const trimmed = fingerprint.trim();
+
+  if (trimmed.length === 0) {
+    return { valid: false, error: 'Browser fingerprint is required' };
+  }
+
+  if (trimmed.length < 8) {
+    return { valid: false, error: 'Invalid fingerprint format' };
+  }
+
+  if (trimmed.length > 64) {
+    return { valid: false, error: 'Invalid fingerprint format' };
+  }
+
+  // Must be a valid hexadecimal string
+  const hexRegex = /^[0-9a-fA-F]+$/;
+  if (!hexRegex.test(trimmed)) {
+    return { valid: false, error: 'Invalid fingerprint format' };
+  }
+
+  return { valid: true, error: null };
+}
+
 module.exports = {
   ValidationError,
   validateRequiredFields,
@@ -195,4 +229,5 @@ module.exports = {
   parseBody,
   computeDurationFields,
   validateDurationFields,
+  validateFingerprint,
 };

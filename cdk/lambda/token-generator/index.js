@@ -2,20 +2,21 @@
 
 /**
  * Token Generator Lambda handler.
- * Handles POST /events/{id}/join.
+ * Handles POST /events/{id}/join and POST /events/{id}/upgrade-session.
  * Generates IVS Real-Time Stage participant tokens and IVS Chat tokens
  * based on the user's role and permissions.
  * @module token-generator
  */
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { IVSRealTimeClient, CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
 const { IvschatClient, CreateChatTokenCommand } = require('@aws-sdk/client-ivschat');
 
 const { EVENT_STATUS, SESSION_ROLE, SK } = require('../shared/constants');
-const { buildEventPK, buildSignupSK } = require('../shared/dynamo-utils');
+const { buildEventPK, buildSignupSK, buildAnonSessionSK } = require('../shared/dynamo-utils');
 const { success, badRequest, unauthorized, notFound, forbidden, serverError } = require('../shared/response');
+const { parseBody, validateFingerprint } = require('../shared/validation');
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
@@ -175,6 +176,15 @@ exports.handler = async (event) => {
       return await joinEvent(event, eventId);
     }
 
+    // POST /events/{id}/upgrade-session
+    if (method === 'POST' && normalizedResource === '/events/{id}/upgrade-session') {
+      const eventId = pathParams && pathParams.id;
+      if (!eventId) {
+        return badRequest('Event ID is required');
+      }
+      return await upgradeSession(event, eventId);
+    }
+
     return badRequest(`Unsupported route: ${method} ${normalizedResource}`);
   } catch (err) {
     console.error('Token Generator error:', err);
@@ -303,4 +313,195 @@ async function joinEvent(event, eventId) {
     role,
     eventStatus: eventItem.status,
   });
+}
+
+/**
+ * Upgrade an anonymous session to a registered user session.
+ * Issues IVS Stage token with PUBLISH + SUBSCRIBE capabilities and
+ * IVS Chat token with SEND_MESSAGE capability.
+ *
+ * Request body: { anonSessionId, fingerprint }
+ *
+ * @param {Object} event - API Gateway event (Cognito authorized).
+ * @param {string} eventId - The event identifier.
+ * @returns {Object} API Gateway response with { stageToken, chatToken, capabilities, role }.
+ */
+async function upgradeSession(event, eventId) {
+  // 1. Extract authenticated user from Cognito claims
+  const claims = getAuthClaims(event);
+  if (!claims) {
+    return unauthorized();
+  }
+
+  // 2. Parse and validate request body
+  const { valid: bodyValid, data, error: bodyError } = parseBody(event.body);
+  if (!bodyValid) {
+    return badRequest(bodyError);
+  }
+
+  const anonSessionId = data && data.anonSessionId;
+  const fingerprint = data && data.fingerprint;
+
+  if (!anonSessionId) {
+    return badRequest('anonSessionId is required');
+  }
+
+  const { valid: fpValid, error: fpError } = validateFingerprint(fingerprint);
+  if (!fpValid) {
+    return badRequest(fpError);
+  }
+
+  // 3. Validate the anonymous session exists and is active in DynamoDB
+  const anonSessionSK = buildAnonSessionSK(fingerprint, anonSessionId);
+  const anonSessionResult = await docClient.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: { PK: buildEventPK(eventId), SK: anonSessionSK },
+  }));
+
+  if (!anonSessionResult.Item) {
+    return badRequest('Invalid or expired anonymous session');
+  }
+
+  const anonSession = anonSessionResult.Item;
+  if (anonSession.status !== 'active') {
+    return badRequest('Invalid or expired anonymous session');
+  }
+
+  // 4. Fetch event metadata to get stageArn and chatRoomArn
+  const eventRecord = await docClient.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
+  }));
+
+  if (!eventRecord.Item) {
+    return notFound('Event not found');
+  }
+
+  const eventItem = eventRecord.Item;
+  const { stageArn, chatRoomArn } = eventItem;
+
+  // 5. Handle edge case: event ended during upgrade
+  //    Complete registration but return ended state (Req 6.6)
+  if (eventItem.status === EVENT_STATUS.ENDED || eventItem.status === EVENT_STATUS.PUBLISHED) {
+    // Auto-register the user even though event ended
+    await autoRegisterIfNeeded(eventId, claims);
+
+    // Update anonymous session record with upgraded user ID
+    await updateAnonSessionUpgrade(eventId, fingerprint, anonSessionId, claims.userId);
+
+    return success({
+      message: 'Event has ended',
+      registered: true,
+      eventStatus: eventItem.status,
+    });
+  }
+
+  // Event must be live or staging to issue tokens
+  if (eventItem.status !== EVENT_STATUS.LIVE && eventItem.status !== EVENT_STATUS.STAGING) {
+    return badRequest('Event is not currently live');
+  }
+
+  if (!stageArn || !chatRoomArn) {
+    return serverError('Event streaming resources not available');
+  }
+
+  // 6. Auto-register attendee (non-blocking)
+  await autoRegisterIfNeeded(eventId, claims);
+
+  // Upgraded users are attendees with full capabilities
+  const role = SESSION_ROLE.ATTENDEE;
+  const stageCapabilities = ['PUBLISH', 'SUBSCRIBE'];
+  const chatCapabilities = ['SEND_MESSAGE'];
+
+  // 7. Call IVS CreateParticipantToken with PUBLISH + SUBSCRIBE capabilities
+  let stageTokenResult;
+  try {
+    stageTokenResult = await ivsRealTimeClient.send(new CreateParticipantTokenCommand({
+      stageArn,
+      userId: claims.userId,
+      capabilities: stageCapabilities,
+      duration: STAGE_TOKEN_DURATION_MINUTES,
+      attributes: {
+        displayName: claims.displayName,
+        role,
+      },
+    }));
+  } catch (err) {
+    console.error('Failed to create stage token during upgrade:', err);
+    return serverError('Upgrade failed. Please try again.');
+  }
+
+  // 8. Call IVS Chat CreateChatToken with SEND_MESSAGE capability
+  let chatTokenResult;
+  try {
+    chatTokenResult = await ivsChatClient.send(new CreateChatTokenCommand({
+      roomIdentifier: chatRoomArn,
+      userId: claims.userId,
+      capabilities: chatCapabilities,
+      sessionDurationInMinutes: CHAT_TOKEN_DURATION_MINUTES,
+      attributes: {
+        displayName: claims.displayName,
+        role,
+      },
+    }));
+  } catch (err) {
+    console.error('Failed to create chat token during upgrade:', err);
+    return serverError('Upgrade failed. Please try again.');
+  }
+
+  // 9. Update anonymous session record: set upgradedToUserId field
+  await updateAnonSessionUpgrade(eventId, fingerprint, anonSessionId, claims.userId);
+
+  // 10. Return tokens and capabilities
+  return success({
+    stageToken: {
+      token: stageTokenResult.participantToken.token,
+      participantId: stageTokenResult.participantToken.participantId,
+      expirationTime: stageTokenResult.participantToken.expirationTime,
+    },
+    chatToken: {
+      token: chatTokenResult.token,
+      sessionExpirationTime: chatTokenResult.sessionExpirationTime,
+      tokenExpirationTime: chatTokenResult.tokenExpirationTime,
+    },
+    capabilities: {
+      stage: stageCapabilities,
+      chat: chatCapabilities,
+    },
+    role,
+  });
+}
+
+/**
+ * Update an anonymous session record to mark it as upgraded.
+ * Sets the `upgradedToUserId` field on the session record.
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {string} fingerprint - The browser fingerprint.
+ * @param {string} sessionId - The anonymous session identifier.
+ * @param {string} userId - The Cognito user ID of the newly registered user.
+ * @returns {Promise<void>}
+ */
+async function updateAnonSessionUpgrade(eventId, fingerprint, sessionId, userId) {
+  try {
+    await docClient.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: {
+        PK: buildEventPK(eventId),
+        SK: buildAnonSessionSK(fingerprint, sessionId),
+      },
+      UpdateExpression: 'SET #upgradedToUserId = :userId, #status = :upgraded',
+      ExpressionAttributeNames: {
+        '#upgradedToUserId': 'upgradedToUserId',
+        '#status': 'status',
+      },
+      ExpressionAttributeValues: {
+        ':userId': userId,
+        ':upgraded': 'upgraded',
+      },
+    }));
+  } catch (err) {
+    console.error('Failed to update anonymous session upgrade:', err);
+    // Non-blocking — tokens already generated
+  }
 }

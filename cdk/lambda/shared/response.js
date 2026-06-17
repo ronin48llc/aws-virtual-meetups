@@ -78,6 +78,15 @@ function notFound(message = 'Resource not found') {
 }
 
 /**
+ * 429 Too Many Requests response.
+ * @param {string} [message='Too many requests. Try again later.'] - Error description.
+ * @returns {Object} API Gateway response.
+ */
+function tooManyRequests(message = 'Too many requests. Try again later.') {
+  return buildResponse(429, { error: 'Too Many Requests', message });
+}
+
+/**
  * 500 Internal Server Error response.
  * @param {string} [message='Internal server error'] - Error description.
  * @returns {Object} API Gateway response.
@@ -94,5 +103,6 @@ module.exports = {
   unauthorized,
   forbidden,
   notFound,
+  tooManyRequests,
   serverError,
 };
