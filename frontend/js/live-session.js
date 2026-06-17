@@ -1278,14 +1278,10 @@ const LiveSession = (() => {
     }, 3000);
   }
 
-  // --- Captions ---
+  // --- Captions (Web Speech API) ---
 
-  // Transcription state
-  let transcribeWs = null;
   let transcriptionActive = false;
-  let audioContext = null;
-  let audioProcessor = null;
-  let captionSourceStream = null;
+  let speechRecognition = null;
 
   /**
    * Add a "Start Captions" button to the caption area for presenters.
@@ -1296,6 +1292,15 @@ const LiveSession = (() => {
 
     var headerDiv = captionArea.querySelector('div');
     if (!headerDiv) return;
+
+    // Check if Web Speech API is available
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      var note = document.createElement('span');
+      note.style.cssText = 'font-size: 11px; color: #da3633; margin-left: 8px;';
+      note.textContent = '(Captions unavailable — use Chrome or Edge)';
+      headerDiv.appendChild(note);
+      return;
+    }
 
     var btn = document.createElement('button');
     btn.id = 'btn-start-captions';
@@ -1312,232 +1317,84 @@ const LiveSession = (() => {
   }
 
   /**
-   * Start live transcription.
-   * 1. Calls the backend to get a pre-signed Transcribe Streaming URL
-   * 2. Connects to Transcribe via WebSocket
-   * 3. Captures mic audio, encodes as PCM, streams to Transcribe
-   * 4. Receives transcripts and broadcasts to all attendees
+   * Start live captions using the Web Speech API (SpeechRecognition).
+   * Zero setup, zero cost, works in Chrome/Edge, captures mic audio
+   * via browser-native speech recognition.
    */
-  async function startTranscription() {
-    var btn = document.getElementById('btn-start-captions');
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = 'Starting...';
+  function startTranscription() {
+    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      showNotification('Captions require Chrome or Edge browser.');
+      return;
     }
 
-    try {
-      var apiBase = window.API_BASE_URL || '/api';
-      var token = Auth.getIdToken();
+    var btn = document.getElementById('btn-start-captions');
 
-      // Get the source language from the caption language selector
-      var langSelect = document.getElementById('caption-language-select');
-      var selectedLang = langSelect ? langSelect.value : 'en';
-      // Map short code to Transcribe language code
-      var transcribeLangMap = {
-        'en': 'en-US', 'es': 'es-US', 'fr': 'fr-FR', 'de': 'de-DE',
-        'pt': 'pt-BR', 'ja': 'ja-JP', 'ko': 'ko-KR', 'zh': 'zh-CN'
-      };
-      var sourceLanguage = transcribeLangMap[selectedLang] || 'en-US';
+    speechRecognition = new SpeechRecognition();
+    speechRecognition.continuous = true;
+    speechRecognition.interimResults = true;
 
-      var res = await fetch(apiBase + '/events/' + encodeURIComponent(eventId) + '/transcription/start', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + token,
-        },
-        body: JSON.stringify({
-          sourceLanguage: sourceLanguage,
-          sampleRate: 16000,
-          mediaEncoding: 'pcm',
-        }),
-      });
+    // Map caption language selector to BCP-47 codes
+    var langMap = { 'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'pt': 'pt-BR', 'ja': 'ja-JP', 'ko': 'ko-KR', 'zh': 'zh-CN' };
+    speechRecognition.lang = langMap[captionLanguage] || 'en-US';
 
-      if (!res.ok) {
-        throw new Error('Failed to get transcription URL (' + res.status + ')');
+    speechRecognition.onresult = function(event) {
+      var transcript = '';
+      var isFinal = false;
+      for (var i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          isFinal = true;
+        }
       }
+      displayCaption(transcript);
+      if (isFinal && transcript.trim()) {
+        broadcastCaptionToAttendees(transcript.trim(), captionLanguage);
+      }
+    };
 
-      var data = await res.json();
-      var presignedUrl = data.presignedUrl;
+    speechRecognition.onerror = function(event) {
+      if (event.error === 'no-speech') return; // Normal — silence
+      if (event.error === 'aborted') return; // We stopped it
+      console.error('SpeechRecognition error:', event.error);
+      showNotification('Caption error: ' + event.error);
+    };
 
-      // Connect to Amazon Transcribe Streaming via WebSocket
-      await connectToTranscribe(presignedUrl);
+    // Auto-restart on end (browser stops after silence or time limits)
+    speechRecognition.onend = function() {
+      if (transcriptionActive) {
+        try { speechRecognition.start(); } catch (e) {}
+      }
+    };
 
+    try {
+      speechRecognition.start();
       transcriptionActive = true;
       if (btn) {
-        btn.disabled = false;
         btn.textContent = '⏹ Stop Captions';
         btn.style.background = '#e63946';
         btn.style.borderColor = '#e63946';
       }
-
       var captionEl = document.getElementById('caption-text');
       if (captionEl) {
-        captionEl.textContent = '';
-        captionEl.style.fontStyle = 'normal';
-        captionEl.style.color = '#e6edf3';
+        captionEl.textContent = 'Listening...';
+        captionEl.style.fontStyle = 'italic';
+        captionEl.style.color = '#8b949e';
       }
     } catch (err) {
-      console.error('Failed to start transcription:', err);
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = '▶ Start Captions';
-      }
-      showNotification('Failed to start captions: ' + (err.message || 'Unknown error'));
+      showNotification('Failed to start captions: ' + err.message);
     }
   }
 
   /**
-   * Connect to Amazon Transcribe Streaming WebSocket and start audio capture.
-   * @param {string} presignedUrl - The pre-signed WebSocket URL for Transcribe.
-   */
-  async function connectToTranscribe(presignedUrl) {
-    // Set up audio capture from the presenter's microphone.
-    // Do NOT request a specific sampleRate in getUserMedia — it's ignored
-    // on most platforms and causes "operation is insecure" errors on some.
-    // We capture at the browser's native rate and resample to 16kHz in the
-    // onaudioprocess callback.
-    var stream;
-    if (localStreams.mic) {
-      stream = new MediaStream([localStreams.mic]);
-    } else {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        }
-      });
-    }
-    captionSourceStream = stream;
-
-    // Use the browser's native sample rate — forcing 16000 on AudioContext
-    // causes NotSupportedError / "operation is insecure" on many platforms.
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    var nativeSampleRate = audioContext.sampleRate;
-    var source = audioContext.createMediaStreamSource(stream);
-
-    var bufferSize = 4096;
-    audioProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-
-    // Connect to Transcribe WebSocket
-    transcribeWs = new WebSocket(presignedUrl);
-    transcribeWs.binaryType = 'arraybuffer';
-
-    var partialTranscript = '';
-
-    transcribeWs.onopen = function() {
-      console.log('Transcribe WebSocket connected');
-      // Route through silent gain so mic audio doesn't feed back to speakers.
-      var silentGain = audioContext.createGain();
-      silentGain.gain.value = 0;
-      silentGain.connect(audioContext.destination);
-      source.connect(audioProcessor);
-      audioProcessor.connect(silentGain);
-    };
-
-    transcribeWs.onmessage = function(event) {
-      try {
-        // Transcribe Streaming returns event-stream encoded messages
-        var message = decodeTranscribeMessage(event.data);
-        if (message && message.Transcript && message.Transcript.Results) {
-          message.Transcript.Results.forEach(function(result) {
-            if (result.Alternatives && result.Alternatives.length > 0) {
-              var transcript = result.Alternatives[0].Transcript;
-              if (result.IsPartial) {
-                // Show partial transcript locally
-                partialTranscript = transcript;
-                displayCaption(transcript);
-              } else {
-                // Final transcript — broadcast to all attendees
-                partialTranscript = '';
-                displayCaption(transcript);
-                broadcastCaptionToAttendees(transcript, captionLanguage);
-              }
-            }
-          });
-        }
-      } catch (err) {
-        // Some messages may not be JSON (binary event stream)
-        // Try the event-stream binary decoder
-        try {
-          var decoded = decodeEventStreamMessage(event.data);
-          if (decoded) {
-            if (decoded.Transcript && decoded.Transcript.Results) {
-              decoded.Transcript.Results.forEach(function(result) {
-                if (result.Alternatives && result.Alternatives.length > 0) {
-                  var transcript = result.Alternatives[0].Transcript;
-                  if (!result.IsPartial) {
-                    displayCaption(transcript);
-                    broadcastCaptionToAttendees(transcript, captionLanguage);
-                  } else {
-                    displayCaption(transcript);
-                  }
-                }
-              });
-            }
-          }
-        } catch (e2) {
-          // Ignore decode errors for non-transcript messages
-        }
-      }
-    };
-
-    transcribeWs.onerror = function(err) {
-      console.error('Transcribe WebSocket error:', err);
-    };
-
-    transcribeWs.onclose = function() {
-      console.log('Transcribe WebSocket closed');
-    };
-
-    // Send audio frames to Transcribe — resample to 16kHz if needed
-    audioProcessor.onaudioprocess = function(e) {
-      if (!transcribeWs || transcribeWs.readyState !== WebSocket.OPEN) return;
-
-      var inputData = e.inputBuffer.getChannelData(0);
-
-      // Resample from native browser rate to 16kHz (required by Transcribe)
-      var samples;
-      if (nativeSampleRate !== 16000) {
-        var ratio = nativeSampleRate / 16000;
-        var newLength = Math.round(inputData.length / ratio);
-        samples = new Float32Array(newLength);
-        for (var i = 0; i < newLength; i++) {
-          samples[i] = inputData[Math.round(i * ratio)] || 0;
-        }
-      } else {
-        samples = inputData;
-      }
-
-      var pcmData = float32ToInt16(samples);
-      var frame = encodeAudioEvent(pcmData);
-      transcribeWs.send(frame);
-    };
-  }
-
-  /**
-   * Stop live transcription and clean up resources.
+   * Stop live captions and clean up.
    */
   function stopTranscription() {
     transcriptionActive = false;
-
-    if (audioProcessor) {
-      audioProcessor.disconnect();
-      audioProcessor = null;
+    if (speechRecognition) {
+      speechRecognition.abort();
+      speechRecognition = null;
     }
-    if (audioContext) {
-      audioContext.close().catch(function() {});
-      audioContext = null;
-    }
-    if (transcribeWs) {
-      transcribeWs.close();
-      transcribeWs = null;
-    }
-    // Don't stop captionSourceStream if it's the shared mic track
-    if (captionSourceStream && !localStreams.mic) {
-      captionSourceStream.getTracks().forEach(function(t) { t.stop(); });
-    }
-    captionSourceStream = null;
 
     var btn = document.getElementById('btn-start-captions');
     if (btn) {
@@ -1568,192 +1425,19 @@ const LiveSession = (() => {
   }
 
   /**
-   * Convert Float32Array audio samples to Int16 PCM.
-   * @param {Float32Array} float32Array - Input audio samples (-1.0 to 1.0).
-   * @returns {ArrayBuffer} Int16 PCM encoded audio.
-   */
-  function float32ToInt16(float32Array) {
-    var buffer = new ArrayBuffer(float32Array.length * 2);
-    var view = new DataView(buffer);
-    for (var i = 0; i < float32Array.length; i++) {
-      var s = Math.max(-1, Math.min(1, float32Array[i]));
-      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    }
-    return buffer;
-  }
-
-  /**
-   * Encode audio data into an AWS event-stream frame for Transcribe Streaming.
-   * The event-stream format requires specific headers and framing.
-   * @param {ArrayBuffer} pcmData - The PCM audio data.
-   * @returns {ArrayBuffer} The encoded event-stream frame.
-   */
-  function encodeAudioEvent(pcmData) {
-    // Event stream message format:
-    // [total_length:4][headers_length:4][prelude_crc:4][headers][payload][message_crc:4]
-    var contentType = ':content-type';
-    var contentTypeValue = 'application/octet-stream';
-    var eventType = ':event-type';
-    var eventTypeValue = 'AudioEvent';
-    var messageType = ':message-type';
-    var messageTypeValue = 'event';
-
-    // Build headers
-    var headers = [];
-    headers.push(buildHeader(contentType, 7, contentTypeValue));
-    headers.push(buildHeader(eventType, 7, eventTypeValue));
-    headers.push(buildHeader(messageType, 7, messageTypeValue));
-
-    var headersBuffer = concatArrayBuffers(headers);
-    var headersLength = headersBuffer.byteLength;
-    var payloadLength = pcmData.byteLength;
-    var totalLength = 4 + 4 + 4 + headersLength + payloadLength + 4; // prelude + headers + payload + message_crc
-
-    var message = new ArrayBuffer(totalLength);
-    var view = new DataView(message);
-    var offset = 0;
-
-    // Total byte length
-    view.setUint32(offset, totalLength, false); offset += 4;
-    // Headers byte length
-    view.setUint32(offset, headersLength, false); offset += 4;
-    // Prelude CRC (CRC of first 8 bytes)
-    var preludeCrc = crc32(new Uint8Array(message, 0, 8));
-    view.setUint32(offset, preludeCrc, false); offset += 4;
-
-    // Headers
-    new Uint8Array(message, offset, headersLength).set(new Uint8Array(headersBuffer));
-    offset += headersLength;
-
-    // Payload
-    new Uint8Array(message, offset, payloadLength).set(new Uint8Array(pcmData));
-    offset += payloadLength;
-
-    // Message CRC (CRC of everything except last 4 bytes)
-    var messageCrc = crc32(new Uint8Array(message, 0, offset));
-    view.setUint32(offset, messageCrc, false);
-
-    return message;
-  }
-
-  /**
-   * Build a single event-stream header.
-   * @param {string} name - Header name.
-   * @param {number} type - Header value type (7 = string).
-   * @param {string} value - Header value.
-   * @returns {ArrayBuffer} Encoded header.
-   */
-  function buildHeader(name, type, value) {
-    var nameBytes = new TextEncoder().encode(name);
-    var valueBytes = new TextEncoder().encode(value);
-    var buffer = new ArrayBuffer(1 + nameBytes.length + 1 + 2 + valueBytes.length);
-    var view = new DataView(buffer);
-    var offset = 0;
-
-    // Header name length (1 byte)
-    view.setUint8(offset, nameBytes.length); offset += 1;
-    // Header name
-    new Uint8Array(buffer, offset, nameBytes.length).set(nameBytes); offset += nameBytes.length;
-    // Header value type (1 byte)
-    view.setUint8(offset, type); offset += 1;
-    // Value string length (2 bytes, big-endian)
-    view.setUint16(offset, valueBytes.length, false); offset += 2;
-    // Value string
-    new Uint8Array(buffer, offset, valueBytes.length).set(valueBytes);
-
-    return buffer;
-  }
-
-  /**
-   * Concatenate multiple ArrayBuffers.
-   * @param {ArrayBuffer[]} buffers - Array of buffers to concatenate.
-   * @returns {ArrayBuffer} Combined buffer.
-   */
-  function concatArrayBuffers(buffers) {
-    var totalLength = buffers.reduce(function(sum, buf) { return sum + buf.byteLength; }, 0);
-    var result = new ArrayBuffer(totalLength);
-    var view = new Uint8Array(result);
-    var offset = 0;
-    buffers.forEach(function(buf) {
-      view.set(new Uint8Array(buf), offset);
-      offset += buf.byteLength;
-    });
-    return result;
-  }
-
-  /**
-   * CRC-32 implementation for event-stream framing.
-   * @param {Uint8Array} data - Data to compute CRC for.
-   * @returns {number} CRC-32 value.
-   */
-  function crc32(data) {
-    var table = crc32.table;
-    if (!table) {
-      table = [];
-      for (var i = 0; i < 256; i++) {
-        var c = i;
-        for (var j = 0; j < 8; j++) {
-          if (c & 1) {
-            c = 0xEDB88320 ^ (c >>> 1);
-          } else {
-            c = c >>> 1;
-          }
-        }
-        table.push(c >>> 0);
-      }
-      crc32.table = table;
-    }
-    var crc = 0xFFFFFFFF;
-    for (var k = 0; k < data.length; k++) {
-      crc = table[(crc ^ data[k]) & 0xFF] ^ (crc >>> 8);
-    }
-    return (crc ^ 0xFFFFFFFF) >>> 0;
-  }
-
-  /**
-   * Decode an event-stream message from Transcribe Streaming.
-   * @param {ArrayBuffer} buffer - The raw WebSocket message.
-   * @returns {Object|null} Parsed transcript message or null.
-   */
-  function decodeEventStreamMessage(buffer) {
-    try {
-      var view = new DataView(buffer);
-      var totalLength = view.getUint32(0, false);
-      var headersLength = view.getUint32(4, false);
-      // Skip prelude CRC (4 bytes at offset 8)
-      var headersStart = 12;
-      var payloadStart = headersStart + headersLength;
-      var payloadEnd = totalLength - 4; // Exclude message CRC
-
-      if (payloadEnd <= payloadStart) return null;
-
-      var payloadBytes = new Uint8Array(buffer, payloadStart, payloadEnd - payloadStart);
-      var payloadStr = new TextDecoder().decode(payloadBytes);
-      return JSON.parse(payloadStr);
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /**
-   * Decode a Transcribe message (try JSON first, then event-stream).
-   * @param {*} data - WebSocket message data.
-   * @returns {Object|null} Parsed message or null.
-   */
-  function decodeTranscribeMessage(data) {
-    if (typeof data === 'string') {
-      return JSON.parse(data);
-    }
-    return decodeEventStreamMessage(data);
-  }
-
-  /**
    * Set the caption language.
    * Req 19.2: Provide translated captions in selected language.
    */
   function setCaptionLanguage(langCode) {
     captionLanguage = langCode;
-    // Notify backend of language preference via WebSocket
+    // Update speech recognition language if active
+    if (speechRecognition && transcriptionActive) {
+      var langMap = { 'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'pt': 'pt-BR', 'ja': 'ja-JP', 'ko': 'ko-KR', 'zh': 'zh-CN' };
+      speechRecognition.lang = langMap[langCode] || 'en-US';
+      // Restart to apply new language
+      try { speechRecognition.abort(); } catch (e) {}
+      try { speechRecognition.start(); } catch (e) {}
+    }
     sendWebSocketMessage('setCaptionLanguage', { language: langCode });
   }
 
