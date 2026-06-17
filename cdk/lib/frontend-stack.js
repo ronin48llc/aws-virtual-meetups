@@ -86,8 +86,8 @@ class FrontendStack extends Stack {
       // The custom API domain (api.<domainName>) must be explicitly listed
       // because it doesn't match *.amazonaws.com.
       ...(props.domainNames && props.domainNames.length > 0
-        ? [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://*.${props.domainNames[0]} wss://*.${props.domainNames[0]}`]
-        : [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net`]),
+        ? [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://*.awsvirtualmeetups.com wss://*.awsvirtualmeetups.com https://cdn.jsdelivr.net`]
+        : [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://cdn.jsdelivr.net`]),
       "worker-src 'self' blob:",
       "frame-ancestors 'none'",
       "base-uri 'self'",

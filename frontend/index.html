@@ -51,10 +51,10 @@
         openssl dgst -sha384 -binary <file> | openssl base64 -A
   -->
 
-  <!-- IVS Web Broadcast SDK -->
-  <script src="https://web-broadcast.live-video.net/1.6.0/amazon-ivs-web-broadcast.js"
-          integrity="sha384-oj22v/UhkUON3VmdD+QnPt9VbchbM9senoTNR52X53QMEIpvuOhAPvMWCEndijGe"
-          crossorigin="anonymous"></script>
+  <!-- IVS Web Broadcast SDK — no SRI/crossorigin: live-video.net does not
+       send Access-Control-Allow-Origin, so crossorigin="anonymous" causes
+       the browser to block the load even though the hash is correct. -->
+  <script src="https://web-broadcast.live-video.net/1.6.0/amazon-ivs-web-broadcast.js"></script>
 
   <!-- HLS.js for recording playback -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"
