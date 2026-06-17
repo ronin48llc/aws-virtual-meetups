@@ -146,6 +146,10 @@ class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 256,
       tracing: lambda.Tracing.ACTIVE,
+      // #30: 30-day log retention like every other function in this stack.
+      // This public, unauthenticated Lambda was added after the original
+      // retention sweep and slipped through without it.
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
       },

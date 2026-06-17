@@ -26,12 +26,12 @@ jest.mock('@aws-sdk/client-ivs-realtime', () => ({
   IVSRealTimeClient: jest.fn(() => ({ send: mockIvsRealTimeSend })),
   CreateParticipantTokenCommand: jest.fn((params) => ({ type: 'CreateParticipantToken', params })),
   DisconnectParticipantCommand: jest.fn((params) => ({ type: 'DisconnectParticipant', params })),
-}), { virtual: true });
+}));
 jest.mock('@aws-sdk/client-ivschat', () => ({
   IvschatClient: jest.fn(() => ({ send: mockIvsChatSend })),
   CreateChatTokenCommand: jest.fn((params) => ({ type: 'CreateChatToken', params })),
   DisconnectUserCommand: jest.fn((params) => ({ type: 'DisconnectUser', params })),
-}), { virtual: true });
+}));
 
 // Mock API Gateway Management API
 const mockPostToConnection = jest.fn();

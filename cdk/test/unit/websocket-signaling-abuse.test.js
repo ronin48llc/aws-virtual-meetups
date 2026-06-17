@@ -22,14 +22,14 @@ const mockIvsRealTimeSend = jest.fn();
 jest.mock('@aws-sdk/client-ivs-realtime', () => ({
   IVSRealTimeClient: jest.fn(() => ({ send: mockIvsRealTimeSend })),
   DisconnectParticipantCommand: jest.fn((params) => ({ type: 'DisconnectParticipant', params })),
-}), { virtual: true });
+}));
 
 // Mock IVS Chat client
 const mockIvsChatSend = jest.fn();
 jest.mock('@aws-sdk/client-ivschat', () => ({
   IvschatClient: jest.fn(() => ({ send: mockIvsChatSend })),
   DisconnectUserCommand: jest.fn((params) => ({ type: 'DisconnectUser', params })),
-}), { virtual: true });
+}));
 
 // Mock API Gateway Management API
 const mockPostToConnection = jest.fn();
@@ -65,6 +65,14 @@ process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
 process.env.WEBSOCKET_ENDPOINT = 'https://test.execute-api.us-east-1.amazonaws.com/prod';
 
 const { handler } = require('../../lambda/websocket/signaling');
+
+// Capture the IVS command-constructor mocks at module load so assertions
+// reference the SAME instances the handler bound. A late require() of these
+// (virtual) mocks can resolve to a different instance under jest's parallel
+// worker scheduling, which made the kickUser assertions flaky (0 calls) in the
+// full suite while passing in isolation.
+const { DisconnectParticipantCommand } = require('@aws-sdk/client-ivs-realtime');
+const { DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
 
 function buildEvent({ action, eventId, data, userId, targetConnectionId, connectionId = 'conn-presenter', reason, bannedBy }) {
   const body = { action, eventId };
@@ -119,7 +127,6 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
       expect(result.body).toBe('User kicked');
 
       // Verify IVS Stage disconnect
-      const { DisconnectParticipantCommand } = require('@aws-sdk/client-ivs-realtime');
       expect(DisconnectParticipantCommand).toHaveBeenCalledWith({
         stageArn: 'arn:aws:ivs:us-east-1:123456789:stage/abc',
         participantId: 'user_bad',
@@ -128,7 +135,6 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
       expect(mockIvsRealTimeSend).toHaveBeenCalled();
 
       // Verify IVS Chat disconnect
-      const { DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
       expect(DisconnectUserCommand).toHaveBeenCalledWith({
         roomIdentifier: 'arn:aws:ivschat:us-east-1:123456789:room/xyz',
         userId: 'user_bad',
