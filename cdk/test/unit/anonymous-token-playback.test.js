@@ -74,24 +74,42 @@ describe('Anonymous Token Lambda - playbackAnonymous', () => {
   });
 
   describe('Recording lookup', () => {
-    it('returns 404 when recording does not exist', async () => {
-      // GetItemCommand returns no item
+    it('returns 404 when the event does not exist', async () => {
+      // GetItemCommand (METADATA record) returns no item
       mockSend.mockResolvedValueOnce({ Item: undefined });
 
       const event = buildEvent({ body: { fingerprint: validFingerprint }, pathParameters: { id: 'evt_123' } });
       const result = await handler(event);
       expect(result.statusCode).toBe(404);
       const body = JSON.parse(result.body);
-      expect(body.message).toBe('Recording not found');
+      expect(body.message).toBe('Event not found');
     });
 
-    it('returns 404 when recording exists but has no playback URL', async () => {
-      // GetItemCommand returns item without playbackUrl
+    it('returns 400 when the event has not ended (recording not available)', async () => {
+      // Event exists but is still live — recording isn't available for playback
       mockSend.mockResolvedValueOnce({
         Item: {
           PK: { S: 'EVENT#evt_123' },
-          SK: { S: 'RECORDING' },
-          // No playbackUrl field
+          SK: { S: 'METADATA' },
+          status: { S: 'live' },
+        },
+      });
+
+      const event = buildEvent({ body: { fingerprint: validFingerprint }, pathParameters: { id: 'evt_123' } });
+      const result = await handler(event);
+      expect(result.statusCode).toBe(400);
+      const body = JSON.parse(result.body);
+      expect(body.message).toBe('Recording not available for this event');
+    });
+
+    it('returns 404 when the event ended but has no playback URL yet', async () => {
+      // GetItemCommand (METADATA) returns an ended event without hlsPlaybackUrl
+      mockSend.mockResolvedValueOnce({
+        Item: {
+          PK: { S: 'EVENT#evt_123' },
+          SK: { S: 'METADATA' },
+          status: { S: 'ended' },
+          // No hlsPlaybackUrl field
         },
       });
 
@@ -105,12 +123,13 @@ describe('Anonymous Token Lambda - playbackAnonymous', () => {
 
   describe('Rate limiting', () => {
     it('returns 429 when rate limit is exceeded', async () => {
-      // GetItemCommand returns recording with playbackUrl
+      // GetItemCommand (METADATA) returns an ended event with hlsPlaybackUrl
       mockSend.mockResolvedValueOnce({
         Item: {
           PK: { S: 'EVENT#evt_123' },
-          SK: { S: 'RECORDING' },
-          playbackUrl: { S: 'https://cdn.example.com/recording.m3u8' },
+          SK: { S: 'METADATA' },
+          status: { S: 'ended' },
+          hlsPlaybackUrl: { S: 'https://cdn.example.com/recording.m3u8' },
         },
       });
       // UpdateItemCommand returns count > 10
@@ -134,8 +153,9 @@ describe('Anonymous Token Lambda - playbackAnonymous', () => {
       mockSend.mockResolvedValueOnce({
         Item: {
           PK: { S: 'EVENT#evt_123' },
-          SK: { S: 'RECORDING' },
-          playbackUrl: { S: playbackUrl },
+          SK: { S: 'METADATA' },
+          status: { S: 'ended' },
+          hlsPlaybackUrl: { S: playbackUrl },
         },
       });
       // UpdateItemCommand returns count within limit
@@ -160,8 +180,9 @@ describe('Anonymous Token Lambda - playbackAnonymous', () => {
       mockSend.mockResolvedValueOnce({
         Item: {
           PK: { S: 'EVENT#evt_123' },
-          SK: { S: 'RECORDING' },
-          playbackUrl: { S: playbackUrl },
+          SK: { S: 'METADATA' },
+          status: { S: 'ended' },
+          hlsPlaybackUrl: { S: playbackUrl },
         },
       });
       mockSend.mockResolvedValueOnce({
@@ -184,8 +205,9 @@ describe('Anonymous Token Lambda - playbackAnonymous', () => {
       mockSend.mockResolvedValueOnce({
         Item: {
           PK: { S: 'EVENT#evt_123' },
-          SK: { S: 'RECORDING' },
-          playbackUrl: { S: playbackUrl },
+          SK: { S: 'METADATA' },
+          status: { S: 'ended' },
+          hlsPlaybackUrl: { S: playbackUrl },
         },
       });
       mockSend.mockResolvedValueOnce({

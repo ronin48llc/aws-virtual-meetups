@@ -353,6 +353,10 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });
       // StopComposition
       mockIvsRealTimeSend.mockResolvedValueOnce({});
+      // GetComposition — supplies the recording prefix used to build hlsPlaybackUrl
+      mockIvsRealTimeSend.mockResolvedValueOnce({
+        composition: { destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }] },
+      });
       // UpdateCommand: set hlsPlaybackUrl
       mockDdbSend.mockResolvedValueOnce({});
       // UpdateCommand: update event status
@@ -388,6 +392,10 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });
       // StopComposition
       mockIvsRealTimeSend.mockResolvedValueOnce({});
+      // GetComposition — supplies the recording prefix used to build hlsPlaybackUrl
+      mockIvsRealTimeSend.mockResolvedValueOnce({
+        composition: { destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }] },
+      });
       // UpdateCommand: set hlsPlaybackUrl
       mockDdbSend.mockResolvedValueOnce({});
       // UpdateCommand: update event status
@@ -479,6 +487,10 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });
       // StopComposition
       mockIvsRealTimeSend.mockResolvedValueOnce({});
+      // GetComposition — supplies the recording prefix used to build hlsPlaybackUrl
+      mockIvsRealTimeSend.mockResolvedValueOnce({
+        composition: { destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }] },
+      });
       // UpdateCommand: set hlsPlaybackUrl
       mockDdbSend.mockResolvedValueOnce({});
       // UpdateCommand: update event status
@@ -527,6 +539,9 @@ describe('Session Manager Lambda handler', () => {
         // - questions: 2 pages of Count = 800 + 50 = 850
         mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });           // get event
         mockIvsRealTimeSend.mockResolvedValueOnce({});                     // stop composition
+        mockIvsRealTimeSend.mockResolvedValueOnce({                        // get composition (recording prefix)
+          composition: { destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }] },
+        });
         mockDdbSend.mockResolvedValueOnce({});                             // set hlsPlaybackUrl
         mockDdbSend.mockResolvedValueOnce({});                             // update status
         mockDdbSend.mockResolvedValueOnce({ Items: [] });                  // broadcast connections
