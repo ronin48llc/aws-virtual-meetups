@@ -42,8 +42,8 @@ class TranscriptionStack extends Stack {
     const transcriptionFunction = new lambda.Function(this, 'TranscriptionFunction', {
       functionName: 'VirtualMeetup-Transcription',
       runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/transcription/')),
+      handler: 'transcription/index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/')),
       timeout: Duration.seconds(30),
       memorySize: 256,
       logRetention: logs.RetentionDays.ONE_MONTH,
