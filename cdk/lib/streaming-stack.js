@@ -7,7 +7,7 @@ const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
 
 class StreamingStack extends Stack {
-  constructor(scope, id, props) {
+  constructor(scope, id, props = {}) {
     super(scope, id, props);
 
     // Recording retention: operators can override via cdk context
