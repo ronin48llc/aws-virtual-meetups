@@ -78,7 +78,7 @@ class FrontendStack extends Stack {
       "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://web-broadcast.live-video.net",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
-      "media-src 'self' blob: https://*.amazonaws.com https://*.live-video.net",
+      "media-src 'self' blob: https://*.amazonaws.com https://*.live-video.net https://*.cloudfront.net",
       "font-src 'self' data:",
       // transcribestreaming.<region>.amazonaws.com is already covered by
       // the broader wss://*.amazonaws.com entry — listing it explicitly
@@ -86,8 +86,8 @@ class FrontendStack extends Stack {
       // The custom API domain (api.<domainName>) must be explicitly listed
       // because it doesn't match *.amazonaws.com.
       ...(props.domainNames && props.domainNames.length > 0
-        ? [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://*.awsvirtualmeetups.com wss://*.awsvirtualmeetups.com https://cdn.jsdelivr.net`]
-        : [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://cdn.jsdelivr.net`]),
+        ? [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://*.awsvirtualmeetups.com wss://*.awsvirtualmeetups.com https://cdn.jsdelivr.net https://*.cloudfront.net`]
+        : [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://cdn.jsdelivr.net https://*.cloudfront.net`]),
       "worker-src 'self' blob:",
       "frame-ancestors 'none'",
       "base-uri 'self'",
