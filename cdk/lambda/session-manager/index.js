@@ -210,46 +210,18 @@ async function startEvent(event, eventId) {
   const chatRoomResult = await ivsChatClient.send(new CreateRoomCommand(createRoomParams));
   const chatRoomArn = chatRoomResult.arn;
 
-  // Start server-side composition for recording to S3
-  let compositionArn = null;
-  if (RECORDING_BUCKET_NAME && IVS_COMPOSITION_ROLE_ARN) {
-    try {
-      const compositionResult = await ivsRealTimeClient.send(new StartCompositionCommand({
-        stageArn,
-        idempotencyToken: eventId.replace(/[^a-zA-Z0-9-_]/g, ''),
-        destinations: [
-          {
-            s3: {
-              storageConfigurationArn: process.env.IVS_STORAGE_CONFIG_ARN,
-              encoderConfigurationArns: [process.env.IVS_ENCODER_CONFIG_ARN],
-              recordingConfiguration: {
-                format: 'HLS',
-              },
-            },
-            name: `recording-${eventId}`,
-          },
-        ],
-      }));
-      compositionArn = compositionResult.composition?.arn;
-      console.info('Composition started for recording', { eventId, compositionArn });
-    } catch (compErr) {
-      console.error('Failed to start composition for recording', { eventId, error: compErr.message });
-      // Non-blocking — event still starts without recording
-    }
-  }
+  // NOTE: Composition (recording) is started in goLive, not here.
+  // Starting it in staging fails because no participants are publishing yet.
 
   // Update event status to "staging" and store ARNs (no startedAt yet — that's set on Go Live)
   const now = new Date().toISOString();
-  const updateExpression = 'SET #status = :status, stageArn = :stageArn, chatRoomArn = :chatRoomArn, updatedAt = :updatedAt' + (compositionArn ? ', compositionArn = :compositionArn' : '');
+  const updateExpression = 'SET #status = :status, stageArn = :stageArn, chatRoomArn = :chatRoomArn, updatedAt = :updatedAt';
   const expressionValues = {
     ':status': EVENT_STATUS.STAGING,
     ':stageArn': stageArn,
     ':chatRoomArn': chatRoomArn,
     ':updatedAt': now,
   };
-  if (compositionArn) {
-    expressionValues[':compositionArn'] = compositionArn;
-  }
 
   await docClient.send(new UpdateCommand({
     TableName: TABLE_NAME,
@@ -334,6 +306,44 @@ async function goLiveEvent(event, eventId) {
   const stageArn = existing.Item.stageArn;
   const chatRoomArn = existing.Item.chatRoomArn;
 
+  // Start server-side composition for recording to S3.
+  // This is done at go-live (not staging) because IVS requires at least one
+  // participant to be publishing. The presenter is already live by this point.
+  let compositionArn = null;
+  if (RECORDING_BUCKET_NAME && IVS_COMPOSITION_ROLE_ARN && process.env.IVS_STORAGE_CONFIG_ARN) {
+    try {
+      const compositionResult = await ivsRealTimeClient.send(new StartCompositionCommand({
+        stageArn,
+        idempotencyToken: `live-${eventId}`.replace(/[^a-zA-Z0-9-_]/g, ''),
+        destinations: [
+          {
+            s3: {
+              storageConfigurationArn: process.env.IVS_STORAGE_CONFIG_ARN,
+              encoderConfigurationArns: process.env.IVS_ENCODER_CONFIG_ARN ? [process.env.IVS_ENCODER_CONFIG_ARN] : [],
+              recordingConfiguration: {
+                format: 'HLS',
+              },
+            },
+            name: `recording-${eventId}`,
+          },
+        ],
+      }));
+      compositionArn = compositionResult.composition?.arn;
+      console.info('Composition started for recording', { eventId, compositionArn });
+
+      // Store compositionArn on the event record
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
+        UpdateExpression: 'SET compositionArn = :compositionArn',
+        ExpressionAttributeValues: { ':compositionArn': compositionArn },
+      }));
+    } catch (compErr) {
+      console.error('Failed to start composition for recording', { eventId, error: compErr.message });
+      // Non-blocking — event goes live without recording
+    }
+  }
+
   // Broadcast EVENT_STARTED to all connected clients (attendees in waiting room)
   await broadcastToEvent(eventId, {
     type: 'EVENT_STARTED',
@@ -395,7 +405,7 @@ async function stopEvent(event, eventId) {
 
   const stageArn = existing.Item.stageArn;
 
-  // Stop the composition if one was started at event start
+  // Stop the composition if one was started at go-live
   const compositionArn = existing.Item.compositionArn;
   if (compositionArn) {
     try {
@@ -405,22 +415,29 @@ async function stopEvent(event, eventId) {
       console.error('Failed to stop composition', { eventId, compositionArn, error: stopCompErr.message });
     }
 
-    // Set the HLS playback URL based on the composition ID
+    // Get the actual recording prefix from the composition detail
     if (RECORDING_BUCKET_NAME) {
       try {
-        const compositionId = compositionArn.split('/').pop();
-        const hlsPlaybackUrl = RECORDING_CLOUDFRONT_DOMAIN
-          ? `https://${RECORDING_CLOUDFRONT_DOMAIN}/ivs/v1/${compositionId}/media/hls/master.m3u8`
-          : `https://${RECORDING_BUCKET_NAME}.s3.amazonaws.com/ivs/v1/${compositionId}/media/hls/master.m3u8`;
-        await docClient.send(new UpdateCommand({
-          TableName: TABLE_NAME,
-          Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
-          UpdateExpression: 'SET hlsPlaybackUrl = :url',
-          ExpressionAttributeValues: { ':url': hlsPlaybackUrl },
-        }));
-        console.info('HLS playback URL set', { eventId, hlsPlaybackUrl });
+        const compDetail = await ivsRealTimeClient.send(new GetCompositionCommand({ arn: compositionArn }));
+        const destination = compDetail.composition?.destinations?.[0];
+        const recordingPrefix = destination?.detail?.s3?.recordingPrefix;
+
+        if (recordingPrefix) {
+          const hlsPlaybackUrl = RECORDING_CLOUDFRONT_DOMAIN
+            ? `https://${RECORDING_CLOUDFRONT_DOMAIN}/${recordingPrefix}/media/hls/master.m3u8`
+            : `https://${RECORDING_BUCKET_NAME}.s3.amazonaws.com/${recordingPrefix}/media/hls/master.m3u8`;
+          await docClient.send(new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
+            UpdateExpression: 'SET hlsPlaybackUrl = :url',
+            ExpressionAttributeValues: { ':url': hlsPlaybackUrl },
+          }));
+          console.info('HLS playback URL set', { eventId, hlsPlaybackUrl });
+        } else {
+          console.warn('No recording prefix found in composition detail', { eventId, compositionArn });
+        }
       } catch (urlErr) {
-        console.error('Failed to set HLS playback URL', { eventId, error: urlErr.message });
+        console.error('Failed to get composition detail or set HLS URL', { eventId, error: urlErr.message });
       }
     }
   }
