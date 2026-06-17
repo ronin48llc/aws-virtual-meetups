@@ -76,7 +76,11 @@ const dataStack = new DataStack(app, `${prefix}-Data`, {
 const streamingStack = new StreamingStack(app, `${prefix}-Streaming`, {
   env,
   description: 'Virtual Meetup Platform - Streaming (IVS recording bucket, composition role)',
+  hostedZone: dnsStack.hostedZone,
+  certificate: dnsStack.certificate,
+  domainName: domainName,
 });
+streamingStack.addDependency(dnsStack);
 
 // -------------------------------------------------------
 // Stack 5: Transcription (depends on Data for event-ownership lookup)

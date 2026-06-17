@@ -328,7 +328,7 @@ class ApiStack extends Stack {
     sessionManagerFn.addEnvironment('IVS_COMPOSITION_ROLE_ARN', props.ivsCompositionRoleArn || '');
     sessionManagerFn.addEnvironment('IVS_STORAGE_CONFIG_ARN', props.ivsStorageConfigArn || '');
     sessionManagerFn.addEnvironment('IVS_ENCODER_CONFIG_ARN', props.ivsEncoderConfigArn || '');
-    sessionManagerFn.addEnvironment('RECORDING_CLOUDFRONT_DOMAIN', props.recordingCloudfrontDomain || '');
+    sessionManagerFn.addEnvironment('RECORDING_CLOUDFRONT_DOMAIN', props.domainName ? `recordings.${props.domainName}` : (props.recordingCloudfrontDomain || ''));
     // Issue #101: session-manager wires this ARN as messageReviewHandler on
     // every IVS Chat room it creates. Empty value means no review handler
     // (fail-open) — only acceptable for non-prod or staging deploys that

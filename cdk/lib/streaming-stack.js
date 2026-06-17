@@ -119,7 +119,7 @@ class StreamingStack extends Stack {
     });
 
     // CloudFront distribution for serving recordings via HTTPS with CORS
-    const recordingDistribution = new cloudfront.Distribution(this, 'RecordingDistribution', {
+    const distributionProps = {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessIdentity(recordingBucket, {
           originAccessIdentity: recordingOAI,
@@ -131,7 +131,28 @@ class StreamingStack extends Stack {
       enableLogging: true,
       logBucket: recordingDistributionAccessLogsBucket,
       logFilePrefix: 'recording-cf/',
-    });
+    };
+
+    // Add custom domain if hostedZone and certificate are provided
+    if (props.hostedZone && props.certificate && props.domainName) {
+      const recordingDomain = `recordings.${props.domainName}`;
+      distributionProps.domainNames = [recordingDomain];
+      distributionProps.certificate = props.certificate;
+    }
+
+    const recordingDistribution = new cloudfront.Distribution(this, 'RecordingDistribution', distributionProps);
+
+    // Create Route53 alias record for recordings subdomain
+    if (props.hostedZone && props.certificate && props.domainName) {
+      const route53 = require('aws-cdk-lib/aws-route53');
+      const targets = require('aws-cdk-lib/aws-route53-targets');
+      const recordingDomain = `recordings.${props.domainName}`;
+      new route53.ARecord(this, 'RecordingAliasRecord', {
+        zone: props.hostedZone,
+        recordName: recordingDomain,
+        target: route53.RecordTarget.fromAlias(new targets.CloudFrontTarget(recordingDistribution)),
+      });
+    }
 
     // IVS Storage Configuration — links the S3 bucket for composition recording
     // Note: StorageConfiguration is not yet available as an L2 CDK construct,
