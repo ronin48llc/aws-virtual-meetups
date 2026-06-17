@@ -394,11 +394,23 @@ const App = (() => {
             </div>
           </section>
           <section class="mt-lg">
+            <h2>Live Now</h2>
+            <div class="grid grid--events mt-md" id="events-live">
+              <div class="card"><p class="card__description" style="color: #8b949e;">No live events right now.</p></div>
+            </div>
+          </section>
+          <section class="mt-lg">
             <h2>Upcoming Events</h2>
             <div class="grid grid--events mt-md" id="events-list">
               <div class="card">
                 <p class="card__description">Loading events...</p>
               </div>
+            </div>
+          </section>
+          <section class="mt-lg">
+            <h2>Past Events</h2>
+            <div class="grid grid--events mt-md" id="events-past">
+              <div class="card"><p class="card__description" style="color: #8b949e;">Loading past events...</p></div>
             </div>
           </section>
         </div>
@@ -413,8 +425,20 @@ const App = (() => {
     if (evt.durationMinutes) {
       durationInfo = '<p class="card__meta" style="color: #555;">Duration: ' + escapeHtml(formatDurationMinutes(evt.durationMinutes)) + '</p>';
     }
+    var status = evt.status || 'scheduled';
+    var badgeClass, badgeLabel;
+    if (status === 'live' || status === 'staging') {
+      badgeClass = 'badge--live';
+      badgeLabel = '● LIVE';
+    } else if (status === 'ended' || status === 'published') {
+      badgeClass = 'badge--ended';
+      badgeLabel = 'Past';
+    } else {
+      badgeClass = 'badge--upcoming';
+      badgeLabel = 'Upcoming';
+    }
     return '<div class="card">' +
-      '<span class="badge badge--upcoming">Upcoming</span>' +
+      '<span class="badge ' + badgeClass + '">' + badgeLabel + '</span>' +
       '<h3 class="card__title mt-sm">' + escapeHtml(evt.title || 'Untitled') + '</h3>' +
       '<p class="card__meta">' + escapeHtml(startDate) + '</p>' +
       durationInfo +
@@ -453,6 +477,8 @@ const App = (() => {
   async function loadHomeEvents() {
     var container = document.getElementById('events-list');
     var popularContainer = document.getElementById('popular-events-list');
+    var liveContainer = document.getElementById('events-live');
+    var pastContainer = document.getElementById('events-past');
     if (!container) return;
 
     var apiBase = window.API_BASE_URL || '/api';
@@ -466,23 +492,29 @@ const App = (() => {
       return res.json();
     }
 
-    function render(nextCursor) {
-      if (!accumulated.length) {
-        container.innerHTML = '<div class="card"><p class="card__description">No upcoming events. Check back soon!</p></div>';
-        renderPopular([], popularContainer);
-        return;
+    function renderSections(nextCursor) {
+      var live = accumulated.filter(function(e) { return e.status === 'live' || e.status === 'staging'; });
+      var upcoming = accumulated.filter(function(e) { return e.status === 'scheduled'; });
+      var past = accumulated.filter(function(e) { return e.status === 'ended' || e.status === 'published'; });
+
+      // Live section
+      if (liveContainer) {
+        liveContainer.innerHTML = live.length
+          ? live.map(renderEventCard).join('')
+          : '<div class="card"><p class="card__description" style="color: #8b949e;">No live events right now.</p></div>';
       }
 
-      var html = '';
-      for (var i = 0; i < accumulated.length; i++) {
-        html += renderEventCard(accumulated[i]);
+      // Upcoming section
+      var upcomingHtml = '';
+      for (var i = 0; i < upcoming.length; i++) {
+        upcomingHtml += renderEventCard(upcoming[i]);
       }
       if (nextCursor) {
-        html += '<div class="card" style="text-align: center;">' +
+        upcomingHtml += '<div class="card" style="text-align: center;">' +
           '<button type="button" class="btn btn--outline" id="events-load-more">Load more</button>' +
           '</div>';
       }
-      container.innerHTML = html;
+      container.innerHTML = upcomingHtml || '<div class="card"><p class="card__description">No upcoming events. Check back soon!</p></div>';
 
       if (nextCursor) {
         var btn = document.getElementById('events-load-more');
@@ -494,7 +526,7 @@ const App = (() => {
               var nextData = await fetchPage(nextCursor);
               var nextEvents = nextData.events || [];
               accumulated = accumulated.concat(nextEvents);
-              render(nextData.nextCursor);
+              renderSections(nextData.nextCursor);
             } catch (_e) {
               btn.disabled = false;
               btn.textContent = 'Load more';
@@ -503,16 +535,23 @@ const App = (() => {
         }
       }
 
+      // Past section
+      if (pastContainer) {
+        pastContainer.innerHTML = past.length
+          ? past.map(renderEventCard).join('')
+          : '<div class="card"><p class="card__description" style="color: #8b949e;">No past events yet.</p></div>';
+      }
+
       renderPopular(accumulated, popularContainer);
     }
 
     try {
       var data = await fetchPage(null);
       accumulated = data.events || data || [];
-      render(data.nextCursor);
+      renderSections(data.nextCursor);
     } catch (_err) {
-      container.innerHTML = '<div class="card"><p class="card__description">No upcoming events. Check back soon!</p></div>';
-      if (popularContainer) popularContainer.innerHTML = '<div class="card"><p class="card__description">No events yet.</p></div>';
+      container.innerHTML = '<div class="card"><p class="card__description">Failed to load events.</p></div>';
+      if (pastContainer) pastContainer.innerHTML = '';
     }
   }
 
