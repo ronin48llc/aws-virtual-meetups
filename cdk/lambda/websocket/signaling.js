@@ -1603,12 +1603,23 @@ async function handleGetAttendeeList(eventId, body, connectionId) {
   // call this action, so emails would be harvested by any participant. The
   // presenter's auth-gated GET /events/{id}/signups endpoint is the place
   // for email visibility.
-  const attendees = connections.map(c => ({
-    userId: c.userId,
-    displayName: c.displayName || '',
-    role: c.role,
-    connectionId: c.connectionId,
-  }));
+  const attendees = connections
+    .filter(c => !c.anonymous)
+    .map(c => ({
+      userId: c.userId,
+      displayName: c.displayName || '',
+      role: c.role,
+      connectionId: c.connectionId,
+    }));
+
+  const anonymous = connections
+    .filter(c => c.anonymous)
+    .map(c => ({
+      fingerprint: (c.sessionId || c.userId || '').slice(0, 12),
+      label: c.displayName || `Anon-${(c.sessionId || '').slice(0, 6)}`,
+      sessionId: c.sessionId || '',
+      joinedAt: c.connectedAt || '',
+    }));
 
   await sendToConnection(connectionId, {
     type: 'ATTENDEE_LIST',
@@ -1616,7 +1627,16 @@ async function handleGetAttendeeList(eventId, body, connectionId) {
     data: { attendees, count: attendees.length },
   });
 
-  console.info('Attendee list sent', { eventId, count: attendees.length });
+  // Also send anonymous list
+  if (anonymous.length > 0) {
+    await sendToConnection(connectionId, {
+      type: 'ANON_LIST',
+      eventId,
+      data: { anonymous, count: anonymous.length },
+    });
+  }
+
+  console.info('Attendee list sent', { eventId, registered: attendees.length, anonymous: anonymous.length });
   return { statusCode: 200, body: 'Attendee list sent' };
 }
 

@@ -36,10 +36,64 @@ async function handler(event) {
   const eventId = queryParams.eventId;
   const claimedRole = queryParams.role || 'attendee';
   const displayName = queryParams.displayName || '';
+  const isAnonymous = queryParams.anonymous === 'true';
+  const sessionId = queryParams.sessionId || '';
 
   // Required parameters
-  if (!token || !eventId) {
-    console.error('Missing required query parameters', { connectionId, hasToken: !!token, hasEventId: !!eventId });
+  if (!eventId) {
+    console.error('Missing eventId', { connectionId });
+    return { statusCode: 401, body: 'Unauthorized: missing required parameters' };
+  }
+
+  // Anonymous connections — store with limited metadata, no token verification
+  if (isAnonymous && sessionId) {
+    try {
+      const now = new Date();
+      const ttl = Math.floor(now.getTime() / 1000) + CONNECTION_TTL_SECONDS;
+
+      await docClient.send(new PutCommand({
+        TableName: CONNECTIONS_TABLE_NAME,
+        Item: {
+          connectionId,
+          eventId,
+          userId: `anon-${sessionId.slice(0, 8)}`,
+          role: 'anonymous',
+          displayName: `Anon-${sessionId.slice(0, 6)}`,
+          email: '',
+          connectedAt: now.toISOString(),
+          ttl,
+          anonymous: true,
+          sessionId,
+        },
+      }));
+
+      // Broadcast ANON_JOINED to presenter
+      try {
+        await broadcast(eventId, {
+          type: 'ANON_JOINED',
+          eventId,
+          data: {
+            fingerprint: sessionId.slice(0, 12),
+            label: `Anon-${sessionId.slice(0, 6)}`,
+            sessionId,
+            joinedAt: now.toISOString(),
+          },
+        }, { excludeConnectionId: connectionId });
+      } catch (broadcastError) {
+        console.error('Failed to broadcast ANON_JOINED', { connectionId, error: broadcastError.message });
+      }
+
+      console.info('Anonymous connection stored', { connectionId, eventId, sessionId: sessionId.slice(0, 8) });
+      return { statusCode: 200, body: 'Connected (anonymous)' };
+    } catch (error) {
+      console.error('Failed to store anonymous connection', { connectionId, error: error.message });
+      return { statusCode: 500, body: 'Internal server error' };
+    }
+  }
+
+  // Authenticated connections require a token
+  if (!token) {
+    console.error('Missing token for authenticated connection', { connectionId });
     return { statusCode: 401, body: 'Unauthorized: missing required parameters' };
   }
 
