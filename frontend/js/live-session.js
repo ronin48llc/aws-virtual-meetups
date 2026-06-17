@@ -1400,9 +1400,16 @@ const LiveSession = (() => {
 
     transcribeWs.onopen = function() {
       console.log('Transcribe WebSocket connected');
-      // Start sending audio data
+      // Connect source → processor → silent gain node (NOT destination).
+      // Connecting to audioContext.destination with a mic source triggers
+      // "The operation is insecure" in Chrome/Firefox as an echo/feedback
+      // security guard. A zero-gain node keeps the graph alive so
+      // onaudioprocess fires without routing mic audio to the speakers.
+      var silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
+      silentGain.connect(audioContext.destination);
       source.connect(audioProcessor);
-      audioProcessor.connect(audioContext.destination);
+      audioProcessor.connect(silentGain);
     };
 
     transcribeWs.onmessage = function(event) {
