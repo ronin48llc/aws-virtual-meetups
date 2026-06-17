@@ -651,8 +651,10 @@ const LiveSession = (() => {
         stopScreenShare();
       };
     } catch (err) {
-      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
-        // User cancelled the picker — don't show an error
+      if (err.name === 'AbortError') {
+        // User clicked "Cancel" in the picker — silent
+      } else if (err.name === 'NotAllowedError') {
+        showNotification('Screen sharing blocked. On macOS: System Settings → Privacy & Security → Screen Recording → enable your browser.');
       } else {
         showNotification('Screen sharing failed: ' + err.name + ' — ' + err.message);
       }
@@ -779,8 +781,10 @@ const LiveSession = (() => {
         stopDeviceAudio();
       };
     } catch (err) {
-      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
-        // User cancelled — no error shown
+      if (err.name === 'AbortError') {
+        // User clicked "Cancel" — silent
+      } else if (err.name === 'NotAllowedError') {
+        showNotification('Device audio blocked. On macOS: System Settings → Privacy & Security → Screen Recording → enable your browser.');
       } else {
         showNotification('Device audio failed: ' + err.name + ' — ' + err.message);
       }
