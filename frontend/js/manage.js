@@ -157,7 +157,7 @@ const ManageEvents = (() => {
       var payload = {
         title: titleVal,
         description: descVal,
-        scheduledStartTime: new Date(startVal).toISOString()
+        scheduledStart: new Date(startVal).toISOString()
       };
 
       // Include optional durationMinutes if provided
