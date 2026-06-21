@@ -299,8 +299,8 @@ const ManageEvents = (() => {
     if (!container) return;
 
     var startTimeLocal = '';
-    if (evt.scheduledStartTime) {
-      var d = new Date(evt.scheduledStartTime);
+    if (evt.scheduledStart) {
+      var d = new Date(evt.scheduledStart);
       startTimeLocal = d.toISOString().slice(0, 16);
     }
 
