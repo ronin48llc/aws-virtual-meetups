@@ -50,7 +50,7 @@ Environment variables used by the frontend are hardcoded in `frontend/js/config.
 
 ## Deployment Sequence
 
-The platform consists of 10 CDK stacks with dependencies. Deploy in this order:
+The platform consists of 9 CDK stacks with dependencies. Deploy in this order:
 
 ### Step 1: Deploy DNS Stack (first, must wait for certificate validation)
 
@@ -77,12 +77,11 @@ CDK respects the dependency graph automatically:
 2. `AuthStack` — Cognito User Pool + Identity Pool
 3. `DataStack` — DynamoDB tables
 4. `StreamingStack` — S3 recording bucket + IVS composition role
-5. `TranscriptionStack` — Transcription Lambda
-6. `FrontendStack` — S3 + CloudFront (depends on DNS)
-7. `EmailStack` — SES + EventBridge Scheduler (depends on Data, Frontend, DNS)
-8. `ApiStack` — HTTP + WebSocket APIs (depends on Auth, Data, Email, DNS, Streaming)
-9. `PublicationStack` — Recording publisher (depends on Streaming, Email)
-10. `ObservabilityStack` — Dashboard + Alarms (depends on API, Data)
+5. `FrontendStack` — S3 + CloudFront (depends on DNS)
+6. `EmailStack` — SES + EventBridge Scheduler (depends on Data, Frontend, DNS)
+7. `ApiStack` — HTTP + WebSocket APIs (depends on Auth, Data, Email, DNS, Streaming)
+8. `PublicationStack` — Recording publisher (depends on Streaming, Email)
+9. `ObservabilityStack` — Dashboard + Alarms (depends on API, Data)
 
 ## Manual Steps (Post-Deployment)
 

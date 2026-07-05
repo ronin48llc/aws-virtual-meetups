@@ -104,8 +104,8 @@ Rotation: fine-grained PATs expire — set a ≤90-day expiry, calendar the rene
 
 ## 6. Banning / disabling a user
 
-- Event-level ban: presenter UI (kick/ban) writes a `BAN#<userId>` item; enforced at WebSocket connect and token generation.
-- Account-level disable (Cognito): `VirtualMeetup-AdminApi-<env>` Lambda, or directly:
+- Event-level ban: presenter UI (kick/ban) writes a `BAN#<userId>` item; enforced at WebSocket connect and token generation. Lift a ban from the presenter dashboard's **Bans** tab.
+- Account-level disable (Cognito): `POST https://api.<domain>/admin/users/disable` with body `{"username": "<email>"}` and an organizer's bearer token (`/enable` to reverse, `GET /admin/users/<email>/status` to check), or directly:
   ```bash
   aws cognito-idp admin-disable-user --user-pool-id <pool> --username <email>
   ```

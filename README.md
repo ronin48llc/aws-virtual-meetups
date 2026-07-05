@@ -8,7 +8,7 @@ A serverless live virtual meetup platform built on AWS. Supports real-time video
 - **Backend**: AWS Lambda functions behind API Gateway (HTTP + WebSocket)
 - **Streaming**: Amazon IVS Real-Time (WebRTC-based)
 - **Chat**: Amazon IVS Chat
-- **Captions**: Amazon Transcribe Streaming (browser-to-service via pre-signed WebSocket)
+- **Captions**: Browser Web Speech API on the presenter side, broadcast to attendees over WebSocket (Chrome/Edge only — no captions in Firefox/Safari)
 - **Auth**: Amazon Cognito (User Pool + Identity Pool)
 - **Data**: Amazon DynamoDB
 - **Email**: Amazon SES + EventBridge Scheduler
@@ -22,7 +22,7 @@ A serverless live virtual meetup platform built on AWS. Supports real-time video
 - Real-time group and direct chat
 - Q&A with pin, answer, and dismiss
 - Hand raising with acknowledge/dismiss
-- Live captions via Amazon Transcribe Streaming
+- Live captions via the browser Web Speech API (Chrome/Edge)
 - Presenter dashboard (attendees, questions, hands)
 - Promote/demote attendees to co-presenter
 - Moderation: mute, restrict chat, kick, ban
@@ -118,7 +118,6 @@ export ADMIN_PASSWORD=YourSecurePassword1
 │   │   ├── token-generator/# IVS/Chat token generation
 │   │   ├── signup/         # Event registration
 │   │   ├── email-sender/   # Email notifications
-│   │   ├── transcription/  # Transcribe pre-signed URL generation
 │   │   ├── websocket/      # WebSocket handlers (connect, disconnect, signaling)
 │   │   └── shared/         # Shared utilities
 │   └── test/               # Unit and property-based tests

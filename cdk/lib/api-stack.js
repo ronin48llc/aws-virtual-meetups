@@ -511,14 +511,31 @@ class ApiStack extends Stack {
       authorizer: cognitoAuthorizer,
     });
 
-    // Transcription Lambda (from TranscriptionStack, passed via props)
-    if (props.transcriptionFunction) {
-      const transcriptionIntegration = new HttpLambdaIntegration('TranscriptionIntegration', props.transcriptionFunction);
+    // Admin API (Lambda lives in AuthStack, passed via props). The Cognito
+    // authorizer proves identity; the handler itself enforces
+    // custom:role=organizer on every request (issue #93), so a valid but
+    // non-organizer JWT gets 403.
+    if (props.adminApiFunction) {
+      const adminApiIntegration = new HttpLambdaIntegration('AdminApiIntegration', props.adminApiFunction);
 
       httpApi.addRoutes({
-        path: '/events/{id}/transcription/start',
+        path: '/admin/users/disable',
         methods: [HttpMethod.POST],
-        integration: transcriptionIntegration,
+        integration: adminApiIntegration,
+        authorizer: cognitoAuthorizer,
+      });
+
+      httpApi.addRoutes({
+        path: '/admin/users/enable',
+        methods: [HttpMethod.POST],
+        integration: adminApiIntegration,
+        authorizer: cognitoAuthorizer,
+      });
+
+      httpApi.addRoutes({
+        path: '/admin/users/{username}/status',
+        methods: [HttpMethod.GET],
+        integration: adminApiIntegration,
         authorizer: cognitoAuthorizer,
       });
     }
@@ -570,7 +587,6 @@ class ApiStack extends Stack {
       'grantSpeak',
       'revokeSpeak',
       'toggleChat',
-      'eventStateUpdate',
       'acknowledgeHand',
       'dismissHand',
       'getAttendeeList',
@@ -754,7 +770,8 @@ const HTTP_API_OPERATOR_ROUTES = [
   'POST /events/{id}/stop',
   'POST /events/{id}/go-live',
   'POST /events/{id}/extend',
-  'POST /events/{id}/transcription/start',
+  'POST /admin/users/disable',
+  'POST /admin/users/enable',
 ];
 
 function configureHttpApiThrottling(httpApi) {
