@@ -999,8 +999,9 @@ const Playback = (() => {
   // Rendered HTML carries data-action attributes instead of inline on*
   // handlers so the CloudFront CSP can serve script-src without
   // 'unsafe-inline'. Action names must stay unique across all modules.
-  // Guarded: this module is also loaded in Node for unit tests.
-  if (typeof document !== 'undefined') {
+  // Guarded: this module is also loaded in Node for unit tests, sometimes
+  // with a minimal document mock that has no addEventListener.
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('click', function(e) {
       var el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
       if (!el) return;

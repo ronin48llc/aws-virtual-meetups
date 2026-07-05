@@ -437,7 +437,7 @@ describe('Playback Module - Enhanced Playback Features', () => {
       expect(actionsContainer.innerHTML).toContain('aria-label="Capture screenshot of current frame"');
     });
 
-    test('screenshot button calls Playback.captureScreenshot on click', () => {
+    test('screenshot button carries the delegated capture-screenshot action', () => {
       setupHlsMock();
 
       Playback.init({
@@ -445,7 +445,7 @@ describe('Playback Module - Enhanced Playback Features', () => {
       });
 
       const actionsContainer = mockDOM.document.getElementById('playback-actions');
-      expect(actionsContainer.innerHTML).toContain('onclick="Playback.captureScreenshot()"');
+      expect(actionsContainer.innerHTML).toContain('data-action="capture-screenshot"');
     });
   });
 
