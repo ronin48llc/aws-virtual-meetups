@@ -669,11 +669,18 @@ class ApiStack extends Stack {
         ],
       });
 
-      new apigatewayv2.CfnApiMapping(this, 'WsApiMapping', {
+      const wsApiMapping = new apigatewayv2.CfnApiMapping(this, 'WsApiMapping', {
         apiId: webSocketApi.apiId,
         domainName: wsDomainName.ref,
         stage: webSocketStage.stageName,
       });
+      // `stage` is a literal name string, so CloudFormation sees no edge
+      // between the mapping and the stage. Without an explicit dependency,
+      // stack deletion can attempt the stage first and fail with "remove all
+      // base path mappings related to the stage" (observed 2026-07-05
+      // deleting VirtualMeetup-dev-Api). The dependency forces create-after /
+      // delete-before ordering of the mapping relative to the stage.
+      wsApiMapping.addDependency(webSocketStage.node.defaultChild);
 
       new route53.ARecord(this, 'WsApiARecord', {
         zone: hostedZone,
