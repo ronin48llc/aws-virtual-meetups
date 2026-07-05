@@ -321,10 +321,17 @@ class ApiStack extends Stack {
     // event-crud + anonymous-token verify recording manifests exist before
     // returning playback URLs (HeadObject authorizes as s3:GetObject).
     if (props.recordingBucketName) {
+      // ListBucket matters: without it, HeadObject on a MISSING key
+      // returns 403 (not 404), which the existence checks treat as
+      // transient and fail open — handing out playback URLs before IVS
+      // finishes writing the manifest.
       const recordingReadPolicy = new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: ['s3:GetObject'],
-        resources: [`arn:aws:s3:::${props.recordingBucketName}/*`],
+        actions: ['s3:GetObject', 's3:ListBucket'],
+        resources: [
+          `arn:aws:s3:::${props.recordingBucketName}`,
+          `arn:aws:s3:::${props.recordingBucketName}/*`,
+        ],
       });
       eventCrudFn.addToRolePolicy(recordingReadPolicy);
       anonymousTokenFn.addToRolePolicy(recordingReadPolicy);

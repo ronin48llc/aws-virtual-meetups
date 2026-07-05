@@ -66,7 +66,7 @@ exports.handler = async (event) => {
     // below is only a legacy fallback.
     const cloudfrontDomain = process.env.CLOUDFRONT_DOMAIN || '';
     const hlsUrl = metadata.hlsPlaybackUrl
-      || `https://${cloudfrontDomain}/recordings/${eventId}/media/master.m3u8`;
+      || `https://${cloudfrontDomain}/recordings/${eventId}/media/hls/multivariant.m3u8`;
     const captionPath = webvttContent ? `/assets/captions/${eventId}.vtt` : '';
     const markdownContent = generateJekyllPost(metadata, hlsUrl, captionPath);
 

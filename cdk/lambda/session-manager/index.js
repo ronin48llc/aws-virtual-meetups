@@ -430,9 +430,12 @@ async function stopEvent(event, eventId) {
           // will never resolve.
           console.warn('Composition FAILED — skipping playback URL', { eventId, compositionArn });
         } else if (recordingPrefix) {
+          // IVS composite recording writes the HLS entry point as
+          // multivariant.m3u8 (verified against real output 2026-07-05) —
+          // the legacy master.m3u8 guess 404'd on every recording.
           const hlsPlaybackUrl = RECORDING_CLOUDFRONT_DOMAIN
-            ? `https://${RECORDING_CLOUDFRONT_DOMAIN}/${recordingPrefix}/media/hls/master.m3u8`
-            : `https://${RECORDING_BUCKET_NAME}.s3.amazonaws.com/${recordingPrefix}/media/hls/master.m3u8`;
+            ? `https://${RECORDING_CLOUDFRONT_DOMAIN}/${recordingPrefix}/media/hls/multivariant.m3u8`
+            : `https://${RECORDING_BUCKET_NAME}.s3.amazonaws.com/${recordingPrefix}/media/hls/multivariant.m3u8`;
           await docClient.send(new UpdateCommand({
             TableName: TABLE_NAME,
             Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
