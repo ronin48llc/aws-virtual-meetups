@@ -1,18 +1,32 @@
 const path = require('path');
-const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
+const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const cognito = require('aws-cdk-lib/aws-cognito');
 const lambda = require('aws-cdk-lib/aws-lambda');
 const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 const { IdentityPool, UserPoolAuthenticationProvider } = require('aws-cdk-lib/aws-cognito-identitypool');
+const { withEnv, dataRemovalPolicy } = require('./env-config');
 
 class AuthStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
+    // Cognito email delivery. The default Cognito email service caps at
+    // ~50 emails/day — fine for dev, unusable for production sign-up
+    // volume. Once SES production access is granted (request steps in
+    // docs/RUNBOOK.md), deploy with -c sesEmailEnabled=true and Cognito
+    // sends through the SES domain identity (created in EmailStack with
+    // DKIM) instead.
+    const sesEmailEnabledCtx = this.node.tryGetContext('sesEmailEnabled');
+    const sesEmailEnabled = sesEmailEnabledCtx === true || sesEmailEnabledCtx === 'true';
+    const domainName = this.node.tryGetContext('domainName');
+    if (sesEmailEnabled && !domainName) {
+      throw new Error('AuthStack: -c sesEmailEnabled=true requires -c domainName=<your-domain.com> for the SES from-address.');
+    }
+
     // Cognito User Pool with email sign-up, verification, and advanced security
     const userPool = new cognito.UserPool(this, 'VirtualMeetupUserPool', {
-      userPoolName: 'virtual-meetup-user-pool',
+      userPoolName: withEnv(this, 'virtual-meetup-user-pool'),
       selfSignUpEnabled: true,
       signInAliases: {
         email: true,
@@ -48,14 +62,17 @@ class AuthStack extends Stack {
         requireSymbols: false,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: RemovalPolicy.DESTROY,
-      // NOTE: Using Cognito default email while SES is in sandbox mode.
-      // Once SES production access is granted, uncomment the SES config below:
-      // email: cognito.UserPoolEmail.withSES({
-      //   fromEmail: 'noreply@awsvirtualmeetups.com',
-      //   fromName: 'AWS Virtual Meetups',
-      //   sesRegion: 'us-east-1',
-      // }),
+      // RETAIN in prod — deleting the pool deletes every user account.
+      removalPolicy: dataRemovalPolicy(this),
+      // Default Cognito email (sandbox-safe) unless sesEmailEnabled — see
+      // the context gate at the top of this constructor.
+      email: sesEmailEnabled
+        ? cognito.UserPoolEmail.withSES({
+          fromEmail: `noreply@${domainName}`,
+          fromName: 'AWS Virtual Meetups',
+          sesRegion: this.region,
+        })
+        : undefined,
       // Advanced Security Features — adaptive authentication and compromised credential detection
       // Requirements: 25.1, 25.3
       // Using AUDIT mode to log risks without blocking legitimate logins
@@ -125,7 +142,7 @@ class AuthStack extends Stack {
 
     // Identity Pool linked to User Pool
     const identityPool = new IdentityPool(this, 'VirtualMeetupIdentityPool', {
-      identityPoolName: 'virtual-meetup-identity-pool',
+      identityPoolName: withEnv(this, 'virtual-meetup-identity-pool'),
       allowUnauthenticatedIdentities: false,
       authenticationProviders: {
         userPools: [
@@ -140,7 +157,7 @@ class AuthStack extends Stack {
     // Admin API Lambda — disable/enable user accounts
     // Requirements: 25.5
     const adminApiFunction = new lambda.Function(this, 'AdminApiFunction', {
-      functionName: 'VirtualMeetup-AdminApi',
+      functionName: withEnv(this, 'VirtualMeetup-AdminApi'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/admin-api/')),
@@ -167,19 +184,19 @@ class AuthStack extends Stack {
     new CfnOutput(this, 'UserPoolId', {
       value: userPool.userPoolId,
       description: 'Cognito User Pool ID',
-      exportName: 'VirtualMeetupUserPoolId',
+      exportName: withEnv(this, 'VirtualMeetupUserPoolId'),
     });
 
     new CfnOutput(this, 'UserPoolClientId', {
       value: userPoolClient.userPoolClientId,
       description: 'Cognito User Pool Client ID',
-      exportName: 'VirtualMeetupUserPoolClientId',
+      exportName: withEnv(this, 'VirtualMeetupUserPoolClientId'),
     });
 
     new CfnOutput(this, 'IdentityPoolId', {
       value: identityPool.identityPoolId,
       description: 'Cognito Identity Pool ID',
-      exportName: 'VirtualMeetupIdentityPoolId',
+      exportName: withEnv(this, 'VirtualMeetupIdentityPoolId'),
     });
 
     // Expose constructs for cross-stack references

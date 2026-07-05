@@ -121,7 +121,6 @@ graph TD
     AUTH[AuthStack<br/>Cognito]
     DATA[DataStack<br/>DynamoDB]
     STREAM[StreamingStack<br/>S3 + IVS Role]
-    TRANS[TranscriptionStack<br/>Transcribe + Translate]
     FE[FrontendStack<br/>S3 + CloudFront]
     EMAIL[EmailStack<br/>SES + Scheduler]
     API[ApiStack<br/>HTTP + WebSocket APIs]

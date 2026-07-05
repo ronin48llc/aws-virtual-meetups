@@ -11,6 +11,7 @@ const lambda = require('aws-cdk-lib/aws-lambda');
 const events = require('aws-cdk-lib/aws-events');
 const targets = require('aws-cdk-lib/aws-events-targets');
 const { CfnQueryDefinition } = require('aws-cdk-lib/aws-logs');
+const { withEnv } = require('./env-config');
 
 /**
  * Observability Stack for the Virtual Meetup Platform.
@@ -25,7 +26,23 @@ class ObservabilityStack extends Stack {
 
     const { httpApi, webSocketApi, mainTable, connectionsTable, publicationDlq, emailDlq } = props;
     const envName = this.node.tryGetContext('env') || 'dev';
-    const alarmEmails = this.node.tryGetContext('alarmEmails') || [];
+
+    // Alarm subscribers. Accepts an array (cdk.context.json) or a comma-
+    // separated string (-c alarmEmails=a@x.com,b@y.com from CI). Prod
+    // refuses to deploy without at least one subscriber — an alarm topic
+    // nobody is subscribed to is indistinguishable from no alarms at all.
+    const rawAlarmEmails = this.node.tryGetContext('alarmEmails') || [];
+    const alarmEmails = (Array.isArray(rawAlarmEmails)
+      ? rawAlarmEmails
+      : String(rawAlarmEmails).split(','))
+      .map((email) => email.trim())
+      .filter(Boolean);
+    if (envName === 'prod' && alarmEmails.length === 0) {
+      throw new Error(
+        'ObservabilityStack: -c alarmEmails=<email[,email...]> is required for prod '
+        + 'so CloudWatch alarms actually notify someone.'
+      );
+    }
 
     // Lambda function names — used below to build dashboard widgets and
     // Logs Insights query definitions. Log RETENTION on these groups is
@@ -34,6 +51,7 @@ class ObservabilityStack extends Stack {
     // of pre-creating LogGroup constructs here raced with Lambda's
     // auto-create-on-first-invoke behavior on fresh deploys (CFN cannot
     // adopt an already-existing log group). See issue #30.
+    // Must stay in sync with the withEnv() names in api-stack.js.
     const lambdaFunctionNames = [
       'VirtualMeetup-EventCrud',
       'VirtualMeetup-SessionManager',
@@ -42,7 +60,7 @@ class ObservabilityStack extends Stack {
       'VirtualMeetup-WsConnect',
       'VirtualMeetup-WsDisconnect',
       'VirtualMeetup-WsSignaling',
-    ];
+    ].map((base) => withEnv(this, base));
 
     // -------------------------------------------------------
     // SNS Topic for Alarms
@@ -53,11 +71,9 @@ class ObservabilityStack extends Stack {
     });
 
     // Add email subscribers from CDK context
-    if (Array.isArray(alarmEmails)) {
-      alarmEmails.forEach((email) => {
-        alarmTopic.addSubscription(new snsSubscriptions.EmailSubscription(email));
-      });
-    }
+    alarmEmails.forEach((email) => {
+      alarmTopic.addSubscription(new snsSubscriptions.EmailSubscription(email));
+    });
 
     // -------------------------------------------------------
     // CloudWatch Alarms
@@ -95,8 +111,9 @@ class ObservabilityStack extends Stack {
     // the description now states the actual semantic (not the previous
     // misleading "1% rate" wording).
     lambdaFunctionNames.forEach((fnName) => {
+      // fnName already carries the env suffix (withEnv in api-stack.js).
       const fnErrorAlarm = new cloudwatch.Alarm(this, `LambdaErrorAlarm-${fnName}`, {
-        alarmName: `VirtualMeetup-${envName}-${fnName}-Errors`,
+        alarmName: `${fnName}-Errors`,
         alarmDescription: `${fnName} produced ≥1 error in 5 minutes`,
         metric: new cloudwatch.Metric({
           namespace: 'AWS/Lambda',
@@ -187,7 +204,7 @@ class ObservabilityStack extends Stack {
     // across every Lambda in the account.
     lambdaFunctionNames.forEach((fnName) => {
       const fnDurationAlarm = new cloudwatch.Alarm(this, `LambdaDurationAlarm-${fnName}`, {
-        alarmName: `VirtualMeetup-${envName}-${fnName}-Duration`,
+        alarmName: `${fnName}-Duration`,
         alarmDescription: `${fnName} p99 duration exceeds 5 seconds over a 5-minute window`,
         metric: new cloudwatch.Metric({
           namespace: 'AWS/Lambda',
@@ -216,7 +233,7 @@ class ObservabilityStack extends Stack {
     // LambdaErrors since the underlying Lambda was never invoked. See #50.
     lambdaFunctionNames.forEach((fnName) => {
       const fnThrottleAlarm = new cloudwatch.Alarm(this, `LambdaThrottleAlarm-${fnName}`, {
-        alarmName: `VirtualMeetup-${envName}-${fnName}-Throttles`,
+        alarmName: `${fnName}-Throttles`,
         alarmDescription: `${fnName} hit a Lambda concurrency throttle`,
         metric: new cloudwatch.Metric({
           namespace: 'AWS/Lambda',

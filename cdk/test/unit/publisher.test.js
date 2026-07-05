@@ -413,6 +413,80 @@ describe('Publisher Lambda - handler integration', () => {
     expect(global.fetch).toHaveBeenCalledTimes(8);
   });
 
+  it('publishes without captions when transcript.txt does not exist', async () => {
+    // No flow currently writes transcript.txt (captions are browser-side
+    // Web Speech and never persisted). A NoSuchKey on the transcript must
+    // NOT fail the publication — the post goes out without a caption file.
+    const metadata = {
+      title: 'AWS Lambda Deep Dive',
+      description: 'Learn advanced patterns',
+      scheduledStart: '2024-03-15T18:00:00Z',
+      duration: 5400,
+    };
+
+    const s3Send = s3Module.__mockSend;
+    s3Send.mockImplementation((command) => {
+      const key = command.input.Key;
+      if (key.includes('metadata.json')) {
+        return Promise.resolve({
+          Body: { transformToString: () => Promise.resolve(JSON.stringify(metadata)) },
+        });
+      }
+      if (key.includes('transcript.txt')) {
+        const err = new Error('The specified key does not exist.');
+        err.name = 'NoSuchKey';
+        return Promise.reject(err);
+      }
+      return Promise.reject(new Error(`Unexpected S3 key: ${key}`));
+    });
+    mockSecretsManager('ghp_test_token_123');
+    mockGitHubApi();
+
+    const event = {
+      detail: {
+        bucket: { name: 'test-recordings-bucket' },
+        object: { key: 'recordings/evt_nocap/metadata.json' },
+      },
+    };
+
+    const result = await handler(event);
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body).message).toBe('Published successfully');
+
+    // Only the markdown post is committed: get ref, get commit, 1 blob,
+    // create tree, create commit, update ref = 6 calls (vs 8 with captions).
+    expect(global.fetch).toHaveBeenCalledTimes(6);
+  });
+
+  it('still fails the publication on non-NoSuchKey transcript errors', async () => {
+    const metadata = { title: 'X', scheduledStart: '2024-03-15T18:00:00Z' };
+    const s3Send = s3Module.__mockSend;
+    s3Send.mockImplementation((command) => {
+      const key = command.input.Key;
+      if (key.includes('metadata.json')) {
+        return Promise.resolve({
+          Body: { transformToString: () => Promise.resolve(JSON.stringify(metadata)) },
+        });
+      }
+      const err = new Error('Access Denied');
+      err.name = 'AccessDenied';
+      return Promise.reject(err);
+    });
+    mockSecretsManager('ghp_test_token_123');
+    mockGitHubApi();
+
+    const event = {
+      detail: {
+        bucket: { name: 'test-recordings-bucket' },
+        object: { key: 'recordings/evt_err/metadata.json' },
+      },
+    };
+
+    // Non-NoSuchKey errors propagate so the async invoke retries and the
+    // failure lands in the DLQ rather than being silently swallowed.
+    await expect(handler(event)).rejects.toThrow('Access Denied');
+  });
+
   it('skips events without valid S3 details', async () => {
     const event = { detail: {} };
     const result = await handler(event);

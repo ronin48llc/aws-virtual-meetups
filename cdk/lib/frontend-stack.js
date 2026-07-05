@@ -64,9 +64,14 @@ class FrontendStack extends Stack {
     // CSP scope notes:
     // - script-src whitelists the IVS Web Broadcast SDK
     //   (web-broadcast.live-video.net), hls.js + Cognito SDK
-    //   (cdn.jsdelivr.net). `'unsafe-inline'` is currently required because
-    //   index.html still has `onclick="..."` handlers — follow-up will
-    //   migrate those to addEventListener and drop unsafe-inline.
+    //   (cdn.jsdelivr.net). `'unsafe-inline'` is required because the SPA
+    //   renders ~74 `onclick="..."` attribute handlers via innerHTML
+    //   template strings (app.js, live-session.js, manage.js, playback.js,
+    //   anonymous-viewer.js) — attribute handlers need 'unsafe-inline' (or
+    //   'unsafe-hashes') regardless of whether they appear in static HTML
+    //   or injected markup. Dropping it requires refactoring all generated
+    //   templates to addEventListener/event delegation; until then this is
+    //   an accepted gap (see docs/WELL-ARCHITECTED.md, Security).
     // - connect-src wildcards over amazonaws.com (API Gateway HTTP +
     //   WebSocket, Transcribe Streaming) and live-video.net (IVS RTC +
     //   Chat). Tighten to exact endpoints once they're known at deploy time.
@@ -224,6 +229,13 @@ class FrontendStack extends Stack {
     new CfnOutput(this, 'FrontendBucketName', {
       value: this.frontendBucket.bucketName,
       description: 'S3 bucket name for frontend assets',
+    });
+
+    // Consumed by the CD pipeline to invalidate the cache after syncing
+    // frontend assets (see .github/workflows/deploy.yml).
+    new CfnOutput(this, 'DistributionId', {
+      value: this.distribution.distributionId,
+      description: 'CloudFront distribution ID for cache invalidation',
     });
   }
 }

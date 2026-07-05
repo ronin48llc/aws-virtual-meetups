@@ -103,7 +103,7 @@ describe('StreamingStack — chat-review Lambda wiring (#101)', () => {
 
   test('creates ChatReviewFunction with NODEJS_20_X runtime', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'VirtualMeetup-ChatReview',
+      FunctionName: 'VirtualMeetup-ChatReview-dev',
       Runtime: 'nodejs20.x',
       Handler: 'index.handler',
     });
@@ -111,7 +111,7 @@ describe('StreamingStack — chat-review Lambda wiring (#101)', () => {
 
   test('ChatReviewFunction has URL_BLOCKLIST env var', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'VirtualMeetup-ChatReview',
+      FunctionName: 'VirtualMeetup-ChatReview-dev',
       Environment: {
         Variables: Match.objectLike({
           URL_BLOCKLIST: Match.stringLikeRegexp('drive.google.com|dropbox|wetransfer|mega'),
@@ -129,13 +129,13 @@ describe('StreamingStack — chat-review Lambda wiring (#101)', () => {
 
   test('exports ChatReviewFunctionArn for cross-stack use', () => {
     template.hasOutput('ChatReviewFunctionArn', {
-      Export: { Name: 'ChatReviewFunctionArn' },
+      Export: { Name: 'ChatReviewFunctionArn-dev' },
     });
   });
 
   test('URL_BLOCKLIST default includes common phishing/file-share targets', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'VirtualMeetup-ChatReview',
+      FunctionName: 'VirtualMeetup-ChatReview-dev',
       Environment: {
         Variables: {
           URL_BLOCKLIST: 'drive.google.com,dropbox.com,wetransfer.com,mega.nz',
@@ -154,7 +154,7 @@ describe('StreamingStack — chat-review URL_BLOCKLIST is configurable via conte
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'VirtualMeetup-ChatReview',
+      FunctionName: 'VirtualMeetup-ChatReview-dev',
       Environment: {
         Variables: {
           URL_BLOCKLIST: 'evil.example.com,phishing.test',

@@ -69,7 +69,9 @@
           integrity="sha384-tmLe+My/drouBT8LDBDX54/GtvpwceGWUwRKXHJfWra2DlJ/598zVtizduWyMqz5"
           crossorigin="anonymous"></script>
 
-  <!-- Runtime configuration (operators edit frontend/js/config.js post-deploy) -->
+  <!-- Runtime configuration. The CD pipeline regenerates js/config.js from
+       CloudFormation stack outputs on every deploy; the committed copy only
+       serves local development. -->
   <script src="js/config.js"></script>
 
   <!-- Application Scripts -->

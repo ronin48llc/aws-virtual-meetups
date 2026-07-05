@@ -134,7 +134,7 @@ describe('ApiStack — scheduler IAM scoping (issue #1)', () => {
           // CDK serializes ARNs that reference Stack.region/account as
           // Fn::Sub strings — match on the literal group segment.
           const asJson = JSON.stringify(r);
-          if (asJson.includes('schedule/VirtualMeetup-Reminders/')) {
+          if (asJson.includes('schedule/VirtualMeetup-Reminders-dev/')) {
             foundScopedStatement = true;
           }
         }

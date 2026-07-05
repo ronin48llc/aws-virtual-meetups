@@ -1,18 +1,23 @@
-const { Stack, CfnOutput, RemovalPolicy } = require('aws-cdk-lib');
+const { Stack, CfnOutput } = require('aws-cdk-lib');
 const dynamodb = require('aws-cdk-lib/aws-dynamodb');
+const { withEnv, dataRemovalPolicy } = require('./env-config');
 
 class DataStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
+    // Tables are RETAIN'd in prod (see env-config.js) — a stack delete or a
+    // CloudFormation replacement must never destroy event/user data.
+    const removalPolicy = dataRemovalPolicy(this);
+
     // Main single-table: VirtualMeetupTable
     const mainTable = new dynamodb.Table(this, 'VirtualMeetupTable', {
-      tableName: 'VirtualMeetupTable',
+      tableName: withEnv(this, 'VirtualMeetupTable'),
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
-      removalPolicy: RemovalPolicy.DESTROY,
+      removalPolicy,
     });
 
     // GSI1: List upcoming events sorted by start time
@@ -35,11 +40,11 @@ class DataStack extends Stack {
 
     // WebSocket Connections table (separate for high write throughput + TTL cleanup)
     const connectionsTable = new dynamodb.Table(this, 'WebSocketConnections', {
-      tableName: 'WebSocketConnections',
+      tableName: withEnv(this, 'WebSocketConnections'),
       partitionKey: { name: 'connectionId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
-      removalPolicy: RemovalPolicy.DESTROY,
+      removalPolicy,
       timeToLiveAttribute: 'ttl',
     });
 
@@ -55,25 +60,25 @@ class DataStack extends Stack {
     new CfnOutput(this, 'MainTableName', {
       value: mainTable.tableName,
       description: 'VirtualMeetupTable name',
-      exportName: 'VirtualMeetupTableName',
+      exportName: withEnv(this, 'VirtualMeetupTableName'),
     });
 
     new CfnOutput(this, 'MainTableArn', {
       value: mainTable.tableArn,
       description: 'VirtualMeetupTable ARN',
-      exportName: 'VirtualMeetupTableArn',
+      exportName: withEnv(this, 'VirtualMeetupTableArn'),
     });
 
     new CfnOutput(this, 'ConnectionsTableName', {
       value: connectionsTable.tableName,
       description: 'WebSocketConnections table name',
-      exportName: 'WebSocketConnectionsTableName',
+      exportName: withEnv(this, 'WebSocketConnectionsTableName'),
     });
 
     new CfnOutput(this, 'ConnectionsTableArn', {
       value: connectionsTable.tableArn,
       description: 'WebSocketConnections table ARN',
-      exportName: 'WebSocketConnectionsTableArn',
+      exportName: withEnv(this, 'WebSocketConnectionsTableArn'),
     });
 
     // Expose table references for cross-stack use

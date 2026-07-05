@@ -20,7 +20,7 @@ const crypto = require('crypto');
 
 const { EVENT_STATUS, GSI, SK, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } = require('../shared/constants');
 const { buildEventPK, buildGSI1SK, buildGSI2PK } = require('../shared/dynamo-utils');
-const { success, created, badRequest, unauthorized, notFound, serverError, forbidden } = require('../shared/response');
+const { success, created, badRequest, unauthorized, notFound, serverError, forbidden, buildResponse } = require('../shared/response');
 const { validateRequiredFields, isFutureDate, isValidDate, isValidLength, parseBody, sanitize, computeDurationFields, validateDurationFields } = require('../shared/validation');
 const { createLogger } = require('../shared/logger');
 const { createReminderSchedules, deleteReminderSchedules, deleteAutoStopSchedule, deleteWarningSchedules } = require('../shared/scheduler-utils');
@@ -759,6 +759,37 @@ async function deleteEvent(event, eventId) {
  * Main Lambda handler.
  * Routes requests based on HTTP method and path.
  */
+/**
+ * Health check: confirm the function can reach its DynamoDB table.
+ * Returns 200 when healthy, 503 when the dependency check fails —
+ * callers (smoke tests, synthetics, load balancer probes) treat any
+ * non-200 as unhealthy.
+ * @param {Object} logger - Logger instance.
+ * @returns {Object} API Gateway response.
+ */
+async function healthCheck(logger) {
+  try {
+    // Cheapest possible connectivity probe: a GetItem on a key that never
+    // exists still exercises IAM, networking, and table availability.
+    await docClient.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: 'HEALTHCHECK', SK: 'HEALTHCHECK' },
+    }));
+    return success({
+      status: 'ok',
+      dependencies: { dynamodb: 'ok' },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error('Health check failed', { action: 'healthCheck', error: err.message });
+    return buildResponse(503, {
+      status: 'unhealthy',
+      dependencies: { dynamodb: 'error' },
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 exports.handler = async (event) => {
   const logger = createLogger(event);
 
@@ -775,6 +806,13 @@ exports.handler = async (event) => {
       action: `${method} ${normalizedResource}`,
       extra: { method, resource: normalizedResource },
     });
+
+    // Route: GET /health — unauthenticated probe for synthetic monitoring
+    // and post-deploy smoke tests. Verifies the DynamoDB dependency, not
+    // just Lambda liveness.
+    if (method === 'GET' && normalizedResource === '/health') {
+      return await healthCheck(logger);
+    }
 
     // Route: POST /events
     if (method === 'POST' && normalizedResource === '/events') {

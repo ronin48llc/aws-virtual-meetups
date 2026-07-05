@@ -65,8 +65,15 @@
 - **Restrict chat** — Prevent a specific user from sending group messages
 - **Kick** — Remove a user from the live session (can rejoin)
 - **Ban** — Permanently remove a user (cannot rejoin the session)
+- **Unban** — Presenter dashboard "Bans" tab lists banned users and lifts bans
 - **Ban system** — Banned users stored in DynamoDB; checked on connection and token generation
-- **Admin API** — Disable/enable Cognito user accounts for platform-level bans
+- **Admin API** — Disable/enable Cognito user accounts for platform-level bans (`POST /admin/users/disable|enable`, `GET /admin/users/{username}/status`; requires the organizer role)
+
+## Live Captions
+
+- **Web Speech API** — The presenter's browser transcribes their microphone locally (SpeechRecognition); caption lines are broadcast to all participants over the signaling WebSocket
+- **Browser support** — Chrome and Edge only; browsers without SpeechRecognition (Firefox, Safari) can view captions broadcast by the presenter but cannot generate them
+- **Language selector** — Sets the presenter's local recognition language; captions are broadcast in the language the presenter speaks (server-side translation is not implemented)
 
 ## Event Duration
 

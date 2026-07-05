@@ -54,6 +54,7 @@ const LiveSession = (() => {
   let dashboardQuestions = [];
   let dashboardAnsweredQuestions = [];
   let dashboardHands = [];
+  let dashboardBans = [];
   let dashboardActiveTab = 'attendees';
   let pinnedQuestion = null;
 
@@ -320,6 +321,11 @@ const LiveSession = (() => {
                 <button id="btn-device-audio" class="btn btn--control" onclick="LiveSession.toggleDeviceAudio()" aria-label="Toggle device audio" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   🔊 Device Audio
                 </button>
+                <span style="border-left: 1px solid #30363d; margin: 0 4px;" aria-hidden="true"></span>
+                <span style="align-self: center; font-size: 12px; color: #8b949e;">Extend:</span>
+                <button class="btn btn--control" onclick="LiveSession.extendDuration(15)" aria-label="Extend event by 15 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+15m</button>
+                <button class="btn btn--control" onclick="LiveSession.extendDuration(30)" aria-label="Extend event by 30 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+30m</button>
+                <button class="btn btn--control" onclick="LiveSession.extendDuration(60)" aria-label="Extend event by 60 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+60m</button>
               </div>
             </div>
 
@@ -335,11 +341,15 @@ const LiveSession = (() => {
                 <button id="dashboard-tab-hands" onclick="LiveSession.switchDashboardTab('hands')" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
                   Hands <span id="dashboard-count-hands" style="margin-left: 4px; padding: 2px 6px; border-radius: 10px; background: rgba(255,255,255,0.1); font-size: 11px;">0</span>
                 </button>
+                <button id="dashboard-tab-bans" onclick="LiveSession.switchDashboardTab('bans')" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
+                  Bans <span id="dashboard-count-bans" style="margin-left: 4px; padding: 2px 6px; border-radius: 10px; background: rgba(255,255,255,0.1); font-size: 11px;">0</span>
+                </button>
               </div>
               <div id="dashboard-content" style="padding: 12px 16px; max-height: 300px; overflow-y: auto;">
                 <div id="dashboard-panel-attendees"></div>
                 <div id="dashboard-panel-questions" style="display: none;"></div>
                 <div id="dashboard-panel-hands" style="display: none;"></div>
+                <div id="dashboard-panel-bans" style="display: none;"></div>
               </div>
             </div>
 
@@ -492,6 +502,37 @@ const LiveSession = (() => {
         btn.textContent = '🔴 Go Live';
       }
       showNotification('Failed to go live: ' + (err.message || 'Unknown error'));
+    }
+  }
+
+  /**
+   * Extend the live event's duration (presenter only).
+   * Success feedback arrives via the DURATION_EXTENDED broadcast, which
+   * updates the countdown and shows the notification for everyone.
+   * @param {number} minutes - Additional minutes (15/30/60 from the UI).
+   */
+  async function extendDuration(minutes) {
+    if (!eventId) return;
+
+    try {
+      var apiBase = window.API_BASE_URL || '/api';
+      var token = Auth.getIdToken();
+
+      var res = await fetch(apiBase + '/events/' + encodeURIComponent(eventId) + '/extend', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token,
+        },
+        body: JSON.stringify({ additionalMinutes: minutes }),
+      });
+
+      if (!res.ok) {
+        var errData = await res.json().catch(function() { return {}; });
+        throw new Error(errData.message || 'Failed to extend (' + res.status + ')');
+      }
+    } catch (err) {
+      showNotification('Failed to extend event: ' + (err.message || 'Unknown error'));
     }
   }
 
@@ -1440,8 +1481,11 @@ const LiveSession = (() => {
   }
 
   /**
-   * Set the caption language.
-   * Req 19.2: Provide translated captions in selected language.
+   * Set the caption language. Local effect only: for a presenter this sets
+   * the Web Speech API recognition language (what the browser transcribes
+   * from their mic). Captions are broadcast in whatever language the
+   * presenter speaks — server-side translation is not implemented, so this
+   * deliberately sends nothing over the WebSocket.
    */
   function setCaptionLanguage(langCode) {
     captionLanguage = langCode;
@@ -1453,7 +1497,6 @@ const LiveSession = (() => {
       try { speechRecognition.abort(); } catch (e) {}
       try { speechRecognition.start(); } catch (e) {}
     }
-    sendWebSocketMessage('setCaptionLanguage', { language: langCode });
   }
 
   /**
@@ -1476,7 +1519,12 @@ const LiveSession = (() => {
    */
   function switchDashboardTab(tab) {
     dashboardActiveTab = tab;
-    var tabs = ['attendees', 'questions', 'hands'];
+    // Bans live only in DynamoDB, so refresh the list every time the tab
+    // opens (the server replies with a BAN_LIST message).
+    if (tab === 'bans') {
+      sendWebSocketMessage('listBans', {});
+    }
+    var tabs = ['attendees', 'questions', 'hands', 'bans'];
     tabs.forEach(function(t) {
       var btn = document.getElementById('dashboard-tab-' + t);
       var panel = document.getElementById('dashboard-panel-' + t);
@@ -1686,6 +1734,52 @@ const LiveSession = (() => {
    * Acknowledge a raised hand — grants speak permission.
    * Req 4.2: Remove hand record, broadcast HAND_LOWERED, grant speak.
    */
+  /**
+   * Render the banned-users list in the dashboard panel.
+   * Data arrives via the BAN_LIST message in response to `listBans`.
+   */
+  function renderDashboardBans() {
+    var panel = document.getElementById('dashboard-panel-bans');
+    if (!panel) return;
+
+    var countEl = document.getElementById('dashboard-count-bans');
+    if (countEl) countEl.textContent = dashboardBans.length;
+
+    if (dashboardBans.length === 0) {
+      panel.innerHTML = '<p style="color: #8b949e; font-size: 13px; margin: 8px 0;">No banned users.</p>';
+      return;
+    }
+
+    var html = '';
+    dashboardBans.forEach(function(ban) {
+      html += '<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #21262d;">';
+      html += '<div>';
+      html += '<div style="font-size: 13px; color: #e6edf3;">' + escapeHtml(ban.userId || 'unknown') + '</div>';
+      if (ban.reason) {
+        html += '<div style="font-size: 11px; color: #8b949e;">' + escapeHtml(ban.reason) + '</div>';
+      }
+      if (ban.timestamp) {
+        html += '<div style="font-size: 11px; color: #6e7681;">' + escapeHtml(new Date(ban.timestamp).toLocaleString()) + '</div>';
+      }
+      html += '</div>';
+      html += '<button onclick="LiveSession.unbanUser(\'' + escapeHtml(ban.userId) + '\')" aria-label="Unban user" style="padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; font-size: 12px; cursor: pointer;">Unban</button>';
+      html += '</div>';
+    });
+    panel.innerHTML = html;
+  }
+
+  /**
+   * Lift a ban so the user can rejoin the event.
+   */
+  function unbanUser(userId) {
+    if (!confirm('Unban this user? They will be able to rejoin the event.')) return;
+    sendWebSocketMessage('unbanUser', { userId: userId });
+    // Optimistic removal; the next tab open re-syncs from the server.
+    dashboardBans = dashboardBans.filter(function(ban) { return ban.userId !== userId; });
+    renderDashboardBans();
+    showNotification('User unbanned');
+  }
+
   function acknowledgeHand(userId, timestamp) {
     sendWebSocketMessage('acknowledgeHand', { userId: userId, timestamp: timestamp });
   }
@@ -2238,6 +2332,10 @@ const LiveSession = (() => {
         case 'DIRECT_MESSAGE_CONFIRMED':
           // Already shown locally when sent
           break;
+        case 'BAN_LIST':
+          dashboardBans = (msg.data && msg.data.bans) || [];
+          renderDashboardBans();
+          break;
         case 'KICKED':
           showNotification('You have been removed from this session.');
           disconnect();
@@ -2296,8 +2394,6 @@ const LiveSession = (() => {
 
   // --- User Profile Popover ---
 
-  // Cache for fetched user profiles to avoid redundant API calls
-  var profileCache = {};
   // Reference to the currently active popover element
   var activePopover = null;
   // Timeout for dismissing the popover
@@ -2333,52 +2429,29 @@ const LiveSession = (() => {
     // Dismiss any existing popover first
     removeActivePopover();
 
-    // Check cache first for instant display
-    if (profileCache[userId]) {
-      renderPopover(profileCache[userId], targetEl);
-      return;
-    }
-
-    // Fetch profile from API (must display within 1 second per Req 9.1)
-    popoverShowTimeout = setTimeout(function() {}, 0);
-    fetchUserProfile(userId).then(function(profile) {
-      // Only render if the user is still hovering over the same element
-      if (targetEl.matches(':hover')) {
-        profileCache[userId] = profile;
-        renderPopover(profile, targetEl);
-      }
-    }).catch(function(err) {
-      // Req 9.7: On failure, show display name only with "details unavailable" indicator
-      if (targetEl.matches(':hover')) {
-        var fallbackProfile = { displayName: getFallbackDisplayName(userId, targetEl), loadFailed: true };
-        renderPopover(fallbackProfile, targetEl);
-      }
-    });
+    // Profile data comes from what the session already knows about the
+    // attendee (join broadcasts / attendee list) — there is deliberately no
+    // profile API. A backend lookup would have to reach into Cognito and
+    // re-expose fields like email that issue #85 removed from broadcasts.
+    renderPopover(buildLocalProfile(userId, targetEl), targetEl);
   }
 
   /**
-   * Fetch user profile from the API.
-   * @param {string} userId - The user ID to fetch profile for
-   * @returns {Promise<Object>} Profile data
+   * Build a profile object from session-local attendee data.
+   * @param {string} userId - The user ID to look up
+   * @param {HTMLElement} targetEl - The hovered element (name-text fallback)
+   * @returns {Object} Profile data { displayName, role }
    */
-  function fetchUserProfile(userId) {
-    var apiBase = window.API_BASE_URL || '/api';
-    var token = typeof Auth !== 'undefined' && Auth.getIdToken ? Auth.getIdToken() : null;
-
-    var headers = { 'Content-Type': 'application/json' };
-    if (token) {
-      headers['Authorization'] = 'Bearer ' + token;
-    }
-
-    return fetch(apiBase + '/users/' + encodeURIComponent(userId) + '/profile', {
-      method: 'GET',
-      headers: headers,
-    }).then(function(res) {
-      if (!res.ok) {
-        throw new Error('Profile fetch failed: ' + res.status);
+  function buildLocalProfile(userId, targetEl) {
+    for (var i = 0; i < dashboardAttendees.length; i++) {
+      if (dashboardAttendees[i].userId === userId) {
+        return {
+          displayName: dashboardAttendees[i].displayName || 'Unknown',
+          role: dashboardAttendees[i].role || '',
+        };
       }
-      return res.json();
-    });
+    }
+    return { displayName: getFallbackDisplayName(userId, targetEl) };
   }
 
   /**
@@ -2639,7 +2712,9 @@ const LiveSession = (() => {
     restrictUserChat: restrictUserChat,
     kickUser: kickUser,
     banUser: banUser,
+    unbanUser: unbanUser,
     goLive: goLive,
+    extendDuration: extendDuration,
     showUserProfilePopover: showUserProfilePopover,
     dismissProfilePopover: dismissProfilePopover,
     disconnect: disconnect

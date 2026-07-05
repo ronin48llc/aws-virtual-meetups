@@ -71,7 +71,7 @@ describe('EmailStack', () => {
   describe('EventBridge Scheduler Group', () => {
     test('creates Scheduler Group with name VirtualMeetup-Reminders', () => {
       template.hasResourceProperties('AWS::Scheduler::ScheduleGroup', {
-        Name: 'VirtualMeetup-Reminders',
+        Name: 'VirtualMeetup-Reminders-dev',
       });
     });
   });
@@ -162,7 +162,7 @@ describe('EmailStack', () => {
   describe('Dead Letter Queue', () => {
     test('creates SQS Queue for DLQ', () => {
       template.hasResourceProperties('AWS::SQS::Queue', {
-        QueueName: 'VirtualMeetup-EmailDLQ',
+        QueueName: 'VirtualMeetup-EmailDLQ-dev',
       });
     });
 

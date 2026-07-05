@@ -5,6 +5,8 @@ const iam = require('aws-cdk-lib/aws-iam');
 const lambda = require('aws-cdk-lib/aws-lambda');
 const cloudfront = require('aws-cdk-lib/aws-cloudfront');
 const origins = require('aws-cdk-lib/aws-cloudfront-origins');
+const logs = require('aws-cdk-lib/aws-logs');
+const { withEnv, isProd, dataRemovalPolicy } = require('./env-config');
 
 class StreamingStack extends Stack {
   constructor(scope, id, props = {}) {
@@ -49,8 +51,10 @@ class StreamingStack extends Stack {
     const recordingBucket = new s3.Bucket(this, 'RecordingBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
-      removalPolicy: RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
+      // RETAIN in prod — recordings are the platform's only irreplaceable
+      // artifact; a stack delete must not empty and remove the bucket.
+      removalPolicy: dataRemovalPolicy(this),
+      autoDeleteObjects: !isProd(this),
       serverAccessLogsBucket: recordingAccessLogsBucket,
       serverAccessLogsPrefix: 'recordings/',
       eventBridgeEnabled: true,
@@ -210,12 +214,13 @@ class StreamingStack extends Stack {
       || 'drive.google.com,dropbox.com,wetransfer.com,mega.nz';
 
     const chatReviewFunction = new lambda.Function(this, 'ChatReviewFunction', {
-      functionName: 'VirtualMeetup-ChatReview',
+      functionName: withEnv(this, 'VirtualMeetup-ChatReview'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/chat-review/')),
       timeout: Duration.seconds(5),
       memorySize: 128,
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         URL_BLOCKLIST: urlBlocklist,
       },
@@ -233,31 +238,31 @@ class StreamingStack extends Stack {
     new CfnOutput(this, 'ChatReviewFunctionArn', {
       value: chatReviewFunction.functionArn,
       description: 'ARN of the IVS Chat message-review Lambda',
-      exportName: 'ChatReviewFunctionArn',
+      exportName: withEnv(this, 'ChatReviewFunctionArn'),
     });
 
     new CfnOutput(this, 'RecordingBucketName', {
       value: recordingBucket.bucketName,
       description: 'S3 bucket name for IVS recordings',
-      exportName: 'RecordingBucketName',
+      exportName: withEnv(this, 'RecordingBucketName'),
     });
 
     new CfnOutput(this, 'RecordingBucketArn', {
       value: recordingBucket.bucketArn,
       description: 'S3 bucket ARN for IVS recordings',
-      exportName: 'RecordingBucketArn',
+      exportName: withEnv(this, 'RecordingBucketArn'),
     });
 
     new CfnOutput(this, 'IvsCompositionRoleArn', {
       value: ivsCompositionRole.roleArn,
       description: 'IAM role ARN for IVS Composition to write to S3',
-      exportName: 'IvsCompositionRoleArn',
+      exportName: withEnv(this, 'IvsCompositionRoleArn'),
     });
 
     new CfnOutput(this, 'RecordingDistributionDomain', {
       value: recordingDistribution.distributionDomainName,
       description: 'CloudFront distribution domain for recording playback',
-      exportName: 'RecordingDistributionDomain',
+      exportName: withEnv(this, 'RecordingDistributionDomain'),
     });
 
     // Expose references for cross-stack use

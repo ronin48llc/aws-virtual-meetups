@@ -10,6 +10,20 @@ async function run(config, { pass, fail, skip, withRetry }) {
     return;
   }
 
+  // GET /health - dependency-checking probe; 503 means the Lambda cannot
+  // reach DynamoDB even though API Gateway is up.
+  try {
+    await withRetry(async () => {
+      const res = await fetch(`${config.apiUrl}/health`);
+      if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
+      const data = await res.json();
+      if (data.status !== 'ok') throw new Error(`Expected status ok, got ${data.status}`);
+    }, config, 'GET /health');
+    pass('GET /health returns 200 with status ok');
+  } catch (err) {
+    fail('GET /health returns 200 with status ok', err);
+  }
+
   // GET /events - public, no auth required
   try {
     await withRetry(async () => {

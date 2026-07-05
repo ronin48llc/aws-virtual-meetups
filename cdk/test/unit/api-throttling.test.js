@@ -73,7 +73,6 @@ describe('HTTP API throttling (issue #28)', () => {
       'POST /events/{id}/stop',
       'POST /events/{id}/go-live',
       'POST /events/{id}/extend',
-      'POST /events/{id}/transcription/start',
     ]));
   });
 });
