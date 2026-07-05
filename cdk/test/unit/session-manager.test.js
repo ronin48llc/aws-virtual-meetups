@@ -6,6 +6,7 @@ const mockIvsRealTimeSend = jest.fn();
 const mockIvsChatSend = jest.fn();
 const mockApiGwSend = jest.fn();
 const mockLambdaSend = jest.fn();
+const mockS3Send = jest.fn();
 
 jest.mock('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ({})),
@@ -33,6 +34,10 @@ jest.mock('@aws-sdk/client-ivschat', () => ({
 jest.mock('@aws-sdk/client-lambda', () => ({
   LambdaClient: jest.fn(() => ({ send: mockLambdaSend })),
   InvokeCommand: jest.fn((params) => ({ type: 'Invoke', params })),
+}));
+jest.mock('@aws-sdk/client-s3', () => ({
+  S3Client: jest.fn(() => ({ send: mockS3Send })),
+  PutObjectCommand: jest.fn((params) => ({ type: 'PutObject', params })),
 }));
 jest.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   ApiGatewayManagementApiClient: jest.fn(() => ({ send: mockApiGwSend })),
@@ -99,7 +104,7 @@ const liveEvent = {
 // above (client constructors return { send: mock... }, command constructors
 // return { type, params }), which silently breaks the WebSocket broadcast and
 // DDB command shapes the handler relies on.
-const SEND_MOCKS = [mockDdbSend, mockIvsRealTimeSend, mockIvsChatSend, mockApiGwSend, mockLambdaSend];
+const SEND_MOCKS = [mockDdbSend, mockIvsRealTimeSend, mockIvsChatSend, mockApiGwSend, mockLambdaSend, mockS3Send];
 
 describe('Session Manager Lambda handler', () => {
   beforeEach(() => {
@@ -386,6 +391,83 @@ describe('Session Manager Lambda handler', () => {
       expect(body.eventId).toBe('evt_abc');
       expect(body.status).toBe('ended');
       expect(body.endedAt).toBeDefined();
+    });
+
+    it('writes recordings/{eventId}/metadata.json so the publisher fires (with the real HLS URL)', async () => {
+      mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });
+      // StopComposition
+      mockIvsRealTimeSend.mockResolvedValueOnce({});
+      // GetComposition — real recording prefix differs from recordings/{eventId}/
+      mockIvsRealTimeSend.mockResolvedValueOnce({
+        composition: { destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }] },
+      });
+      // UpdateCommand: set hlsPlaybackUrl
+      mockDdbSend.mockResolvedValueOnce({});
+      // PutObject: metadata.json
+      mockS3Send.mockResolvedValueOnce({});
+      // UpdateCommand: update event status
+      mockDdbSend.mockResolvedValueOnce({});
+      // QueryCommand: get connections for broadcast
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
+      // DeleteStage
+      mockIvsRealTimeSend.mockResolvedValueOnce({});
+      // Engagement metrics queries + put
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        method: 'POST',
+        resource: '/events/{id}/stop',
+        pathParameters: { id: 'evt_abc' },
+        claims: validClaims,
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+
+      // Assert via the stable send spy, not a late require() of
+      // PutObjectCommand — earlier tests call jest.resetModules(), which
+      // hands a fresh require() an empty mock (see the note on the
+      // engagement-metrics test below). Commands are the { type, params }
+      // shape from the mock factory.
+      const putCall = mockS3Send.mock.calls
+        .map((c) => c[0])
+        .find((cmd) => cmd && cmd.type === 'PutObject');
+      expect(putCall).toBeDefined();
+      expect(putCall.params.Key).toBe('recordings/evt_abc/metadata.json');
+      expect(putCall.params.ContentType).toBe('application/json');
+      const metadataBody = JSON.parse(putCall.params.Body);
+      expect(metadataBody.eventId).toBe('evt_abc');
+      // The URL must reflect IVS's real prefix, not recordings/{eventId}/
+      expect(metadataBody.hlsPlaybackUrl).toContain('ivs/v1/abc/media/hls/master.m3u8');
+    });
+
+    it('still ends the event when the metadata write fails (non-blocking)', async () => {
+      mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });
+      mockIvsRealTimeSend.mockResolvedValueOnce({});
+      mockIvsRealTimeSend.mockResolvedValueOnce({
+        composition: { destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }] },
+      });
+      mockDdbSend.mockResolvedValueOnce({});
+      mockS3Send.mockRejectedValueOnce(new Error('AccessDenied'));
+      mockDdbSend.mockResolvedValueOnce({});
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
+      mockIvsRealTimeSend.mockResolvedValueOnce({});
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        method: 'POST',
+        resource: '/events/{id}/stop',
+        pathParameters: { id: 'evt_abc' },
+        claims: validClaims,
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+      expect(JSON.parse(result.body).status).toBe('ended');
     });
 
     it('broadcasts EVENT_ENDED to connected clients', async () => {

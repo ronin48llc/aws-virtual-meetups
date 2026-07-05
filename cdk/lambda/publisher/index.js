@@ -60,9 +60,13 @@ exports.handler = async (event) => {
       ? generateWebVTT(parseTranscriptSegments(transcriptText))
       : null;
 
-    // Generate Jekyll markdown post
+    // Generate Jekyll markdown post. Prefer the real playback URL from
+    // metadata.json (written by session-manager at stop) — IVS stores media
+    // under its own generated prefix, so the recordings/{eventId}/ guess
+    // below is only a legacy fallback.
     const cloudfrontDomain = process.env.CLOUDFRONT_DOMAIN || '';
-    const hlsUrl = `https://${cloudfrontDomain}/recordings/${eventId}/media/master.m3u8`;
+    const hlsUrl = metadata.hlsPlaybackUrl
+      || `https://${cloudfrontDomain}/recordings/${eventId}/media/master.m3u8`;
     const captionPath = webvttContent ? `/assets/captions/${eventId}.vtt` : '';
     const markdownContent = generateJekyllPost(metadata, hlsUrl, captionPath);
 
