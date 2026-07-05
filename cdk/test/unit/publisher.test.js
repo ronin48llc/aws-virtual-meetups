@@ -613,7 +613,7 @@ describe('Publisher Lambda - handler integration', () => {
     const payload = JSON.parse(invokeCall.Payload);
     expect(payload.type).toBe('recap');
     expect(payload.eventId).toBe('evt_recap123');
-    expect(payload.playbackUrl).toBe('https://d1234567890.cloudfront.net/recordings/evt_recap123/media/master.m3u8');
+    expect(payload.playbackUrl).toBe('https://d1234567890.cloudfront.net/recordings/evt_recap123/media/hls/multivariant.m3u8');
     expect(payload.duration).toBe(5400);
   });
 

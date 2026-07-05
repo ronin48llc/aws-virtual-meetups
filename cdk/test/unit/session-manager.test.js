@@ -440,7 +440,7 @@ describe('Session Manager Lambda handler', () => {
       const metadataBody = JSON.parse(putCall.params.Body);
       expect(metadataBody.eventId).toBe('evt_abc');
       // The URL must reflect IVS's real prefix, not recordings/{eventId}/
-      expect(metadataBody.hlsPlaybackUrl).toContain('ivs/v1/abc/media/hls/master.m3u8');
+      expect(metadataBody.hlsPlaybackUrl).toContain('ivs/v1/abc/media/hls/multivariant.m3u8');
     });
 
     it('skips the playback URL and metadata when the composition FAILED', async () => {
