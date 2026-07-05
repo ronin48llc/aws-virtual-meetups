@@ -21,6 +21,9 @@ const AnonymousViewer = (() => {
   let hlsInstance = null;
   let videoElement = null;
   let currentEventId = null;
+  // Last config passed to initLive — lets the not-live poll rejoin with the
+  // exact same parameters when the event goes live.
+  let currentConfig = null;
   let currentSessionId = null;
   let currentFingerprint = null;
   let chatRoom = null;
@@ -50,6 +53,7 @@ const AnonymousViewer = (() => {
     }
 
     currentEventId = config.eventId;
+    currentConfig = config;
     var apiBase = window.API_BASE_URL || '/api';
 
     // Generate browser fingerprint
@@ -625,9 +629,38 @@ const AnonymousViewer = (() => {
       '<div style="max-width: 600px; margin: 80px auto; padding: 32px; text-align: center;">' +
         '<div style="font-size: 48px; margin-bottom: 16px;">🕐</div>' +
         '<h2 style="margin-bottom: 12px; color: #1a202c;">Not Live Yet</h2>' +
-        '<p style="color: #4a5568; font-size: 16px; line-height: 1.6;">This event hasn\'t started yet. Check back when the presenter goes live.</p>' +
+        '<p style="color: #4a5568; font-size: 16px; line-height: 1.6;">This event hasn\'t started yet. Stay on this page — you\'ll join automatically when the presenter goes live.</p>' +
         '<a href="#/" class="btn btn--primary" style="margin-top: 24px; display: inline-block; text-decoration: none;">Back to Home</a>' +
       '</div>';
+
+    _pollUntilLive(container);
+  }
+
+  /**
+   * Poll the public event endpoint every 10 seconds and rejoin the live
+   * flow the moment the event goes live. Stops when the user navigates
+   * away (the waiting markup leaves the document).
+   */
+  function _pollUntilLive(container) {
+    var config = currentConfig;
+    if (!config || !config.eventId) return;
+
+    var poll = setInterval(function() {
+      if (container && !document.body.contains(container)) {
+        clearInterval(poll);
+        return;
+      }
+      var apiBase = window.API_BASE_URL || '/api';
+      fetch(apiBase + '/events/' + encodeURIComponent(config.eventId))
+        .then(function(res) { return res.ok ? res.json() : null; })
+        .then(function(evt) {
+          if (evt && evt.status === 'live') {
+            clearInterval(poll);
+            initLive(config);
+          }
+        })
+        .catch(function() { /* retry next tick */ });
+    }, 10000);
   }
 
   /**
