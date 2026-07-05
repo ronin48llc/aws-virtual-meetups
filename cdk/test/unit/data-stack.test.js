@@ -15,7 +15,7 @@ describe('DataStack', () => {
   describe('VirtualMeetupTable', () => {
     test('creates table with PK (string) partition key and SK (string) sort key', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'VirtualMeetupTable',
+        TableName: 'VirtualMeetupTable-dev',
         KeySchema: [
           { AttributeName: 'PK', KeyType: 'HASH' },
           { AttributeName: 'SK', KeyType: 'RANGE' },
@@ -29,14 +29,14 @@ describe('DataStack', () => {
 
     test('uses on-demand billing mode', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'VirtualMeetupTable',
+        TableName: 'VirtualMeetupTable-dev',
         BillingMode: 'PAY_PER_REQUEST',
       });
     });
 
     test('has GSI1 with GSI1PK/GSI1SK for upcoming events by start time', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'VirtualMeetupTable',
+        TableName: 'VirtualMeetupTable-dev',
         GlobalSecondaryIndexes: Match.arrayWith([
           Match.objectLike({
             IndexName: 'GSI1',
@@ -52,7 +52,7 @@ describe('DataStack', () => {
 
     test('has GSI2 with GSI2PK/GSI2SK for events by owner', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'VirtualMeetupTable',
+        TableName: 'VirtualMeetupTable-dev',
         GlobalSecondaryIndexes: Match.arrayWith([
           Match.objectLike({
             IndexName: 'GSI2',
@@ -70,7 +70,7 @@ describe('DataStack', () => {
   describe('WebSocketConnections table', () => {
     test('creates table with connectionId as partition key', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'WebSocketConnections',
+        TableName: 'WebSocketConnections-dev',
         KeySchema: [
           { AttributeName: 'connectionId', KeyType: 'HASH' },
         ],
@@ -79,14 +79,14 @@ describe('DataStack', () => {
 
     test('uses on-demand billing mode', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'WebSocketConnections',
+        TableName: 'WebSocketConnections-dev',
         BillingMode: 'PAY_PER_REQUEST',
       });
     });
 
     test('has TTL enabled on ttl attribute', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'WebSocketConnections',
+        TableName: 'WebSocketConnections-dev',
         TimeToLiveSpecification: {
           AttributeName: 'ttl',
           Enabled: true,
@@ -96,7 +96,7 @@ describe('DataStack', () => {
 
     test('has EventConnections GSI with eventId PK and connectionId SK', () => {
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'WebSocketConnections',
+        TableName: 'WebSocketConnections-dev',
         GlobalSecondaryIndexes: Match.arrayWith([
           Match.objectLike({
             IndexName: 'EventConnections',
@@ -114,25 +114,25 @@ describe('DataStack', () => {
   describe('CloudFormation outputs', () => {
     test('exports main table name', () => {
       template.hasOutput('MainTableName', {
-        Export: { Name: 'VirtualMeetupTableName' },
+        Export: { Name: 'VirtualMeetupTableName-dev' },
       });
     });
 
     test('exports main table ARN', () => {
       template.hasOutput('MainTableArn', {
-        Export: { Name: 'VirtualMeetupTableArn' },
+        Export: { Name: 'VirtualMeetupTableArn-dev' },
       });
     });
 
     test('exports connections table name', () => {
       template.hasOutput('ConnectionsTableName', {
-        Export: { Name: 'WebSocketConnectionsTableName' },
+        Export: { Name: 'WebSocketConnectionsTableName-dev' },
       });
     });
 
     test('exports connections table ARN', () => {
       template.hasOutput('ConnectionsTableArn', {
-        Export: { Name: 'WebSocketConnectionsTableArn' },
+        Export: { Name: 'WebSocketConnectionsTableArn-dev' },
       });
     });
   });

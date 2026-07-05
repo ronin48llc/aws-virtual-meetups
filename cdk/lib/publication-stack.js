@@ -7,6 +7,7 @@ const targets = require('aws-cdk-lib/aws-events-targets');
 const secretsmanager = require('aws-cdk-lib/aws-secretsmanager');
 const sqs = require('aws-cdk-lib/aws-sqs');
 const iam = require('aws-cdk-lib/aws-iam');
+const { withEnv, envName } = require('./env-config');
 
 class PublicationStack extends Stack {
   constructor(scope, id, props) {
@@ -18,7 +19,7 @@ class PublicationStack extends Stack {
     // Secrets Manager — GitHub Token
     // -------------------------------------------------------
     const githubTokenSecret = new secretsmanager.Secret(this, 'GitHubTokenSecret', {
-      secretName: 'VirtualMeetup/GitHubToken',
+      secretName: `VirtualMeetup-${envName(this)}/GitHubToken`,
       description: 'GitHub personal access token for publishing recordings to GitHub Pages',
       generateSecretString: {
         secretStringTemplate: JSON.stringify({ token: 'REPLACE_WITH_GITHUB_TOKEN' }),
@@ -30,7 +31,7 @@ class PublicationStack extends Stack {
     // SQS Dead Letter Queue for failed publication attempts
     // -------------------------------------------------------
     const publicationDlq = new sqs.Queue(this, 'PublicationDLQ', {
-      queueName: 'VirtualMeetup-PublicationDLQ',
+      queueName: withEnv(this, 'VirtualMeetup-PublicationDLQ'),
       retentionPeriod: Duration.days(14),
     });
 
@@ -38,7 +39,7 @@ class PublicationStack extends Stack {
     // Publisher Lambda Function
     // -------------------------------------------------------
     const publisherFunction = new lambda.Function(this, 'PublisherFunction', {
-      functionName: 'VirtualMeetup-Publisher',
+      functionName: withEnv(this, 'VirtualMeetup-Publisher'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/publisher/')),
@@ -81,7 +82,7 @@ class PublicationStack extends Stack {
     // Filters for metadata.json files which signal a completed recording.
     // -------------------------------------------------------
     const publicationRule = new events.Rule(this, 'RecordingCreatedRule', {
-      ruleName: 'VirtualMeetup-RecordingCreated',
+      ruleName: withEnv(this, 'VirtualMeetup-RecordingCreated'),
       description: 'Triggers Publisher Lambda when a metadata.json file is created in the recordings bucket',
       eventPattern: {
         source: ['aws.s3'],
@@ -109,13 +110,13 @@ class PublicationStack extends Stack {
     new CfnOutput(this, 'PublisherFunctionArn', {
       value: publisherFunction.functionArn,
       description: 'ARN of the Publisher Lambda function',
-      exportName: 'PublisherFunctionArn',
+      exportName: withEnv(this, 'PublisherFunctionArn'),
     });
 
     new CfnOutput(this, 'PublicationDLQUrl', {
       value: publicationDlq.queueUrl,
       description: 'URL of the Publication Dead Letter Queue',
-      exportName: 'PublicationDLQUrl',
+      exportName: withEnv(this, 'PublicationDLQUrl'),
     });
 
     // Expose references for cross-stack use

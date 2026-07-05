@@ -9,7 +9,10 @@
 const { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } = require('@aws-sdk/client-scheduler');
 const logger = require('./logger');
 
-const SCHEDULER_GROUP = 'VirtualMeetup-Reminders';
+// Per-env scheduler group. The CDK ApiStack injects SCHEDULER_GROUP_NAME
+// (see lib/env-config.js schedulerGroupName); the fallback keeps unit tests
+// and legacy deploys working.
+const SCHEDULER_GROUP = process.env.SCHEDULER_GROUP_NAME || 'VirtualMeetup-Reminders';
 const OFFSET_24H = 24 * 60 * 60 * 1000;
 const OFFSET_1H = 60 * 60 * 1000;
 

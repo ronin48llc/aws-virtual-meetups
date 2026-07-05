@@ -207,7 +207,7 @@ describe('AuthStack', () => {
   describe('Admin API Lambda for user account management', () => {
     test('creates an Admin API Lambda function', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
-        FunctionName: 'VirtualMeetup-AdminApi',
+        FunctionName: 'VirtualMeetup-AdminApi-dev',
         Runtime: 'nodejs20.x',
         Handler: 'index.handler',
         Timeout: 30,
@@ -216,7 +216,7 @@ describe('AuthStack', () => {
 
     test('Admin API Lambda has USER_POOL_ID environment variable', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
-        FunctionName: 'VirtualMeetup-AdminApi',
+        FunctionName: 'VirtualMeetup-AdminApi-dev',
         Environment: {
           Variables: Match.objectLike({
             USER_POOL_ID: Match.anyValue(),
@@ -246,19 +246,19 @@ describe('AuthStack', () => {
   describe('CloudFormation outputs', () => {
     test('exports User Pool ID', () => {
       template.hasOutput('UserPoolId', {
-        Export: { Name: 'VirtualMeetupUserPoolId' },
+        Export: { Name: 'VirtualMeetupUserPoolId-dev' },
       });
     });
 
     test('exports User Pool Client ID', () => {
       template.hasOutput('UserPoolClientId', {
-        Export: { Name: 'VirtualMeetupUserPoolClientId' },
+        Export: { Name: 'VirtualMeetupUserPoolClientId-dev' },
       });
     });
 
     test('exports Identity Pool ID', () => {
       template.hasOutput('IdentityPoolId', {
-        Export: { Name: 'VirtualMeetupIdentityPoolId' },
+        Export: { Name: 'VirtualMeetupIdentityPoolId-dev' },
       });
     });
   });

@@ -9,14 +9,16 @@ const { ObservabilityStack } = require('../../lib/observability-stack');
 // TableName dimensions. Without dimensions, AWS/Lambda Errors and
 // AWS/DynamoDB ThrottledRequests aggregate across the entire account.
 
+// Function names carry the env suffix (withEnv in api-stack.js); tests
+// synth without -c env so the default 'dev' applies.
 const PLATFORM_LAMBDAS = [
-  'VirtualMeetup-EventCrud',
-  'VirtualMeetup-SessionManager',
-  'VirtualMeetup-TokenGenerator',
-  'VirtualMeetup-Signup',
-  'VirtualMeetup-WsConnect',
-  'VirtualMeetup-WsDisconnect',
-  'VirtualMeetup-WsSignaling',
+  'VirtualMeetup-EventCrud-dev',
+  'VirtualMeetup-SessionManager-dev',
+  'VirtualMeetup-TokenGenerator-dev',
+  'VirtualMeetup-Signup-dev',
+  'VirtualMeetup-WsConnect-dev',
+  'VirtualMeetup-WsDisconnect-dev',
+  'VirtualMeetup-WsSignaling-dev',
 ];
 
 function buildStack() {
@@ -48,7 +50,7 @@ describe('ObservabilityStack — alarm dimension scoping (#109)', () => {
   describe('per-function Lambda error alarms', () => {
     test.each(PLATFORM_LAMBDAS)('alarm for %s scopes to FunctionName', (fnName) => {
       template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmName: Match.stringLikeRegexp(`VirtualMeetup-.*-${fnName}-Errors`),
+        AlarmName: `${fnName}-Errors`,
         Namespace: 'AWS/Lambda',
         MetricName: 'Errors',
         Dimensions: Match.arrayWith([
@@ -61,7 +63,7 @@ describe('ObservabilityStack — alarm dimension scoping (#109)', () => {
   describe('per-function Lambda duration alarms', () => {
     test.each(PLATFORM_LAMBDAS)('p99 duration alarm for %s scopes to FunctionName', (fnName) => {
       template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmName: Match.stringLikeRegexp(`VirtualMeetup-.*-${fnName}-Duration`),
+        AlarmName: `${fnName}-Duration`,
         Namespace: 'AWS/Lambda',
         MetricName: 'Duration',
         ExtendedStatistic: 'p99',

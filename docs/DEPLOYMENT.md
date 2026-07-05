@@ -120,7 +120,7 @@ secrets, and your shell will log it to history):
 export GITHUB_PAT='...'   # your fine-grained PAT, scoped to the publication repo
 
 aws secretsmanager put-secret-value \
-  --secret-id VirtualMeetup/GitHubToken \
+  --secret-id VirtualMeetup-<env>/GitHubToken \
   --secret-string "$(jq -n --arg t "$GITHUB_PAT" '{token:$t}')"
 ```
 

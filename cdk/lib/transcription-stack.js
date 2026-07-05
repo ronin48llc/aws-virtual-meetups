@@ -3,6 +3,7 @@ const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const lambda = require('aws-cdk-lib/aws-lambda');
 const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
+const { withEnv } = require('./env-config');
 
 class TranscriptionStack extends Stack {
   constructor(scope, id, props = {}) {
@@ -40,7 +41,7 @@ class TranscriptionStack extends Stack {
     // Lambda Function for Transcription Orchestration
     // -------------------------------------------------------
     const transcriptionFunction = new lambda.Function(this, 'TranscriptionFunction', {
-      functionName: 'VirtualMeetup-Transcription',
+      functionName: withEnv(this, 'VirtualMeetup-Transcription'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'transcription/index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/')),
@@ -67,7 +68,7 @@ class TranscriptionStack extends Stack {
     new CfnOutput(this, 'TranscriptionFunctionArn', {
       value: transcriptionFunction.functionArn,
       description: 'ARN of the Transcription Orchestrator Lambda function',
-      exportName: 'TranscriptionFunctionArn',
+      exportName: withEnv(this, 'TranscriptionFunctionArn'),
     });
 
     // Expose Lambda function reference for cross-stack use

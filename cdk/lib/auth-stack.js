@@ -1,10 +1,11 @@
 const path = require('path');
-const { Stack, CfnOutput, RemovalPolicy, Duration } = require('aws-cdk-lib');
+const { Stack, CfnOutput, Duration } = require('aws-cdk-lib');
 const cognito = require('aws-cdk-lib/aws-cognito');
 const lambda = require('aws-cdk-lib/aws-lambda');
 const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 const { IdentityPool, UserPoolAuthenticationProvider } = require('aws-cdk-lib/aws-cognito-identitypool');
+const { withEnv, dataRemovalPolicy } = require('./env-config');
 
 class AuthStack extends Stack {
   constructor(scope, id, props) {
@@ -12,7 +13,7 @@ class AuthStack extends Stack {
 
     // Cognito User Pool with email sign-up, verification, and advanced security
     const userPool = new cognito.UserPool(this, 'VirtualMeetupUserPool', {
-      userPoolName: 'virtual-meetup-user-pool',
+      userPoolName: withEnv(this, 'virtual-meetup-user-pool'),
       selfSignUpEnabled: true,
       signInAliases: {
         email: true,
@@ -48,7 +49,8 @@ class AuthStack extends Stack {
         requireSymbols: false,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: RemovalPolicy.DESTROY,
+      // RETAIN in prod — deleting the pool deletes every user account.
+      removalPolicy: dataRemovalPolicy(this),
       // NOTE: Using Cognito default email while SES is in sandbox mode.
       // Once SES production access is granted, uncomment the SES config below:
       // email: cognito.UserPoolEmail.withSES({
@@ -125,7 +127,7 @@ class AuthStack extends Stack {
 
     // Identity Pool linked to User Pool
     const identityPool = new IdentityPool(this, 'VirtualMeetupIdentityPool', {
-      identityPoolName: 'virtual-meetup-identity-pool',
+      identityPoolName: withEnv(this, 'virtual-meetup-identity-pool'),
       allowUnauthenticatedIdentities: false,
       authenticationProviders: {
         userPools: [
@@ -140,7 +142,7 @@ class AuthStack extends Stack {
     // Admin API Lambda — disable/enable user accounts
     // Requirements: 25.5
     const adminApiFunction = new lambda.Function(this, 'AdminApiFunction', {
-      functionName: 'VirtualMeetup-AdminApi',
+      functionName: withEnv(this, 'VirtualMeetup-AdminApi'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/admin-api/')),
@@ -167,19 +169,19 @@ class AuthStack extends Stack {
     new CfnOutput(this, 'UserPoolId', {
       value: userPool.userPoolId,
       description: 'Cognito User Pool ID',
-      exportName: 'VirtualMeetupUserPoolId',
+      exportName: withEnv(this, 'VirtualMeetupUserPoolId'),
     });
 
     new CfnOutput(this, 'UserPoolClientId', {
       value: userPoolClient.userPoolClientId,
       description: 'Cognito User Pool Client ID',
-      exportName: 'VirtualMeetupUserPoolClientId',
+      exportName: withEnv(this, 'VirtualMeetupUserPoolClientId'),
     });
 
     new CfnOutput(this, 'IdentityPoolId', {
       value: identityPool.identityPoolId,
       description: 'Cognito Identity Pool ID',
-      exportName: 'VirtualMeetupIdentityPoolId',
+      exportName: withEnv(this, 'VirtualMeetupIdentityPoolId'),
     });
 
     // Expose constructs for cross-stack references
