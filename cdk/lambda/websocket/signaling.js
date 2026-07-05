@@ -1859,7 +1859,10 @@ async function handleTyping(eventId, body, connectionId) {
  * @param {string} connectionId - The sender's WebSocket connection ID.
  */
 async function handleBroadcastCaption(eventId, body, connectionId) {
-  const { text, language, isFinal } = body;
+  // The client wraps action payloads under `data` ({action, eventId, data:
+  // {...}}). Reading from the top level rejected EVERY caption with 400,
+  // so attendees sat on "Waiting for presenter to enable captions" forever.
+  const { text, language, isFinal } = body.data || body;
 
   if (!text || !language) {
     return { statusCode: 400, body: 'text and language are required' };
