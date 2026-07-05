@@ -225,6 +225,13 @@ class FrontendStack extends Stack {
       value: this.frontendBucket.bucketName,
       description: 'S3 bucket name for frontend assets',
     });
+
+    // Consumed by the CD pipeline to invalidate the cache after syncing
+    // frontend assets (see .github/workflows/deploy.yml).
+    new CfnOutput(this, 'DistributionId', {
+      value: this.distribution.distributionId,
+      description: 'CloudFront distribution ID for cache invalidation',
+    });
   }
 }
 

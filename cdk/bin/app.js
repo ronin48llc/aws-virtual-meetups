@@ -6,7 +6,6 @@ const { DataStack } = require('../lib/data-stack');
 const { DnsStack } = require('../lib/dns-stack');
 const { ApiStack } = require('../lib/api-stack');
 const { StreamingStack } = require('../lib/streaming-stack');
-const { TranscriptionStack } = require('../lib/transcription-stack');
 const { FrontendStack } = require('../lib/frontend-stack');
 const { PublicationStack } = require('../lib/publication-stack');
 const { ObservabilityStack } = require('../lib/observability-stack');
@@ -83,17 +82,6 @@ const streamingStack = new StreamingStack(app, `${prefix}-Streaming`, {
 streamingStack.addDependency(dnsStack);
 
 // -------------------------------------------------------
-// Stack 5: Transcription (depends on Data for event-ownership lookup)
-// Transcription Lambda with Transcribe + Translate permissions
-// -------------------------------------------------------
-const transcriptionStack = new TranscriptionStack(app, `${prefix}-Transcription`, {
-  env,
-  description: 'Virtual Meetup Platform - Transcription (Amazon Transcribe + Translate)',
-  mainTable: dataStack.mainTable,
-});
-transcriptionStack.addDependency(dataStack);
-
-// -------------------------------------------------------
 // Stack 6: Frontend (depends on DNS)
 // S3 bucket + CloudFront distribution for SPA hosting
 // Requirements: 9.2, 9.4
@@ -134,6 +122,7 @@ const apiStack = new ApiStack(app, `${prefix}-Api`, {
   description: 'Virtual Meetup Platform - API Layer (HTTP + WebSocket APIs)',
   userPool: authStack.userPool,
   userPoolClient: authStack.userPoolClient,
+  adminApiFunction: authStack.adminApiFunction,
   mainTable: dataStack.mainTable,
   connectionsTable: dataStack.connectionsTable,
   emailSenderFunction: emailStack.emailSenderFunction,
@@ -146,7 +135,6 @@ const apiStack = new ApiStack(app, `${prefix}-Api`, {
   ivsEncoderConfigArn: ivsEncoderConfigArn,
   recordingBucketName: streamingStack.recordingBucket.bucketName,
   recordingCloudfrontDomain: streamingStack.recordingDistribution.distributionDomainName,
-  transcriptionFunction: transcriptionStack.transcriptionFunction,
   chatReviewFunction: streamingStack.chatReviewFunction,
 });
 apiStack.addDependency(authStack);
@@ -154,7 +142,6 @@ apiStack.addDependency(dataStack);
 apiStack.addDependency(emailStack);
 apiStack.addDependency(dnsStack);
 apiStack.addDependency(streamingStack);
-apiStack.addDependency(transcriptionStack);
 
 // -------------------------------------------------------
 // Stack 8: Publication (depends on Streaming + Email)

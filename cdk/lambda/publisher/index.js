@@ -36,18 +36,34 @@ exports.handler = async (event) => {
     const metadataKey = `recordings/${eventId}/metadata.json`;
     const metadata = await readJsonFromS3(bucket, metadataKey);
 
-    // Read transcript segments from S3 (captions.vtt source or transcript.txt)
+    // Transcript is OPTIONAL. Live captions run browser-side (Web Speech
+    // API) and are never persisted, so no current flow writes
+    // transcript.txt — an un-guarded read here failed EVERY publication
+    // with NoSuchKey and sent the recording to the DLQ. Publish the post
+    // without captions when the transcript is absent; if a future flow
+    // uploads recordings/{eventId}/transcript.txt, captions light up again.
     const transcriptKey = `recordings/${eventId}/transcript.txt`;
-    const transcriptText = await readTextFromS3(bucket, transcriptKey);
+    let transcriptText = null;
+    try {
+      transcriptText = await readTextFromS3(bucket, transcriptKey);
+    } catch (err) {
+      const notFound = err.name === 'NoSuchKey'
+        || (err.$metadata && err.$metadata.httpStatusCode === 404);
+      if (!notFound) {
+        throw err;
+      }
+      console.log('No transcript for event, publishing without captions:', eventId);
+    }
 
-    // Generate WebVTT caption file from transcript segments
-    const segments = parseTranscriptSegments(transcriptText);
-    const webvttContent = generateWebVTT(segments);
+    // Generate WebVTT caption file from transcript segments (when present)
+    const webvttContent = transcriptText
+      ? generateWebVTT(parseTranscriptSegments(transcriptText))
+      : null;
 
     // Generate Jekyll markdown post
     const cloudfrontDomain = process.env.CLOUDFRONT_DOMAIN || '';
     const hlsUrl = `https://${cloudfrontDomain}/recordings/${eventId}/media/master.m3u8`;
-    const captionPath = `/assets/captions/${eventId}.vtt`;
+    const captionPath = webvttContent ? `/assets/captions/${eventId}.vtt` : '';
     const markdownContent = generateJekyllPost(metadata, hlsUrl, captionPath);
 
     // Get GitHub token from Secrets Manager
@@ -57,24 +73,24 @@ exports.handler = async (event) => {
     const githubOwner = process.env.GITHUB_OWNER;
     const githubRepo = process.env.GITHUB_REPO;
 
+    const filesToCommit = [
+      {
+        path: `_posts/${formatDateForFilename(metadata.scheduledStart || metadata.date)}-${eventId}.md`,
+        content: markdownContent,
+      },
+    ];
+    if (webvttContent) {
+      filesToCommit.push(
+        { path: `assets/captions/${eventId}.vtt`, content: webvttContent },
+        { path: `assets/transcripts/${eventId}.txt`, content: transcriptText },
+      );
+    }
+
     await commitFilesToGitHub({
       token: githubToken,
       owner: githubOwner,
       repo: githubRepo,
-      files: [
-        {
-          path: `_posts/${formatDateForFilename(metadata.scheduledStart || metadata.date)}-${eventId}.md`,
-          content: markdownContent,
-        },
-        {
-          path: `assets/captions/${eventId}.vtt`,
-          content: webvttContent,
-        },
-        {
-          path: `assets/transcripts/${eventId}.txt`,
-          content: transcriptText,
-        },
-      ],
+      files: filesToCommit,
       message: `Add recording for event: ${metadata.title || eventId}`,
     });
 

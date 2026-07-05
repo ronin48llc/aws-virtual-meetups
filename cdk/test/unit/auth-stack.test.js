@@ -207,7 +207,7 @@ describe('AuthStack', () => {
   describe('Admin API Lambda for user account management', () => {
     test('creates an Admin API Lambda function', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
-        FunctionName: 'VirtualMeetup-AdminApi',
+        FunctionName: 'VirtualMeetup-AdminApi-dev',
         Runtime: 'nodejs20.x',
         Handler: 'index.handler',
         Timeout: 30,
@@ -216,7 +216,7 @@ describe('AuthStack', () => {
 
     test('Admin API Lambda has USER_POOL_ID environment variable', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
-        FunctionName: 'VirtualMeetup-AdminApi',
+        FunctionName: 'VirtualMeetup-AdminApi-dev',
         Environment: {
           Variables: Match.objectLike({
             USER_POOL_ID: Match.anyValue(),
@@ -246,19 +246,19 @@ describe('AuthStack', () => {
   describe('CloudFormation outputs', () => {
     test('exports User Pool ID', () => {
       template.hasOutput('UserPoolId', {
-        Export: { Name: 'VirtualMeetupUserPoolId' },
+        Export: { Name: 'VirtualMeetupUserPoolId-dev' },
       });
     });
 
     test('exports User Pool Client ID', () => {
       template.hasOutput('UserPoolClientId', {
-        Export: { Name: 'VirtualMeetupUserPoolClientId' },
+        Export: { Name: 'VirtualMeetupUserPoolClientId-dev' },
       });
     });
 
     test('exports Identity Pool ID', () => {
       template.hasOutput('IdentityPoolId', {
-        Export: { Name: 'VirtualMeetupIdentityPoolId' },
+        Export: { Name: 'VirtualMeetupIdentityPoolId-dev' },
       });
     });
   });
@@ -285,5 +285,36 @@ describe('AuthStack', () => {
         }),
       });
     });
+  });
+});
+
+describe('SES email configuration gate', () => {
+  const { App } = require('aws-cdk-lib');
+  const { Template } = require('aws-cdk-lib/assertions');
+  const { AuthStack } = require('../../lib/auth-stack');
+  const ENV = { account: '123456789012', region: 'us-east-1' };
+
+  test('default: Cognito email service (SES sandbox-safe)', () => {
+    const app = new App();
+    const template = Template.fromStack(new AuthStack(app, 'A', { env: ENV }));
+    const pools = template.findResources('AWS::Cognito::UserPool');
+    const emailConfig = Object.values(pools)[0].Properties.EmailConfiguration;
+    expect(emailConfig && emailConfig.EmailSendingAccount).not.toBe('DEVELOPER');
+  });
+
+  test('-c sesEmailEnabled=true switches to the SES identity', () => {
+    const app = new App({ context: { sesEmailEnabled: 'true', domainName: 'example.com' } });
+    const template = Template.fromStack(new AuthStack(app, 'A', { env: ENV }));
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      EmailConfiguration: {
+        EmailSendingAccount: 'DEVELOPER',
+        From: 'AWS Virtual Meetups <noreply@example.com>',
+      },
+    });
+  });
+
+  test('sesEmailEnabled without domainName refuses to synth', () => {
+    const app = new App({ context: { sesEmailEnabled: 'true' } });
+    expect(() => new AuthStack(app, 'A', { env: ENV })).toThrow(/domainName/);
   });
 });

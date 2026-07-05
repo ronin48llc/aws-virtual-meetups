@@ -12,15 +12,7 @@ const { RemovalPolicy } = require('aws-cdk-lib');
 const iam = require('aws-cdk-lib/aws-iam');
 const route53 = require('aws-cdk-lib/aws-route53');
 const targets = require('aws-cdk-lib/aws-route53-targets');
-const { WafConstruct } = require('./waf-construct');
-
-/**
- * Name of the EventBridge Scheduler group all virtual-meetup schedules live
- * in. The group itself is created by EmailStack (see lib/email-stack.js); we
- * only reference its name here to build a resource ARN pattern for IAM
- * scoping. Must match `SCHEDULER_GROUP` in lambda/shared/scheduler-utils.js.
- */
-const SCHEDULER_GROUP_NAME = 'VirtualMeetup-Reminders';
+const { withEnv, schedulerGroupName } = require('./env-config');
 
 class ApiStack extends Stack {
   constructor(scope, id, props) {
@@ -39,7 +31,7 @@ class ApiStack extends Stack {
     // HTTP API (REST)
     // -------------------------------------------------------
     const httpApi = new HttpApi(this, 'VirtualMeetupHttpApi', {
-      apiName: 'VirtualMeetupHttpApi',
+      apiName: withEnv(this, 'VirtualMeetupHttpApi'),
       corsPreflight: {
         allowOrigins: [`https://${domainName}`, `https://www.${domainName}`],
         allowMethods: [
@@ -57,10 +49,10 @@ class ApiStack extends Stack {
     // Per-stage default throttle of 200 rps / 400 burst, well under the AWS
     // account default of 10,000 rps. Operator-only routes are tightened
     // further — they should only ever fire on the order of clicks-per-
-    // session, so a 5/10 cap catches a runaway client long before WAF
-    // (per-IP, 5-min eval) would. End-user routes (signup, join, GET) keep
-    // the 200/400 default since aggregate scales with audience size. Pairs
-    // with — does not replace — the WAF per-IP rules in waf-construct.js.
+    // session, so a 5/10 cap catches a runaway client early. End-user routes
+    // (signup, join, GET) keep the 200/400 default since aggregate scales
+    // with audience size. This throttling is the API's primary abuse guard —
+    // WAFv2 cannot attach to API Gateway v2 stages (see the WAF note below).
     configureHttpApiThrottling(httpApi);
 
     // Access logs for HTTP API $default stage. Lambda CloudWatch Logs cover
@@ -68,7 +60,7 @@ class ApiStack extends Stack {
     // these you can't drill into a specific request ("user got a 401 at
     // 14:23") after an incident. See issue #36.
     const httpApiAccessLogGroup = new logs.LogGroup(this, 'HttpApiAccessLogGroup', {
-      logGroupName: '/aws/apigateway/VirtualMeetupHttpApi/access',
+      logGroupName: `/aws/apigateway/${withEnv(this, 'VirtualMeetupHttpApi')}/access`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: RemovalPolicy.DESTROY,
     });
@@ -83,7 +75,7 @@ class ApiStack extends Stack {
 
     // Event CRUD Lambda
     const eventCrudFn = new lambda.Function(this, 'EventCrudFunction', {
-      functionName: 'VirtualMeetup-EventCrud',
+      functionName: withEnv(this, 'VirtualMeetup-EventCrud'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'event-crud/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -100,7 +92,7 @@ class ApiStack extends Stack {
 
     // Session Manager Lambda
     const sessionManagerFn = new lambda.Function(this, 'SessionManagerFunction', {
-      functionName: 'VirtualMeetup-SessionManager',
+      functionName: withEnv(this, 'VirtualMeetup-SessionManager'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'session-manager/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -123,7 +115,7 @@ class ApiStack extends Stack {
     // for cold start + transient downstream slowness without sitting on
     // a true hang. See #42.
     const tokenGeneratorFn = new lambda.Function(this, 'TokenGeneratorFunction', {
-      functionName: 'VirtualMeetup-TokenGenerator',
+      functionName: withEnv(this, 'VirtualMeetup-TokenGenerator'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'token-generator/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -139,7 +131,7 @@ class ApiStack extends Stack {
 
     // Anonymous Token Lambda
     const anonymousTokenFn = new lambda.Function(this, 'AnonymousTokenFunction', {
-      functionName: 'VirtualMeetup-AnonymousToken',
+      functionName: withEnv(this, 'VirtualMeetup-AnonymousToken'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'anonymous-token/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -159,7 +151,7 @@ class ApiStack extends Stack {
     // Workload: 1 DDB Put, 1 DDB Get, 1 fire-and-forget async Lambda invoke.
     // Observed p99 under 1s; 15s is comfortable margin. See #42.
     const signupFn = new lambda.Function(this, 'SignupFunction', {
-      functionName: 'VirtualMeetup-Signup',
+      functionName: withEnv(this, 'VirtualMeetup-Signup'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'signup/index.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -177,7 +169,7 @@ class ApiStack extends Stack {
     // Needs Cognito user-pool / client IDs so it can verify the ID token
     // presented in the $connect query string (issue #4).
     const wsConnectFn = new lambda.Function(this, 'WsConnectFunction', {
-      functionName: 'VirtualMeetup-WsConnect',
+      functionName: withEnv(this, 'VirtualMeetup-WsConnect'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'websocket/connect.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -195,7 +187,7 @@ class ApiStack extends Stack {
 
     // WebSocket Disconnect Lambda
     const wsDisconnectFn = new lambda.Function(this, 'WsDisconnectFunction', {
-      functionName: 'VirtualMeetup-WsDisconnect',
+      functionName: withEnv(this, 'VirtualMeetup-WsDisconnect'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'websocket/disconnect.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -214,7 +206,7 @@ class ApiStack extends Stack {
     // tokenExp check needs them (sourced via the connection record), but
     // any deeper validation (e.g., revocation lookup) will use them too.
     const wsSignalingFn = new lambda.Function(this, 'WsSignalingFunction', {
-      functionName: 'VirtualMeetup-WsSignaling',
+      functionName: withEnv(this, 'VirtualMeetup-WsSignaling'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'websocket/signaling.handler',
       code: lambda.Code.fromAsset(lambdaCodePath),
@@ -259,11 +251,18 @@ class ApiStack extends Stack {
 
     // -------------------------------------------------------
     // Scope scheduler:Create/DeleteSchedule actions to schedules inside the
-    // VirtualMeetup-Reminders group only. The group itself is created by
+    // per-env reminders group only. The group itself is created by
     // EmailStack; we just build the ARN pattern that scopes IAM here.
+    // The same name is passed to the Lambdas via SCHEDULER_GROUP_NAME so
+    // lambda/shared/scheduler-utils.js creates schedules in the right group.
     // -------------------------------------------------------
+    const schedulerGroup = schedulerGroupName(this);
     const scopedScheduleArn =
-      `arn:aws:scheduler:${this.region}:${this.account}:schedule/${SCHEDULER_GROUP_NAME}/*`;
+      `arn:aws:scheduler:${this.region}:${this.account}:schedule/${schedulerGroup}/*`;
+
+    // scheduler-utils.js reads this at runtime to target the per-env group.
+    eventCrudFn.addEnvironment('SCHEDULER_GROUP_NAME', schedulerGroup);
+    sessionManagerFn.addEnvironment('SCHEDULER_GROUP_NAME', schedulerGroup);
 
     eventCrudFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -327,7 +326,7 @@ class ApiStack extends Stack {
 
     // Session Manager needs its own ARN for auto-stop scheduler target
     // Use a constructed ARN to avoid circular dependency with HTTP API routes
-    const sessionManagerArn = `arn:aws:lambda:${this.region}:${this.account}:function:VirtualMeetup-SessionManager`;
+    const sessionManagerArn = `arn:aws:lambda:${this.region}:${this.account}:function:${withEnv(this, 'VirtualMeetup-SessionManager')}`;
     sessionManagerFn.addEnvironment('SESSION_MANAGER_ARN', sessionManagerArn);
     sessionManagerFn.addEnvironment('IVS_COMPOSITION_ROLE_ARN', props.ivsCompositionRoleArn || '');
     sessionManagerFn.addEnvironment('IVS_STORAGE_CONFIG_ARN', props.ivsStorageConfigArn || '');
@@ -400,6 +399,14 @@ class ApiStack extends Stack {
     const anonymousTokenIntegration = new HttpLambdaIntegration('AnonymousTokenIntegration', anonymousTokenFn);
 
     // Public routes (no auth)
+    // Health probe for smoke tests and synthetic monitoring. Checks the
+    // DynamoDB dependency inside event-crud, not just Lambda liveness.
+    httpApi.addRoutes({
+      path: '/health',
+      methods: [HttpMethod.GET],
+      integration: eventCrudIntegration,
+    });
+
     httpApi.addRoutes({
       path: '/events',
       methods: [HttpMethod.GET],
@@ -504,14 +511,31 @@ class ApiStack extends Stack {
       authorizer: cognitoAuthorizer,
     });
 
-    // Transcription Lambda (from TranscriptionStack, passed via props)
-    if (props.transcriptionFunction) {
-      const transcriptionIntegration = new HttpLambdaIntegration('TranscriptionIntegration', props.transcriptionFunction);
+    // Admin API (Lambda lives in AuthStack, passed via props). The Cognito
+    // authorizer proves identity; the handler itself enforces
+    // custom:role=organizer on every request (issue #93), so a valid but
+    // non-organizer JWT gets 403.
+    if (props.adminApiFunction) {
+      const adminApiIntegration = new HttpLambdaIntegration('AdminApiIntegration', props.adminApiFunction);
 
       httpApi.addRoutes({
-        path: '/events/{id}/transcription/start',
+        path: '/admin/users/disable',
         methods: [HttpMethod.POST],
-        integration: transcriptionIntegration,
+        integration: adminApiIntegration,
+        authorizer: cognitoAuthorizer,
+      });
+
+      httpApi.addRoutes({
+        path: '/admin/users/enable',
+        methods: [HttpMethod.POST],
+        integration: adminApiIntegration,
+        authorizer: cognitoAuthorizer,
+      });
+
+      httpApi.addRoutes({
+        path: '/admin/users/{username}/status',
+        methods: [HttpMethod.GET],
+        integration: adminApiIntegration,
         authorizer: cognitoAuthorizer,
       });
     }
@@ -520,7 +544,7 @@ class ApiStack extends Stack {
     // WebSocket API
     // -------------------------------------------------------
     const webSocketApi = new WebSocketApi(this, 'VirtualMeetupWebSocketApi', {
-      apiName: 'VirtualMeetupWebSocketApi',
+      apiName: withEnv(this, 'VirtualMeetupWebSocketApi'),
       connectRouteOptions: {
         integration: new WebSocketLambdaIntegration('WsConnectIntegration', wsConnectFn),
       },
@@ -540,7 +564,7 @@ class ApiStack extends Stack {
 
     // Access logs for the WebSocket prod stage (same rationale as HTTP).
     const wsApiAccessLogGroup = new logs.LogGroup(this, 'WebSocketApiAccessLogGroup', {
-      logGroupName: '/aws/apigateway/VirtualMeetupWebSocketApi/access',
+      logGroupName: `/aws/apigateway/${withEnv(this, 'VirtualMeetupWebSocketApi')}/access`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: RemovalPolicy.DESTROY,
     });
@@ -563,7 +587,6 @@ class ApiStack extends Stack {
       'grantSpeak',
       'revokeSpeak',
       'toggleChat',
-      'eventStateUpdate',
       'acknowledgeHand',
       'dismissHand',
       'getAttendeeList',
@@ -665,50 +688,50 @@ class ApiStack extends Stack {
     }
 
     // -------------------------------------------------------
-    // AWS WAF - Web Application Firewall
-    // Requirements: 23.1, 23.2, 23.3, 23.4
-    // -------------------------------------------------------
-    // -------------------------------------------------------
-    // AWS WAF - Web Application Firewall
-    // Requirements: 23.1, 23.2, 23.3, 23.4
-    // NOTE: WAFv2 REGIONAL does not support direct association with API Gateway
-    // v2 (HTTP API / WebSocket API) stages. The `/apis/` ARN format is rejected
-    // by WAF — only REST API (`/restapis/`) ARNs are supported for direct
-    // association. The WAF WebACL is created for future use (e.g., with an ALB
-    // or CloudFront), but the resourceArns list is intentionally empty here.
-    // See: https://stackoverflow.com/questions/63304201
-    const waf = new WafConstruct(this, 'ApiWaf', {
-      scope: 'REGIONAL',
-      resourceArns: [],
-    });
-
-    this.webAcl = waf.webAcl;
-
+    // No WAF on the HTTP/WebSocket APIs — deliberately.
+    //
+    // WAFv2 REGIONAL cannot associate with API Gateway v2 (HTTP API /
+    // WebSocket API) stages: WAF only accepts REST API (`/restapis/`) ARNs.
+    // A previous revision created a REGIONAL WebACL here with an empty
+    // resourceArns list "for future use" — it inspected nothing and billed
+    // ~$10/month, while the docs claimed the API was WAF-protected. Removed.
+    //
+    // What actually protects these APIs today:
+    //   - Stage throttling (configureHttpApiThrottling above): 200 rps
+    //     default, 5 rps on operator routes.
+    //   - Cognito authorizers on all mutating routes; per-fingerprint
+    //     DynamoDB rate limiting on the anonymous routes.
+    //   - The frontend (and its CloudFront distribution) sits behind a
+    //     CLOUDFRONT-scope WebACL with AWS managed rules (frontend-stack).
+    //
+    // If managed-rule inspection of the API itself becomes a requirement,
+    // front the HTTP API with CloudFront and attach a CLOUDFRONT WebACL
+    // there. See: https://stackoverflow.com/questions/63304201
     // -------------------------------------------------------
     // CloudFormation Outputs
     // -------------------------------------------------------
     new CfnOutput(this, 'HttpApiUrl', {
       value: httpApi.apiEndpoint,
       description: 'HTTP API endpoint URL',
-      exportName: 'VirtualMeetupHttpApiUrl',
+      exportName: withEnv(this, 'VirtualMeetupHttpApiUrl'),
     });
 
     new CfnOutput(this, 'WebSocketApiUrl', {
       value: wsEndpoint,
       description: 'WebSocket API endpoint URL',
-      exportName: 'VirtualMeetupWebSocketApiUrl',
+      exportName: withEnv(this, 'VirtualMeetupWebSocketApiUrl'),
     });
 
     new CfnOutput(this, 'HttpApiId', {
       value: httpApi.apiId,
       description: 'HTTP API ID',
-      exportName: 'VirtualMeetupHttpApiId',
+      exportName: withEnv(this, 'VirtualMeetupHttpApiId'),
     });
 
     new CfnOutput(this, 'WebSocketApiId', {
       value: webSocketApi.apiId,
       description: 'WebSocket API ID',
-      exportName: 'VirtualMeetupWebSocketApiId',
+      exportName: withEnv(this, 'VirtualMeetupWebSocketApiId'),
     });
 
     // Expose for cross-stack references
@@ -747,7 +770,8 @@ const HTTP_API_OPERATOR_ROUTES = [
   'POST /events/{id}/stop',
   'POST /events/{id}/go-live',
   'POST /events/{id}/extend',
-  'POST /events/{id}/transcription/start',
+  'POST /admin/users/disable',
+  'POST /admin/users/enable',
 ];
 
 function configureHttpApiThrottling(httpApi) {

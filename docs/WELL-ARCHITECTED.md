@@ -20,8 +20,7 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 
 ### Gaps
 
-- No runbook documentation for operational procedures
-- No automated rollback on smoke test failure (only commit comment notification)
+- No automated rollback on smoke test failure (manual procedure documented in [RUNBOOK.md](RUNBOOK.md) §2; failure pages the alarm SNS topic and comments on the commit)
 - No canary deployments or traffic shifting
 
 ---
@@ -32,7 +31,7 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 
 - **Cognito authentication** — Email-based sign-up with verification, SRP auth flow, advanced security in audit mode, compromised credential blocking
 - **API Gateway authorizers** — Cognito User Pool authorizer on all protected HTTP routes; WebSocket auth via token on `$connect`
-- **WAF protection** — Dual WebACLs (CLOUDFRONT + REGIONAL) with rate limiting, AWS Managed Rules (Common, SQLi, Known Bad Inputs), and 4KB body size restriction
+- **WAF protection (frontend)** — CLOUDFRONT WebACL on the frontend distribution with rate limiting, AWS Managed Rules (Common, SQLi, Known Bad Inputs), and 4KB body size restriction. The HTTP/WebSocket APIs cannot take a WAFv2 association (API Gateway v2 limitation) and are protected instead by stage throttling (200 rps default, 5 rps operator routes), Cognito authorizers, and per-fingerprint rate limiting on anonymous routes
 - **Input validation** — Shared validation module enforces field types, lengths, and formats on all Lambda handlers
 - **Ban system** — User-level bans stored in DynamoDB, enforced at connection time and token generation; admin API for Cognito account disable
 - **SES domain verification (DKIM)** — Domain identity with automatic DKIM DNS records prevents email spoofing
@@ -43,12 +42,12 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 - **No client secrets** — SPA uses SRP without client secret (appropriate for public clients)
 - **Least privilege IAM** — Lambda roles scoped to specific DynamoDB tables and actions
 
-### Gaps
+### Gaps and accepted risks
 
-- No CloudFront signed URLs for recording access control (recordings publicly accessible via CloudFront)
-- No WAF IP reputation list or geographic restrictions
-- No secrets rotation for GitHub token in Secrets Manager
-- WebSocket lacks per-message authentication (relies on connection-time auth only)
+- **Recordings are publicly accessible via CloudFront — accepted by design.** The publication flow deliberately publishes every recording to a public GitHub Pages site after the event, so signed URLs would only protect content the platform then publishes anyway. Revisit only if private/paid events are introduced.
+- **CSP `style-src` retains `'unsafe-inline'`** — the SPA uses inline `style` attributes heavily. `script-src` no longer allows `'unsafe-inline'`: all inline `onclick` handlers were refactored to delegated `data-action` listeners. Mitigations in place: strict `connect-src`/`frame-ancestors`, SRI on CDN scripts, no user-generated HTML rendered unescaped.
+- No WAF IP reputation list or geographic restrictions (frontend WebACL)
+- No automated rotation for the GitHub PAT in Secrets Manager (manual rotation procedure in [RUNBOOK.md](RUNBOOK.md) §5)
 
 ---
 
@@ -70,9 +69,7 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 ### Gaps
 
 - No multi-region disaster recovery
-- No DynamoDB point-in-time recovery enabled
 - No circuit breaker pattern for IVS API calls
-- No health check endpoint for synthetic monitoring
 - Single-region deployment (us-east-1 only)
 
 ---
@@ -119,8 +116,7 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 ### Gaps
 
 - No budget alerts or AWS Budgets configuration
-- No cost allocation tags on resources
-- Recording bucket versioning enabled (increases storage cost)
+- Recording bucket versioning enabled (increases storage cost; noncurrent versions expire after 30 days)
 - No S3 Intelligent-Tiering (uses manual lifecycle rules instead)
 
 ---
@@ -151,10 +147,9 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 
 | Recommendation | Pillar | Effort | Impact |
 |---------------|--------|--------|--------|
-| Add CloudFront signed URLs for recording access control | Security | Medium | Prevents unauthorized recording access |
-| Enable DynamoDB point-in-time recovery | Reliability | Low | Protects against accidental data deletion |
-| Add rate limiting on WebSocket actions | Security | Medium | Prevents abuse of signaling (spam hand raises, questions) |
 | Add Lambda reserved concurrency for critical paths | Performance | Low | Prevents cold starts on session start and token generation |
+
+Previously listed here and since implemented: inline onclick handler refactor (CSP script-src no longer allows 'unsafe-inline'), DynamoDB point-in-time recovery (both tables), per-connection WebSocket rate limiting (websocket/rate-limiter.js), per-message token-expiry checks, cost allocation tags, health check endpoint (GET /health), anonymous WebSocket session validation. CloudFront signed URLs were evaluated and rejected — recordings are published publicly by design (see Security).
 
 ### Medium Priority
 

@@ -12,7 +12,6 @@ const path = require('path');
 const { App } = require('aws-cdk-lib');
 const { Template } = require('aws-cdk-lib/assertions');
 const { EmailStack } = require('../../lib/email-stack');
-const { TranscriptionStack } = require('../../lib/transcription-stack');
 
 const EXPECTED_RETENTION_DAYS = 30;
 
@@ -32,15 +31,6 @@ describe('Lambda log retention (issue #30)', () => {
       });
     });
 
-    test('TranscriptionStack emits one Custom::LogRetention at 30 days', () => {
-      const app = new App();
-      const stack = new TranscriptionStack(app, 'TestTranscriptionStack');
-      const template = Template.fromStack(stack);
-      template.resourceCountIs('Custom::LogRetention', 1);
-      template.hasResourceProperties('Custom::LogRetention', {
-        RetentionInDays: EXPECTED_RETENTION_DAYS,
-      });
-    });
   });
 
   describe('source-level guard for harder-to-synth stacks', () => {

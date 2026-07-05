@@ -31,7 +31,7 @@ describe('PublicationStack — CLOUDFRONT_DOMAIN wiring (#107)', () => {
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'VirtualMeetup-Publisher',
+      FunctionName: 'VirtualMeetup-Publisher-dev',
       Environment: {
         Variables: Match.objectLike({
           CLOUDFRONT_DOMAIN: 'd1234abcdef.cloudfront.net',
@@ -51,7 +51,7 @@ describe('PublicationStack — CLOUDFRONT_DOMAIN wiring (#107)', () => {
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'VirtualMeetup-Publisher',
+      FunctionName: 'VirtualMeetup-Publisher-dev',
       Environment: {
         Variables: Match.objectLike({
           CLOUDFRONT_DOMAIN: '',

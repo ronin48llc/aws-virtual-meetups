@@ -8,6 +8,7 @@ const sqs = require('aws-cdk-lib/aws-sqs');
 const ses = require('aws-cdk-lib/aws-ses');
 const route53 = require('aws-cdk-lib/aws-route53');
 const scheduler = require('aws-cdk-lib/aws-scheduler');
+const { withEnv, schedulerGroupName } = require('./env-config');
 
 class EmailStack extends Stack {
   constructor(scope, id, props) {
@@ -56,7 +57,7 @@ class EmailStack extends Stack {
     // SQS Dead Letter Queue for failed async Lambda invocations
     // -------------------------------------------------------
     const emailDlq = new sqs.Queue(this, 'EmailDLQ', {
-      queueName: 'VirtualMeetup-EmailDLQ',
+      queueName: withEnv(this, 'VirtualMeetup-EmailDLQ'),
       retentionPeriod: Duration.days(14),
     });
 
@@ -64,7 +65,7 @@ class EmailStack extends Stack {
     // Email Sender Lambda Function
     // -------------------------------------------------------
     const emailSenderFn = new lambda.Function(this, 'EmailSenderFunction', {
-      functionName: 'VirtualMeetup-EmailSender',
+      functionName: withEnv(this, 'VirtualMeetup-EmailSender'),
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/email-sender')),
@@ -127,14 +128,14 @@ class EmailStack extends Stack {
     // EventBridge Scheduler Group
     // -------------------------------------------------------
     const schedulerGroup = new scheduler.CfnScheduleGroup(this, 'ReminderSchedulerGroup', {
-      name: 'VirtualMeetup-Reminders',
+      name: schedulerGroupName(this),
     });
 
     // -------------------------------------------------------
     // IAM Role for Scheduler to invoke the Email Lambda
     // -------------------------------------------------------
     const schedulerRole = new iam.Role(this, 'SchedulerRole', {
-      roleName: 'VirtualMeetup-SchedulerRole',
+      roleName: withEnv(this, 'VirtualMeetup-SchedulerRole'),
       assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
       description: 'Role for EventBridge Scheduler to invoke the Email Sender Lambda',
     });
@@ -151,13 +152,13 @@ class EmailStack extends Stack {
     new CfnOutput(this, 'EmailSenderFunctionArn', {
       value: emailSenderFn.functionArn,
       description: 'ARN of the Email Sender Lambda function',
-      exportName: 'EmailSenderFunctionArn',
+      exportName: withEnv(this, 'EmailSenderFunctionArn'),
     });
 
     new CfnOutput(this, 'SchedulerRoleArn', {
       value: schedulerRole.roleArn,
       description: 'ARN of the Scheduler execution role',
-      exportName: 'SchedulerRoleArn',
+      exportName: withEnv(this, 'SchedulerRoleArn'),
     });
 
     // Expose references for cross-stack use
