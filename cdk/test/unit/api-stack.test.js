@@ -34,19 +34,14 @@ describe('ApiStack — WAF association (#103)', () => {
     template = Template.fromStack(apiStack);
   });
 
-  // Issue #103 / fix 8c5fe3d: WAFv2 REGIONAL cannot be associated with API
-  // Gateway *v2* (HTTP / WebSocket) stages — the `/apis/.../stages/...` ARN is
-  // rejected ("The ARN isn't valid"); only REST API (`/restapis/`) ARNs are
-  // supported. So ApiStack intentionally passes resourceArns:[] and creates no
-  // WebACLAssociations. The WebACL itself is still defined (see the REGIONAL
-  // scope test below) so associations can be added if/when v2 support lands.
-  test('creates no WebACLAssociations (WAFv2 cannot attach to API GW v2 stages)', () => {
+  // WAFv2 REGIONAL cannot be associated with API Gateway *v2* (HTTP /
+  // WebSocket) stages — only REST API (`/restapis/`) ARNs are supported.
+  // The stack therefore creates NO WebACL at all: a previous revision kept
+  // an unattached REGIONAL WebACL "for future use", which inspected nothing
+  // and billed for the privilege. API protection comes from stage
+  // throttling + authorizers; the frontend keeps its CLOUDFRONT WebACL.
+  test('creates no WAF resources (WAFv2 cannot attach to API GW v2 stages)', () => {
     template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
-  });
-
-  test('WebACL is REGIONAL scope (matches API Gateway v2 stages)', () => {
-    template.hasResourceProperties('AWS::WAFv2::WebACL', {
-      Scope: 'REGIONAL',
-    });
+    template.resourceCountIs('AWS::WAFv2::WebACL', 0);
   });
 });

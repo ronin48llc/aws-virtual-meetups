@@ -460,6 +460,86 @@ describe('WebSocket Connect Handler', () => {
   });
 });
 
+describe('WebSocket Connect Handler — anonymous connections', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('accepts an anonymous connection whose sessionId matches an active session record', async () => {
+    // findAnonymousSession Query — active session issued by anonymous-token
+    mockSend.mockResolvedValueOnce({
+      Items: [{ sessionId: 'sess-abc-123', status: 'active', fingerprint: 'fp1234567890' }],
+    });
+    // PutCommand for the connection
+    mockSend.mockResolvedValueOnce({});
+    // ANON_JOINED broadcast Query
+    mockSend.mockResolvedValue({ Items: [] });
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        eventId: 'evt_abc123',
+        anonymous: 'true',
+        sessionId: 'sess-abc-123',
+      },
+    });
+
+    const result = await connectHandler(event);
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toBe('Connected (anonymous)');
+
+    const { PutCommand } = require('@aws-sdk/lib-dynamodb');
+    const putCall = PutCommand.mock.calls[0][0];
+    expect(putCall.Item.anonymous).toBe(true);
+    expect(putCall.Item.sessionId).toBe('sess-abc-123');
+  });
+
+  it('rejects an anonymous connection with a sessionId no anonymous-token Lambda ever issued', async () => {
+    // findAnonymousSession Query — nothing matches
+    mockSend.mockResolvedValueOnce({ Items: [] });
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        eventId: 'evt_abc123',
+        anonymous: 'true',
+        sessionId: 'forged-session-id',
+      },
+    });
+
+    const result = await connectHandler(event);
+    expect(result.statusCode).toBe(401);
+    expect(result.body).toMatch(/unknown anonymous session/);
+
+    const { PutCommand } = require('@aws-sdk/lib-dynamodb');
+    expect(PutCommand).not.toHaveBeenCalled();
+  });
+
+  it('pages through ANON# items before concluding a session is unknown', async () => {
+    // Page 1 — other sessions only, more pages remain
+    mockSend.mockResolvedValueOnce({
+      Items: [],
+      LastEvaluatedKey: { PK: 'EVENT#evt_abc123', SK: 'ANON#other#sess-1' },
+    });
+    // Page 2 — match found
+    mockSend.mockResolvedValueOnce({
+      Items: [{ sessionId: 'sess-page2', status: 'active' }],
+    });
+    // Put + broadcast
+    mockSend.mockResolvedValueOnce({});
+    mockSend.mockResolvedValue({ Items: [] });
+
+    const event = buildConnectEvent({
+      queryStringParameters: {
+        eventId: 'evt_abc123',
+        anonymous: 'true',
+        sessionId: 'sess-page2',
+      },
+    });
+
+    const result = await connectHandler(event);
+    expect(result.statusCode).toBe(200);
+  });
+});
+
 describe('WebSocket Disconnect Handler', () => {
   beforeEach(() => {
     jest.clearAllMocks();

@@ -22,6 +22,43 @@ const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
 const CONNECTION_TTL_SECONDS = 24 * 60 * 60;
 
 /**
+ * Look up the anonymous session record the anonymous-token Lambda wrote for
+ * this event. The SK is `ANON#{fingerprint}#{sessionId}` and the client only
+ * holds the sessionId, so this pages through the event's ANON# items (each
+ * TTL'd at 24h, so the partition stays small) filtering server-side.
+ *
+ * @param {string} eventId - Event identifier from the query string.
+ * @param {string} sessionId - Session identifier issued at join-anonymous.
+ * @returns {Object|null} The active session item, or null if none matches.
+ */
+async function findAnonymousSession(eventId, sessionId) {
+  let exclusiveStartKey;
+  do {
+    const params = {
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
+      FilterExpression: 'sessionId = :sessionId AND #status = :active',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':pk': `EVENT#${eventId}`,
+        ':skPrefix': 'ANON#',
+        ':sessionId': sessionId,
+        ':active': 'active',
+      },
+    };
+    if (exclusiveStartKey) {
+      params.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(params));
+    if (result.Items && result.Items.length > 0) {
+      return result.Items[0];
+    }
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return null;
+}
+
+/**
  * Handle WebSocket $connect route.
  * Authenticates the connection via query string token and stores connection metadata.
  *
@@ -45,9 +82,22 @@ async function handler(event) {
     return { statusCode: 401, body: 'Unauthorized: missing required parameters' };
   }
 
-  // Anonymous connections — store with limited metadata, no token verification
+  // Anonymous connections — no Cognito token, but the sessionId must match
+  // an active anonymous-session record written by the anonymous-token Lambda
+  // for THIS event. Without this check anyone could open WebSocket
+  // connections to any event with a made-up sessionId and receive every
+  // broadcast (attendee joins, questions, captions) without ever touching
+  // the rate-limited join-anonymous endpoint.
   if (isAnonymous && sessionId) {
     try {
+      const session = await findAnonymousSession(eventId, sessionId);
+      if (!session) {
+        console.error('Anonymous sessionId not found for event', {
+          connectionId, eventId, sessionId: sessionId.slice(0, 8),
+        });
+        return { statusCode: 401, body: 'Unauthorized: unknown anonymous session' };
+      }
+
       const now = new Date();
       const ttl = Math.floor(now.getTime() / 1000) + CONNECTION_TTL_SECONDS;
 

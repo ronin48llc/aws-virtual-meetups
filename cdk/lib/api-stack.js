@@ -12,7 +12,6 @@ const { RemovalPolicy } = require('aws-cdk-lib');
 const iam = require('aws-cdk-lib/aws-iam');
 const route53 = require('aws-cdk-lib/aws-route53');
 const targets = require('aws-cdk-lib/aws-route53-targets');
-const { WafConstruct } = require('./waf-construct');
 const { withEnv, schedulerGroupName } = require('./env-config');
 
 class ApiStack extends Stack {
@@ -50,10 +49,10 @@ class ApiStack extends Stack {
     // Per-stage default throttle of 200 rps / 400 burst, well under the AWS
     // account default of 10,000 rps. Operator-only routes are tightened
     // further — they should only ever fire on the order of clicks-per-
-    // session, so a 5/10 cap catches a runaway client long before WAF
-    // (per-IP, 5-min eval) would. End-user routes (signup, join, GET) keep
-    // the 200/400 default since aggregate scales with audience size. Pairs
-    // with — does not replace — the WAF per-IP rules in waf-construct.js.
+    // session, so a 5/10 cap catches a runaway client early. End-user routes
+    // (signup, join, GET) keep the 200/400 default since aggregate scales
+    // with audience size. This throttling is the API's primary abuse guard —
+    // WAFv2 cannot attach to API Gateway v2 stages (see the WAF note below).
     configureHttpApiThrottling(httpApi);
 
     // Access logs for HTTP API $default stage. Lambda CloudWatch Logs cover
@@ -665,25 +664,25 @@ class ApiStack extends Stack {
     }
 
     // -------------------------------------------------------
-    // AWS WAF - Web Application Firewall
-    // Requirements: 23.1, 23.2, 23.3, 23.4
-    // -------------------------------------------------------
-    // -------------------------------------------------------
-    // AWS WAF - Web Application Firewall
-    // Requirements: 23.1, 23.2, 23.3, 23.4
-    // NOTE: WAFv2 REGIONAL does not support direct association with API Gateway
-    // v2 (HTTP API / WebSocket API) stages. The `/apis/` ARN format is rejected
-    // by WAF — only REST API (`/restapis/`) ARNs are supported for direct
-    // association. The WAF WebACL is created for future use (e.g., with an ALB
-    // or CloudFront), but the resourceArns list is intentionally empty here.
-    // See: https://stackoverflow.com/questions/63304201
-    const waf = new WafConstruct(this, 'ApiWaf', {
-      scope: 'REGIONAL',
-      resourceArns: [],
-    });
-
-    this.webAcl = waf.webAcl;
-
+    // No WAF on the HTTP/WebSocket APIs — deliberately.
+    //
+    // WAFv2 REGIONAL cannot associate with API Gateway v2 (HTTP API /
+    // WebSocket API) stages: WAF only accepts REST API (`/restapis/`) ARNs.
+    // A previous revision created a REGIONAL WebACL here with an empty
+    // resourceArns list "for future use" — it inspected nothing and billed
+    // ~$10/month, while the docs claimed the API was WAF-protected. Removed.
+    //
+    // What actually protects these APIs today:
+    //   - Stage throttling (configureHttpApiThrottling above): 200 rps
+    //     default, 5 rps on operator routes.
+    //   - Cognito authorizers on all mutating routes; per-fingerprint
+    //     DynamoDB rate limiting on the anonymous routes.
+    //   - The frontend (and its CloudFront distribution) sits behind a
+    //     CLOUDFRONT-scope WebACL with AWS managed rules (frontend-stack).
+    //
+    // If managed-rule inspection of the API itself becomes a requirement,
+    // front the HTTP API with CloudFront and attach a CLOUDFRONT WebACL
+    // there. See: https://stackoverflow.com/questions/63304201
     // -------------------------------------------------------
     // CloudFormation Outputs
     // -------------------------------------------------------
