@@ -64,9 +64,9 @@ class FrontendStack extends Stack {
     // CSP scope notes:
     // - script-src whitelists the IVS Web Broadcast SDK
     //   (web-broadcast.live-video.net), hls.js + Cognito SDK
-    //   (cdn.jsdelivr.net). `'unsafe-inline'` is currently required because
-    //   index.html still has `onclick="..."` handlers — follow-up will
-    //   migrate those to addEventListener and drop unsafe-inline.
+    //   (cdn.jsdelivr.net). No `'unsafe-inline'`: the SPA uses
+    //   addEventListener / delegated data-action attributes instead of
+    //   inline `onclick="..."` handlers.
     // - connect-src wildcards over amazonaws.com (API Gateway HTTP +
     //   WebSocket, Transcribe Streaming) and live-video.net (IVS RTC +
     //   Chat). Tighten to exact endpoints once they're known at deploy time.
@@ -75,7 +75,7 @@ class FrontendStack extends Stack {
     // -------------------------------------------------------
     const cspDirectives = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://web-broadcast.live-video.net",
+      "script-src 'self' https://cdn.jsdelivr.net https://web-broadcast.live-video.net",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "media-src 'self' blob: https://*.amazonaws.com https://*.live-video.net https://*.cloudfront.net",

@@ -284,7 +284,7 @@ const Playback = (() => {
     html += '<button id="playback-screenshot-btn" ' +
       'class="btn btn--outline" ' +
       'style="display: inline-flex; align-items: center; gap: 6px;" ' +
-      'onclick="Playback.captureScreenshot()" ' +
+      'data-action="capture-screenshot" ' +
       'aria-label="Capture screenshot of current frame">' +
       '<span aria-hidden="true">📷</span> Screenshot' +
     '</button>';
@@ -746,7 +746,7 @@ const Playback = (() => {
         'data-start="' + cue.startTime + '" ' +
         'data-end="' + cue.endTime + '" ' +
         'style="display: flex; gap: 12px; padding: 8px 4px; border-radius: 4px; cursor: pointer; transition: background 0.15s;" ' +
-        'onclick="Playback.seekToTranscriptTime(' + cue.startTime + ')">' +
+        'data-action="seek-transcript">' +
         '<span class="transcript-timestamp" ' +
           'style="flex-shrink: 0; font-family: monospace; font-size: 13px; color: #3182ce; font-weight: 500; min-width: 60px;" ' +
           'aria-label="Seek to ' + timeStr + '">' +
@@ -985,13 +985,36 @@ const Playback = (() => {
   function _escapeHtml(str) {
     // Escapes all five HTML/attr-significant chars so the result is safe to
     // interpolate into both element text and attribute contexts (incl.
-    // single- or double-quoted onclick="...").
+    // single- or double-quoted data-* attributes).
     return String(str == null ? '' : str)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  // --- Delegated event handling ---
+  //
+  // Rendered HTML carries data-action attributes instead of inline on*
+  // handlers so the CloudFront CSP can serve script-src without
+  // 'unsafe-inline'. Action names must stay unique across all modules.
+  // Guarded: this module is also loaded in Node for unit tests.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', function(e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      var action = el.getAttribute('data-action');
+      if (action === 'capture-screenshot') {
+        e.preventDefault();
+        captureScreenshot();
+      } else if (action === 'seek-transcript') {
+        // Transcript cues carry their start time in the existing data-start
+        // attribute (also used by the active-cue highlighter).
+        e.preventDefault();
+        seekToTranscriptTime(parseFloat(el.getAttribute('data-start')));
+      }
+    });
   }
 
   // --- Public API ---

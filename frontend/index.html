@@ -20,8 +20,8 @@
         <li><a href="#/manage" class="nav__link" data-route="/manage">Manage Events</a></li>
       </ul>
       <div class="nav__auth" id="nav-auth">
-        <button class="btn btn--primary" onclick="App.showAuthModal('signin')">Sign In</button>
-        <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3); margin-left: 8px;" onclick="App.showAuthModal('signup')">Sign Up</button>
+        <button class="btn btn--primary" data-action="show-auth-modal" data-mode="signin">Sign In</button>
+        <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3); margin-left: 8px;" data-action="show-auth-modal" data-mode="signup">Sign Up</button>
       </div>
     </div>
   </nav>
