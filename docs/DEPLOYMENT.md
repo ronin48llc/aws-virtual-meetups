@@ -96,7 +96,7 @@ aws ivs create-storage-configuration \
   --s3 bucketName=<RECORDING_BUCKET_NAME>
 ```
 
-Note the ARN from the output — update `ivsStorageConfigArn` in `cdk/bin/app.js`.
+Note the ARN from the output — set it as the `IVS_STORAGE_CONFIG_ARN` GitHub environment variable (CI) or pass `-c ivsStorageConfigArn=<arn>` (manual deploys).
 
 ### IVS EncoderConfiguration
 
@@ -108,7 +108,7 @@ aws ivs create-encoder-configuration \
   --video bitrate=3500000,framerate=30,height=720,width=1280
 ```
 
-Note the ARN — update `ivsEncoderConfigArn` in `cdk/bin/app.js`.
+Note the ARN — set it as the `IVS_ENCODER_CONFIG_ARN` GitHub environment variable (CI) or pass `-c ivsEncoderConfigArn=<arn>` (manual deploys).
 
 ### GitHub Token for Publication
 
@@ -126,7 +126,9 @@ aws secretsmanager put-secret-value \
 
 ## Frontend Deployment
 
-The frontend is a static SPA. Deploy to S3 and invalidate CloudFront:
+**CI/CD (normal path):** the deploy workflow regenerates `frontend/js/config.js` from stack outputs, syncs `frontend/` to S3, and invalidates CloudFront on every merge — no manual steps. See [RUNBOOK.md](RUNBOOK.md) §1 for the required GitHub environment variables.
+
+**Manual (bootstrap / pipeline outage):**
 
 ```bash
 # Get bucket name from stack output
@@ -215,17 +217,27 @@ aws cognito-idp admin-set-user-password \
 
 The `.github/workflows/deploy.yml` workflow handles automated deployment:
 
-- **Trigger**: Push to `main` (prod) or `develop` (dev)
-- **Steps**: Test → CDK Synth → CDK Deploy → Smoke Tests
+- **Trigger**: Push to `main` (prod, gated by the `production` GitHub Environment) or `develop` (dev)
+- **Steps**: Test → CDK Synth → CDK Deploy → Frontend config + S3 sync + CloudFront invalidation → Smoke Tests
 - **Auth**: OIDC federation with `AWS_DEPLOY_ROLE_ARN` secret
 
-Required GitHub Secrets:
+Required GitHub Secrets (repo-level):
 | Secret | Description |
 |--------|-------------|
 | `AWS_DEPLOY_ROLE_ARN` | IAM role ARN for OIDC deployment |
 | `AWS_REGION` | Target region (default: `us-east-1`) |
 | `SMOKE_TEST_USERNAME` | Test user email for smoke tests |
 | `SMOKE_TEST_PASSWORD` | Test user password for smoke tests |
+
+Required GitHub Environment variables (on `production` / `development` environments — see [RUNBOOK.md](RUNBOOK.md) §1):
+| Variable | Description |
+|----------|-------------|
+| `DOMAIN_NAME` | Apex domain (e.g. `awsvirtualmeetups.com`) |
+| `HOSTED_ZONE_ID` | Route53 hosted zone ID |
+| `ALARM_EMAILS` | Comma-separated alarm subscribers (required for prod) |
+| `IVS_STORAGE_CONFIG_ARN` | IVS storage configuration ARN |
+| `IVS_ENCODER_CONFIG_ARN` | IVS encoder configuration ARN |
+| `SES_EMAIL_ENABLED` | `true` once SES production access is granted |
 
 ## Troubleshooting
 

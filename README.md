@@ -76,7 +76,7 @@ npx cdk deploy --all --require-approval never --profile YOUR_PROFILE
 
 ### 4. Update frontend config
 
-After deployment, get the Cognito outputs and update `frontend/index.html`:
+After a manual deployment, get the Cognito outputs and update `frontend/js/config.js`:
 
 ```javascript
 window.COGNITO_USER_POOL_ID = 'YOUR_USER_POOL_ID';  // from Auth stack output
@@ -84,6 +84,10 @@ window.COGNITO_CLIENT_ID = 'YOUR_CLIENT_ID';         // from Auth stack output
 window.API_BASE_URL = 'https://api.yourdomain.com';
 window.WS_BASE_URL = 'wss://ws.yourdomain.com';
 ```
+
+> The CI/CD pipeline does steps 4–5 automatically on every merge (config.js is
+> regenerated from stack outputs). The manual path below is for the initial
+> bootstrap or a pipeline outage. GitHub setup: [docs/RUNBOOK.md](docs/RUNBOOK.md) §1.
 
 ### 5. Sync frontend
 
@@ -137,7 +141,7 @@ export ADMIN_PASSWORD=YourSecurePassword1
 
 ```bash
 cd cdk
-npm test                    # Run all 805 tests
+npm test                    # Run the full unit + property-based suite
 npx jest --no-coverage      # Run without coverage report
 npx jest test/unit/         # Unit tests only
 npx jest test/property/     # Property-based tests only
@@ -150,6 +154,7 @@ npx jest test/property/     # Property-based tests only
 - [Features](docs/FEATURES.md) — Complete feature documentation
 - [Branding](docs/BRANDING.md) — Customization and rebranding guide
 - [Well-Architected](docs/WELL-ARCHITECTED.md) — AWS Well-Architected review
+- [Runbook](docs/RUNBOOK.md) — Operations: CI/CD setup, rollback, DLQ replay, SES access
 - [Workflow](docs/WORKFLOW.md) — Development workflow
 
 ## IVS Real-Time Setup

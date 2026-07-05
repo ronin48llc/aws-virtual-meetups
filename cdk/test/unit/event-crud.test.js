@@ -924,3 +924,44 @@ describe('Event CRUD Lambda handler', () => {
     });
   });
 });
+
+describe('GET /health', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns 200 with status ok when DynamoDB responds', async () => {
+    mockSend.mockResolvedValueOnce({}); // GetItem probe — key never exists
+
+    const event = buildEvent({ method: 'GET', resource: '/health' });
+    const result = await handler(event);
+
+    expect(result.statusCode).toBe(200);
+    const body = JSON.parse(result.body);
+    expect(body.status).toBe('ok');
+    expect(body.dependencies.dynamodb).toBe('ok');
+    expect(body.timestamp).toBeDefined();
+  });
+
+  it('returns 503 when the DynamoDB probe fails', async () => {
+    mockSend.mockRejectedValueOnce(new Error('connect timeout'));
+
+    const event = buildEvent({ method: 'GET', resource: '/health' });
+    const result = await handler(event);
+
+    expect(result.statusCode).toBe(503);
+    const body = JSON.parse(result.body);
+    expect(body.status).toBe('unhealthy');
+    expect(body.dependencies.dynamodb).toBe('error');
+  });
+
+  it('requires no authentication', async () => {
+    mockSend.mockResolvedValueOnce({});
+
+    // No claims on the event at all.
+    const event = buildEvent({ method: 'GET', resource: '/health' });
+    const result = await handler(event);
+
+    expect(result.statusCode).toBe(200);
+  });
+});

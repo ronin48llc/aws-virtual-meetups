@@ -129,6 +129,9 @@ jobs:
           [ -n "${{ vars.IVS_STORAGE_CONFIG_ARN }}" ] && CTX="$CTX -c ivsStorageConfigArn=${{ vars.IVS_STORAGE_CONFIG_ARN }}"
           [ -n "${{ vars.IVS_ENCODER_CONFIG_ARN }}" ] && CTX="$CTX -c ivsEncoderConfigArn=${{ vars.IVS_ENCODER_CONFIG_ARN }}"
           [ -n "${{ vars.ALARM_EMAILS }}" ] && CTX="$CTX -c alarmEmails=${{ vars.ALARM_EMAILS }}"
+          # Set SES_EMAIL_ENABLED=true once SES production access is granted
+          # (see docs/RUNBOOK.md) so Cognito sends via the SES domain identity.
+          [ -n "${{ vars.SES_EMAIL_ENABLED }}" ] && CTX="$CTX -c sesEmailEnabled=${{ vars.SES_EMAIL_ENABLED }}"
           echo "flags=$CTX" >> "$GITHUB_OUTPUT"
 
       - name: CDK synth

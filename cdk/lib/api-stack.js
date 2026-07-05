@@ -399,6 +399,14 @@ class ApiStack extends Stack {
     const anonymousTokenIntegration = new HttpLambdaIntegration('AnonymousTokenIntegration', anonymousTokenFn);
 
     // Public routes (no auth)
+    // Health probe for smoke tests and synthetic monitoring. Checks the
+    // DynamoDB dependency inside event-crud, not just Lambda liveness.
+    httpApi.addRoutes({
+      path: '/health',
+      methods: [HttpMethod.GET],
+      integration: eventCrudIntegration,
+    });
+
     httpApi.addRoutes({
       path: '/events',
       methods: [HttpMethod.GET],

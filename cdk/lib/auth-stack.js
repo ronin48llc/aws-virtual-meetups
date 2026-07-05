@@ -11,6 +11,19 @@ class AuthStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
+    // Cognito email delivery. The default Cognito email service caps at
+    // ~50 emails/day — fine for dev, unusable for production sign-up
+    // volume. Once SES production access is granted (request steps in
+    // docs/RUNBOOK.md), deploy with -c sesEmailEnabled=true and Cognito
+    // sends through the SES domain identity (created in EmailStack with
+    // DKIM) instead.
+    const sesEmailEnabledCtx = this.node.tryGetContext('sesEmailEnabled');
+    const sesEmailEnabled = sesEmailEnabledCtx === true || sesEmailEnabledCtx === 'true';
+    const domainName = this.node.tryGetContext('domainName');
+    if (sesEmailEnabled && !domainName) {
+      throw new Error('AuthStack: -c sesEmailEnabled=true requires -c domainName=<your-domain.com> for the SES from-address.');
+    }
+
     // Cognito User Pool with email sign-up, verification, and advanced security
     const userPool = new cognito.UserPool(this, 'VirtualMeetupUserPool', {
       userPoolName: withEnv(this, 'virtual-meetup-user-pool'),
@@ -51,13 +64,15 @@ class AuthStack extends Stack {
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       // RETAIN in prod — deleting the pool deletes every user account.
       removalPolicy: dataRemovalPolicy(this),
-      // NOTE: Using Cognito default email while SES is in sandbox mode.
-      // Once SES production access is granted, uncomment the SES config below:
-      // email: cognito.UserPoolEmail.withSES({
-      //   fromEmail: 'noreply@awsvirtualmeetups.com',
-      //   fromName: 'AWS Virtual Meetups',
-      //   sesRegion: 'us-east-1',
-      // }),
+      // Default Cognito email (sandbox-safe) unless sesEmailEnabled — see
+      // the context gate at the top of this constructor.
+      email: sesEmailEnabled
+        ? cognito.UserPoolEmail.withSES({
+          fromEmail: `noreply@${domainName}`,
+          fromName: 'AWS Virtual Meetups',
+          sesRegion: this.region,
+        })
+        : undefined,
       // Advanced Security Features — adaptive authentication and compromised credential detection
       // Requirements: 25.1, 25.3
       // Using AUDIT mode to log risks without blocking legitimate logins

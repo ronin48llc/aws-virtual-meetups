@@ -287,3 +287,34 @@ describe('AuthStack', () => {
     });
   });
 });
+
+describe('SES email configuration gate', () => {
+  const { App } = require('aws-cdk-lib');
+  const { Template } = require('aws-cdk-lib/assertions');
+  const { AuthStack } = require('../../lib/auth-stack');
+  const ENV = { account: '123456789012', region: 'us-east-1' };
+
+  test('default: Cognito email service (SES sandbox-safe)', () => {
+    const app = new App();
+    const template = Template.fromStack(new AuthStack(app, 'A', { env: ENV }));
+    const pools = template.findResources('AWS::Cognito::UserPool');
+    const emailConfig = Object.values(pools)[0].Properties.EmailConfiguration;
+    expect(emailConfig && emailConfig.EmailSendingAccount).not.toBe('DEVELOPER');
+  });
+
+  test('-c sesEmailEnabled=true switches to the SES identity', () => {
+    const app = new App({ context: { sesEmailEnabled: 'true', domainName: 'example.com' } });
+    const template = Template.fromStack(new AuthStack(app, 'A', { env: ENV }));
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      EmailConfiguration: {
+        EmailSendingAccount: 'DEVELOPER',
+        From: 'AWS Virtual Meetups <noreply@example.com>',
+      },
+    });
+  });
+
+  test('sesEmailEnabled without domainName refuses to synth', () => {
+    const app = new App({ context: { sesEmailEnabled: 'true' } });
+    expect(() => new AuthStack(app, 'A', { env: ENV })).toThrow(/domainName/);
+  });
+});
