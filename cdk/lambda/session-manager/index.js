@@ -423,8 +423,13 @@ async function stopEvent(event, eventId) {
         const compDetail = await ivsRealTimeClient.send(new GetCompositionCommand({ arn: compositionArn }));
         const destination = compDetail.composition?.destinations?.[0];
         const recordingPrefix = destination?.detail?.s3?.recordingPrefix;
+        const compositionState = compDetail.composition?.state;
 
-        if (recordingPrefix) {
+        if (compositionState === 'FAILED') {
+          // Nothing was recorded — do not advertise a playback URL that
+          // will never resolve.
+          console.warn('Composition FAILED — skipping playback URL', { eventId, compositionArn });
+        } else if (recordingPrefix) {
           const hlsPlaybackUrl = RECORDING_CLOUDFRONT_DOMAIN
             ? `https://${RECORDING_CLOUDFRONT_DOMAIN}/${recordingPrefix}/media/hls/master.m3u8`
             : `https://${RECORDING_BUCKET_NAME}.s3.amazonaws.com/${recordingPrefix}/media/hls/master.m3u8`;

@@ -41,10 +41,15 @@ function getAuthClaims(event) {
   if (!claims || !claims.sub) {
     return null;
   }
+  // displayName goes into stage/chat token attributes that EVERY
+  // participant (including anonymous viewers) can read. Use the standard
+  // `name` claim when present; otherwise the email local-part — never the
+  // full address.
+  const email = claims.email || '';
   return {
     userId: claims.sub,
-    email: claims.email || '',
-    displayName: claims.email || '',
+    email,
+    displayName: claims.name || email.split('@')[0] || '',
     emailVerified: claims.email_verified,
   };
 }
@@ -132,6 +137,7 @@ async function autoRegisterIfNeeded(eventId, claims) {
   const pk = buildEventPK(eventId);
   const sk = buildSignupSK(claims.userId);
 
+  const now = new Date().toISOString();
   try {
     await docClient.send(new PutCommand({
       TableName: TABLE_NAME,
@@ -141,14 +147,28 @@ async function autoRegisterIfNeeded(eventId, claims) {
         userId: claims.userId,
         displayName: claims.displayName,
         email: claims.email,
-        registeredAt: new Date().toISOString(),
+        registeredAt: now,
         source: 'auto-join',
+        // Walk-ins are by definition attending right now.
+        attendedAt: now,
       },
       ConditionExpression: 'attribute_not_exists(PK)',
     }));
   } catch (err) {
     if (err.name === 'ConditionalCheckFailedException') {
-      // Already registered — expected, no action needed
+      // Already registered (pre-event RSVP). Mark first attendance so the
+      // organizer's show-rate stats can tell RSVPs who showed from
+      // no-shows. if_not_exists keeps the FIRST join time on reconnects.
+      try {
+        await docClient.send(new UpdateCommand({
+          TableName: TABLE_NAME,
+          Key: { PK: pk, SK: sk },
+          UpdateExpression: 'SET attendedAt = if_not_exists(attendedAt, :now)',
+          ExpressionAttributeValues: { ':now': now },
+        }));
+      } catch (markErr) {
+        console.error('Failed to mark attendance', { eventId, userId: claims.userId, error: markErr.message });
+      }
       return;
     }
     // Log but don't block join flow

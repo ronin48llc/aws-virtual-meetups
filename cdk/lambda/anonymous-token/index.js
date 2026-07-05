@@ -10,6 +10,7 @@
 
 const { DynamoDBClient, GetItemCommand, UpdateItemCommand, PutItemCommand } = require('@aws-sdk/client-dynamodb');
 const { IVSRealTimeClient, CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
+const { S3Client, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const { randomUUID } = require('crypto');
 
 const { success, badRequest, notFound, serverError, buildResponse } = require('../shared/response');
@@ -25,6 +26,8 @@ const {
 
 const ddbClient = new DynamoDBClient({});
 const ivsClient = new IVSRealTimeClient({});
+const s3Client = new S3Client({});
+const RECORDING_BUCKET_NAME = process.env.RECORDING_BUCKET_NAME;
 
 const TABLE_NAME = process.env.TABLE_NAME;
 const STAGE_ARN = process.env.STAGE_ARN;
@@ -225,6 +228,21 @@ async function playbackAnonymous(event, eventId) {
   const playbackUrl = recordingResult.Item.hlsPlaybackUrl && recordingResult.Item.hlsPlaybackUrl.S;
   if (!playbackUrl) {
     return notFound('Recording not yet available');
+  }
+
+  // The URL is written optimistically at stop; verify the manifest object
+  // exists (IVS uploads lag, and empty-stage sessions record nothing).
+  if (RECORDING_BUCKET_NAME) {
+    try {
+      const key = decodeURIComponent(new URL(playbackUrl).pathname.replace(/^\//, ''));
+      await s3Client.send(new HeadObjectCommand({ Bucket: RECORDING_BUCKET_NAME, Key: key }));
+    } catch (err) {
+      if (err.name === 'NotFound' || err.name === 'NoSuchKey'
+          || (err.$metadata && err.$metadata.httpStatusCode === 404)) {
+        return notFound('Recording not yet available');
+      }
+      // Fail open on transient errors — a valid recording must not vanish.
+    }
   }
 
   // 4. Check rate limit counter

@@ -653,7 +653,10 @@ const App = (() => {
         '</div>';
         html += registrationSection;
       } else if (evt.displayMode === 'ended' || evt.status === 'ended') {
-        if (evt.recordingUrl || evt.hlsPlaybackUrl) {
+        if (evt.recordingStatus === 'processing') {
+          html += '<div class="mt-lg"><h3>Recording</h3>' +
+            '<p class="text-muted mt-sm">The recording is still processing. Check back in a few minutes.</p></div>';
+        } else if (evt.recordingUrl || evt.hlsPlaybackUrl) {
           var playbackUrl = evt.hlsPlaybackUrl || evt.recordingUrl;
           // Show recording player for everyone (authenticated or anonymous)
           html += '<div class="mt-lg"><h3>Recording</h3>'
@@ -862,7 +865,7 @@ const App = (() => {
           userId: Auth.getCurrentUser().sub || '',
           email: Auth.getCurrentUser().email || '',
           eventStatus: currentEventStatus,
-          wsUrl: wsUrl + '?token=' + encodeURIComponent(token) + '&eventId=' + encodeURIComponent(eventId) + '&userId=' + encodeURIComponent(Auth.getCurrentUser().sub || '') + '&role=' + encodeURIComponent(joinData.role || 'attendee') + '&displayName=' + encodeURIComponent(Auth.getCurrentUser().email || '') + '&email=' + encodeURIComponent(Auth.getCurrentUser().email || ''),
+          wsUrl: wsUrl + '?token=' + encodeURIComponent(token) + '&eventId=' + encodeURIComponent(eventId) + '&userId=' + encodeURIComponent(Auth.getCurrentUser().sub || '') + '&role=' + encodeURIComponent(joinData.role || 'attendee') + '&displayName=' + encodeURIComponent(Auth.getCurrentUser().displayName || (Auth.getCurrentUser().email || '').split('@')[0]) + '&email=' + encodeURIComponent(Auth.getCurrentUser().email || ''),
         });
       } else if (statusEl) {
         statusEl.innerHTML = '<p style="color: #7AA116;">✓ Connected to session as <strong>' + escapeHtml(joinData.role || 'attendee') + '</strong></p>' +
@@ -996,7 +999,7 @@ const App = (() => {
             userId: Auth.getCurrentUser().sub || '',
             email: Auth.getCurrentUser().email || '',
             eventStatus: 'live',
-            wsUrl: wsUrl + '?token=' + encodeURIComponent(token) + '&eventId=' + encodeURIComponent(eventId) + '&userId=' + encodeURIComponent(Auth.getCurrentUser().sub || '') + '&role=' + encodeURIComponent(joinData.role || 'attendee') + '&displayName=' + encodeURIComponent(Auth.getCurrentUser().email || '') + '&email=' + encodeURIComponent(Auth.getCurrentUser().email || ''),
+            wsUrl: wsUrl + '?token=' + encodeURIComponent(token) + '&eventId=' + encodeURIComponent(eventId) + '&userId=' + encodeURIComponent(Auth.getCurrentUser().sub || '') + '&role=' + encodeURIComponent(joinData.role || 'attendee') + '&displayName=' + encodeURIComponent(Auth.getCurrentUser().displayName || (Auth.getCurrentUser().email || '').split('@')[0]) + '&email=' + encodeURIComponent(Auth.getCurrentUser().email || ''),
           });
         }
       } catch (err) {

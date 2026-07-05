@@ -255,8 +255,16 @@ const ManageEvents = (() => {
     container.innerHTML = '<p style="color: #8b949e;">Loading sign-ups...</p>';
 
     try {
-      var response = await _apiRequest('GET', '/events/' + id + '/signups');
-      var signups = response.signups || response || [];
+      // Page through the whole list — stats need every record, and the
+      // endpoint caps pages (its count is per-page by design, see #56).
+      var signups = [];
+      var cursor = null;
+      do {
+        var path = '/events/' + id + '/signups' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '');
+        var response = await _apiRequest('GET', path);
+        signups = signups.concat(response.signups || []);
+        cursor = response.nextCursor || null;
+      } while (cursor);
       _renderSignupList(container, signups, id);
     } catch (err) {
       container.innerHTML = '<p style="color: #e63946;">' + _escapeHtml(window.I18n.t('errors.event.signupsLoadFailed', { detail: err.message || window.I18n.t('errors.unknown') })) + '</p>';
@@ -496,15 +504,45 @@ const ManageEvents = (() => {
       return;
     }
 
+    // Registration funnel: pre-event RSVPs vs walk-ins (source:auto-join),
+    // and among RSVPs, who actually attended (attendedAt is stamped at
+    // first join by the token generator).
+    var rsvps = 0, walkIns = 0, rsvpsAttended = 0, attendedTotal = 0;
+    for (var j = 0; j < signups.length; j++) {
+      if (signups[j].source === 'auto-join') {
+        walkIns++;
+      } else {
+        rsvps++;
+        if (signups[j].attendedAt) rsvpsAttended++;
+      }
+      if (signups[j].attendedAt) attendedTotal++;
+    }
+    var showRate = rsvps > 0 ? Math.round((rsvpsAttended / rsvps) * 100) : null;
+
+    function statCell(value, label) {
+      return '<div style="text-align: center; padding: 8px 16px;">' +
+        '<div style="font-size: 22px; font-weight: 600; color: #24292f;">' + value + '</div>' +
+        '<div style="font-size: 12px; color: #57606a;">' + label + '</div>' +
+      '</div>';
+    }
+
     var html = '<div style="display: flex; justify-content: space-between; align-items: center;">' +
       '<h3>Sign-ups (' + signups.length + ')</h3>' +
       '<button class="btn btn--sm btn--outline" data-action="close-signups">Close</button>' +
+    '</div>' +
+    '<div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding: 8px; background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 8px;">' +
+      statCell(rsvps, 'Pre-registered') +
+      statCell(walkIns, 'Walk-ins') +
+      statCell(attendedTotal, 'Attended') +
+      statCell(showRate === null ? '—' : showRate + '%', 'RSVP show rate') +
     '</div>' +
     '<table style="width: 100%; margin-top: 12px; border-collapse: collapse;">' +
       '<thead><tr style="border-bottom: 1px solid #dee2e6;">' +
         '<th style="text-align: left; padding: 8px;">Email</th>' +
         '<th style="text-align: left; padding: 8px;">Name</th>' +
         '<th style="text-align: left; padding: 8px;">Signed Up</th>' +
+        '<th style="text-align: left; padding: 8px;">Type</th>' +
+        '<th style="text-align: left; padding: 8px;">Attended</th>' +
       '</tr></thead><tbody>';
 
     for (var i = 0; i < signups.length; i++) {
@@ -512,7 +550,9 @@ const ManageEvents = (() => {
       html += '<tr style="border-bottom: 1px solid #f0f0f0;">' +
         '<td style="padding: 8px;">' + _escapeHtml(s.email || '') + '</td>' +
         '<td style="padding: 8px;">' + _escapeHtml(s.displayName || s.name || '-') + '</td>' +
-        '<td style="padding: 8px;">' + (s.signedUpAt ? new Date(s.signedUpAt).toLocaleString() : '-') + '</td>' +
+        '<td style="padding: 8px;">' + (s.registeredAt ? new Date(s.registeredAt).toLocaleString() : '-') + '</td>' +
+        '<td style="padding: 8px;">' + (s.source === 'auto-join' ? 'Walk-in' : 'RSVP') + '</td>' +
+        '<td style="padding: 8px;">' + (s.attendedAt ? '✓ ' + new Date(s.attendedAt).toLocaleTimeString() : '—') + '</td>' +
       '</tr>';
     }
 

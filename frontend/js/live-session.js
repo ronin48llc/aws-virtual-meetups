@@ -122,6 +122,9 @@ const LiveSession = (() => {
           requestDashboardState();
         }
       }, 2000);
+      // Registration context for hover cards (RSVP vs walk-in, when they
+      // registered). Owner-only endpoint, so presenters only.
+      loadSignupInfo();
     }
 
     if (participantToken) {
@@ -1720,7 +1723,9 @@ const LiveSession = (() => {
         html += '<div style="padding: 8px 0; border-bottom: 1px solid #21262d;">'
           + '<div style="display: flex; align-items: center; justify-content: space-between;">'
           + '<div>'
-          + '<span style="color: #e6edf3; font-size: 13px; font-weight: 500;">👤 ' + escapeHtml(anon.displayLabel) + '</span>'
+          + '<span style="color: #e6edf3; font-size: 13px; font-weight: 500;"'
+          + (anon.joinedAt ? ' title="Joined ' + escapeHtml(new Date(anon.joinedAt).toLocaleTimeString()) + '"' : '')
+          + '>👤 ' + escapeHtml(anon.displayLabel) + '</span>'
           + '</div>'
           + '<span style="background: #21262d; color: #8b949e; padding: 2px 6px; border-radius: 3px; font-size: 10px;">viewer</span>'
           + '</div>'
@@ -2547,16 +2552,58 @@ const LiveSession = (() => {
    * @param {HTMLElement} targetEl - The hovered element (name-text fallback)
    * @returns {Object} Profile data { displayName, role }
    */
+  // userId → { registeredAt, source, attendedAt } for presenter hover
+  // cards. Loaded once per session from the owner-only signups endpoint.
+  var signupInfoByUserId = {};
+
+  async function loadSignupInfo() {
+    try {
+      var apiBase = window.API_BASE_URL || '/api';
+      var token = Auth.getIdToken();
+      var cursor = null;
+      do {
+        var path = apiBase + '/events/' + encodeURIComponent(eventId) + '/signups'
+          + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '');
+        var res = await fetch(path, {
+          headers: { 'Authorization': 'Bearer ' + token },
+        });
+        if (!res.ok) return;
+        var data = await res.json();
+        (data.signups || []).forEach(function(su) {
+          signupInfoByUserId[su.userId] = {
+            registeredAt: su.registeredAt,
+            source: su.source,
+            attendedAt: su.attendedAt,
+          };
+        });
+        cursor = data.nextCursor || null;
+      } while (cursor);
+    } catch (e) {
+      // Hover cards degrade to name + role — non-blocking.
+    }
+  }
+
   function buildLocalProfile(userId, targetEl) {
+    var profile = null;
     for (var i = 0; i < dashboardAttendees.length; i++) {
       if (dashboardAttendees[i].userId === userId) {
-        return {
+        profile = {
           displayName: dashboardAttendees[i].displayName || 'Unknown',
           role: dashboardAttendees[i].role || '',
         };
+        break;
       }
     }
-    return { displayName: getFallbackDisplayName(userId, targetEl) };
+    if (!profile) {
+      profile = { displayName: getFallbackDisplayName(userId, targetEl) };
+    }
+    // Presenter-only registration context (empty map for attendees).
+    var signup = signupInfoByUserId[userId];
+    if (signup) {
+      profile.registrationType = signup.source === 'auto-join' ? 'Walk-in' : 'Pre-registered';
+      profile.registeredAt = signup.registeredAt;
+    }
+    return profile;
   }
 
   /**
@@ -2621,6 +2668,13 @@ const LiveSession = (() => {
       }
       if (profile.memberSince) {
         html += '<div style="margin-top: 2px; font-size: 12px; color: #8b949e;">Member since: <span style="color: #e6edf3;">' + escapeHtml(profile.memberSince) + '</span></div>';
+      }
+      if (profile.registrationType) {
+        var regDetail = profile.registrationType;
+        if (profile.registeredAt) {
+          try { regDetail += ' · ' + new Date(profile.registeredAt).toLocaleString(); } catch (e) {}
+        }
+        html += '<div style="margin-top: 2px; font-size: 12px; color: #8b949e;">Registration: <span style="color: #e6edf3;">' + escapeHtml(regDetail) + '</span></div>';
       }
       if (profile.bio) {
         html += '<div style="margin-top: 6px; font-size: 12px; color: #8b949e; line-height: 1.4;">' + escapeHtml(profile.bio) + '</div>';

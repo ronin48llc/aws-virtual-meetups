@@ -260,6 +260,10 @@ async function listSignups(event, eventId) {
     displayName: item.displayName,
     email: item.email,
     registeredAt: item.registeredAt,
+    // 'auto-join' marks walk-ins; absent = pre-event RSVP.
+    source: item.source,
+    // Set at first join (token-generator) — powers show-rate stats.
+    attendedAt: item.attendedAt,
   }));
 
   const response = { eventId, signups, count: signups.length };
