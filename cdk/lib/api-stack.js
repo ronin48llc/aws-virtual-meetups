@@ -298,6 +298,11 @@ class ApiStack extends Stack {
         'ivs:ListStages',
         'ivs:StartComposition',
         'ivs:StopComposition',
+        // The ivs-realtime SDK's GetComposition authorizes as
+        // ivs:GetComposition (observed live: AccessDenied at stop, which
+        // left hlsPlaybackUrl unset for every recording). Keep the
+        // ivsrealtime:* variants too for API-namespace drift safety.
+        'ivs:GetComposition',
         'ivsrealtime:StartComposition',
         'ivsrealtime:StopComposition',
         'ivsrealtime:GetComposition',

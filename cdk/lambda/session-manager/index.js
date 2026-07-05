@@ -12,6 +12,7 @@ const { DynamoDBDocumentClient, GetCommand, UpdateCommand, QueryCommand } = requ
 const { IVSRealTimeClient, CreateStageCommand, DeleteStageCommand, StartCompositionCommand, StopCompositionCommand, GetCompositionCommand } = require('@aws-sdk/client-ivs-realtime');
 const { IvschatClient, CreateRoomCommand } = require('@aws-sdk/client-ivschat');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 
 const { EVENT_STATUS, SK } = require('../shared/constants');
 const { buildEventPK } = require('../shared/dynamo-utils');
@@ -23,6 +24,7 @@ const { storeEngagementSummary } = require('../shared/engagement-metrics');
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
 const ivsRealTimeClient = new IVSRealTimeClient({});
+const s3Client = new S3Client({});
 const ivsChatClient = new IvschatClient({});
 const lambdaClient = new LambdaClient({});
 
@@ -433,6 +435,35 @@ async function stopEvent(event, eventId) {
             ExpressionAttributeValues: { ':url': hlsPlaybackUrl },
           }));
           console.info('HLS playback URL set', { eventId, hlsPlaybackUrl });
+
+          // Write recordings/{eventId}/metadata.json — this is the object
+          // the PublicationStack EventBridge rule triggers on (suffix
+          // metadata.json). Nothing wrote it before, so the publisher never
+          // fired for any recording. Includes the REAL hlsPlaybackUrl: IVS
+          // stores media under its own generated prefix, not under
+          // recordings/{eventId}/, so the publisher must not guess the URL.
+          try {
+            await s3Client.send(new PutObjectCommand({
+              Bucket: RECORDING_BUCKET_NAME,
+              Key: `recordings/${eventId}/metadata.json`,
+              ContentType: 'application/json',
+              Body: JSON.stringify({
+                eventId,
+                title: existing.Item.title || '',
+                description: existing.Item.description || '',
+                scheduledStart: existing.Item.scheduledStart || '',
+                duration: existing.Item.durationMinutes || existing.Item.duration || 0,
+                hlsPlaybackUrl,
+                recordingPrefix,
+                endedAt: new Date().toISOString(),
+              }),
+            }));
+            console.info('Recording metadata written', { eventId });
+          } catch (metaErr) {
+            // Non-blocking: playback still works via hlsPlaybackUrl; only
+            // the GitHub Pages publication misses out.
+            console.error('Failed to write recording metadata', { eventId, error: metaErr.message });
+          }
         } else {
           console.warn('No recording prefix found in composition detail', { eventId, compositionArn });
         }

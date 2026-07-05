@@ -487,6 +487,41 @@ describe('Publisher Lambda - handler integration', () => {
     await expect(handler(event)).rejects.toThrow('Access Denied');
   });
 
+  it('uses metadata.hlsPlaybackUrl for the Jekyll post when present', async () => {
+    const metadata = {
+      title: 'Real URL Event',
+      scheduledStart: '2024-03-15T18:00:00Z',
+      hlsPlaybackUrl: 'https://recordings.example.com/ivs/v1/real-prefix/media/hls/master.m3u8',
+    };
+    mockS3Responses(metadata, '00:00:01.000 --> 00:00:02.000 | hi');
+    mockSecretsManager('ghp_test_token_123');
+
+    const captured = [];
+    global.fetch.mockImplementation((url, opts) => {
+      if (url.includes('/git/blobs')) {
+        captured.push(JSON.parse(opts.body));
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob_' + captured.length }) });
+      }
+      if (url.includes('/git/ref/heads/main')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'abc' } }) });
+      if (url.includes('/git/commits/abc')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ tree: { sha: 't' } }) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'x', object: { sha: 'x' } }) });
+    });
+
+    const event = {
+      detail: {
+        bucket: { name: 'test-recordings-bucket' },
+        object: { key: 'recordings/evt_real/metadata.json' },
+      },
+    };
+
+    const result = await handler(event);
+    expect(result.statusCode).toBe(200);
+
+    const postBlob = captured.find((b) => Buffer.from(b.content, 'base64').toString().includes('hls_url'));
+    const postContent = Buffer.from(postBlob.content, 'base64').toString();
+    expect(postContent).toContain('hls_url: "https://recordings.example.com/ivs/v1/real-prefix/media/hls/master.m3u8"');
+  });
+
   it('skips events without valid S3 details', async () => {
     const event = { detail: {} };
     const result = await handler(event);
