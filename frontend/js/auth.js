@@ -67,8 +67,14 @@ const Auth = (() => {
       ];
 
       if (displayName) {
-        // Store displayName in the email attribute's nickname or just skip
-        // custom:displayName is not in the User Pool schema
+        // Cognito's STANDARD `name` attribute exists on every user pool —
+        // no schema change needed. It lands in the ID token as the `name`
+        // claim, which is what every display surface uses instead of the
+        // email address (emails must never be shown to other attendees).
+        attributes.push(new AmazonCognitoIdentity.CognitoUserAttribute({
+          Name: 'name',
+          Value: displayName,
+        }));
       }
 
       userPool.signUp(email, password, attributes, null, (err, result) => {
@@ -249,9 +255,13 @@ const Auth = (() => {
 
     const payload = _decodeToken(idToken);
 
+    // displayName: the standard `name` claim when set, else the email
+    // local-part. NEVER the full email — displayName is broadcast to every
+    // participant (including anonymous viewers) via chat and WS events.
+    const emailValue = email || payload.email || '';
     currentUser = {
-      email: email || payload.email || '',
-      displayName: payload['custom:displayName'] || payload.email || email,
+      email: emailValue,
+      displayName: payload.name || payload['custom:displayName'] || emailValue.split('@')[0],
       sub: payload.sub,
       idToken,
       accessToken,

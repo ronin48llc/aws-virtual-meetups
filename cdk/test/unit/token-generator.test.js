@@ -484,7 +484,10 @@ describe('Token Generator Lambda handler', () => {
       const { CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
       expect(CreateParticipantTokenCommand).toHaveBeenCalledWith(expect.objectContaining({
         attributes: expect.objectContaining({
-          displayName: 'test@example.com',
+          // Privacy: token attributes are readable by EVERY participant
+          // (incl. anonymous viewers) — displayName must be the name claim
+          // or the email local-part, never the full address.
+          displayName: 'test',
           role: 'attendee',
         }),
       }));
@@ -492,7 +495,10 @@ describe('Token Generator Lambda handler', () => {
       const { CreateChatTokenCommand } = require('@aws-sdk/client-ivschat');
       expect(CreateChatTokenCommand).toHaveBeenCalledWith(expect.objectContaining({
         attributes: expect.objectContaining({
-          displayName: 'test@example.com',
+          // Privacy: token attributes are readable by EVERY participant
+          // (incl. anonymous viewers) — displayName must be the name claim
+          // or the email local-part, never the full address.
+          displayName: 'test',
           role: 'attendee',
         }),
       }));

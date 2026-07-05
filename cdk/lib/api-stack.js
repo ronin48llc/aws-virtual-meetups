@@ -92,6 +92,10 @@ class ApiStack extends Stack {
         TABLE_NAME: mainTable.tableName,
         EMAIL_LAMBDA_ARN: emailSenderFunction ? emailSenderFunction.functionArn : '',
         SCHEDULER_ROLE_ARN: schedulerRole ? schedulerRole.roleArn : '',
+        // Lets getEvent verify a recording manifest exists before exposing
+        // its playback URL (IVS uploads lag stops; empty sessions record
+        // nothing at all).
+        RECORDING_BUCKET_NAME: props.recordingBucketName || '',
       },
     });
 
@@ -149,6 +153,7 @@ class ApiStack extends Stack {
       logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         TABLE_NAME: mainTable.tableName,
+        RECORDING_BUCKET_NAME: props.recordingBucketName || '',
       },
     });
 
@@ -312,6 +317,18 @@ class ApiStack extends Stack {
       ],
       resources: ['*'],
     }));
+
+    // event-crud + anonymous-token verify recording manifests exist before
+    // returning playback URLs (HeadObject authorizes as s3:GetObject).
+    if (props.recordingBucketName) {
+      const recordingReadPolicy = new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject'],
+        resources: [`arn:aws:s3:::${props.recordingBucketName}/*`],
+      });
+      eventCrudFn.addToRolePolicy(recordingReadPolicy);
+      anonymousTokenFn.addToRolePolicy(recordingReadPolicy);
+    }
 
     // Session Manager needs S3 access for composition recording
     if (props.recordingBucketName) {

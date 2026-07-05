@@ -16,6 +16,13 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
 }));
 
+// Mock S3 client for the recording existence check
+const mockS3Send = jest.fn();
+jest.mock('@aws-sdk/client-s3', () => ({
+  S3Client: jest.fn(() => ({ send: mockS3Send })),
+  HeadObjectCommand: jest.fn((params) => ({ type: 'HeadObject', params })),
+}));
+
 // Mock Lambda client for email invocation
 const mockLambdaSend = jest.fn().mockResolvedValue({});
 jest.mock('@aws-sdk/client-lambda', () => ({
@@ -33,6 +40,7 @@ jest.mock('../../lambda/shared/scheduler-utils', () => ({
 
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
+process.env.RECORDING_BUCKET_NAME = 'test-recording-bucket';
 process.env.EMAIL_LAMBDA_ARN = 'arn:aws:lambda:us-east-1:123456789012:function:VirtualMeetup-EmailSender';
 process.env.SCHEDULER_ROLE_ARN = 'arn:aws:iam::123456789012:role/VirtualMeetup-SchedulerRole';
 
@@ -963,5 +971,67 @@ describe('GET /health', () => {
     const result = await handler(event);
 
     expect(result.statusCode).toBe(200);
+  });
+});
+
+describe('GET /events/{id} — recording existence gate', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const endedEvent = {
+    PK: 'EVENT#evt_rec',
+    SK: 'METADATA',
+    eventId: 'evt_rec',
+    title: 'Recorded',
+    status: 'ended',
+    ownerUserId: 'owner-1',
+    hlsPlaybackUrl: 'https://recordings.example.com/ivs/v1/prefix/media/hls/master.m3u8',
+  };
+
+  it('returns recordingUrl when the manifest object exists', async () => {
+    mockSend.mockResolvedValueOnce({ Item: endedEvent }); // event Get
+    mockS3Send.mockResolvedValueOnce({});                 // HeadObject OK
+    mockSend.mockResolvedValueOnce({ Item: null });       // metrics Get
+
+    const event = buildEvent({ method: 'GET', resource: '/events/{id}', pathParameters: { id: 'evt_rec' } });
+    const result = await handler(event);
+    const body = JSON.parse(result.body);
+
+    expect(result.statusCode).toBe(200);
+    expect(body.recordingUrl).toBe(endedEvent.hlsPlaybackUrl);
+    expect(body.recordingStatus).toBeUndefined();
+
+    const { HeadObjectCommand } = require('@aws-sdk/client-s3');
+    const headCall = mockS3Send.mock.calls.map((c) => c[0]).find((cmd) => cmd && cmd.type === 'HeadObject');
+    expect(headCall.params.Key).toBe('ivs/v1/prefix/media/hls/master.m3u8');
+  });
+
+  it('returns recordingStatus processing (no URL) when the manifest is missing', async () => {
+    mockSend.mockResolvedValueOnce({ Item: endedEvent }); // event Get
+    const notFound = new Error('not found');
+    notFound.name = 'NotFound';
+    mockS3Send.mockRejectedValueOnce(notFound);           // HeadObject 404
+    mockSend.mockResolvedValueOnce({ Item: null });       // metrics Get
+
+    const event = buildEvent({ method: 'GET', resource: '/events/{id}', pathParameters: { id: 'evt_rec' } });
+    const result = await handler(event);
+    const body = JSON.parse(result.body);
+
+    expect(result.statusCode).toBe(200);
+    expect(body.recordingUrl).toBeUndefined();
+    expect(body.recordingStatus).toBe('processing');
+  });
+
+  it('fails open (keeps the URL) on transient S3 errors', async () => {
+    mockSend.mockResolvedValueOnce({ Item: endedEvent }); // event Get
+    mockS3Send.mockRejectedValueOnce(new Error('Throttled')); // transient
+    mockSend.mockResolvedValueOnce({ Item: null });       // metrics Get
+
+    const event = buildEvent({ method: 'GET', resource: '/events/{id}', pathParameters: { id: 'evt_rec' } });
+    const result = await handler(event);
+    const body = JSON.parse(result.body);
+
+    expect(body.recordingUrl).toBe(endedEvent.hlsPlaybackUrl);
   });
 });

@@ -157,6 +157,10 @@ async function handler(event) {
   }
   const userId = claims.sub;
   const email = claims.email || '';
+  // displayName is broadcast to every participant. When the client sends
+  // none, fall back to the verified email's local-part — never the full
+  // address.
+  const safeDisplayName = displayName || email.split('@')[0] || 'Attendee';
   const tokenExp = typeof claims.exp === 'number' ? claims.exp : null;
 
   // Validate the claimed role is one of the known values. The query string is
@@ -267,7 +271,7 @@ async function handler(event) {
         eventId,
         userId,
         role: verifiedRole,
-        displayName,
+        displayName: safeDisplayName,
         email,
         connectedAt: now.toISOString(),
         ttl,
@@ -289,7 +293,7 @@ async function handler(event) {
         type: 'ATTENDEE_JOINED',
         eventId,
         // Issue #85: do not include `email` in the broadcast payload.
-        data: { userId, displayName, role: verifiedRole, connectionId },
+        data: { userId, displayName: safeDisplayName, role: verifiedRole, connectionId },
       }, { excludeConnectionId: connectionId });
     } catch (broadcastError) {
       console.error('Failed to broadcast ATTENDEE_JOINED', { connectionId, eventId, error: broadcastError.message });

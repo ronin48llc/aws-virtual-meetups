@@ -16,6 +16,7 @@ const {
   QueryCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+const { S3Client, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 
 const { EVENT_STATUS, GSI, SK, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } = require('../shared/constants');
@@ -29,7 +30,9 @@ const { getMetrics } = require('../shared/engagement-metrics');
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 const lambdaClient = new LambdaClient({});
+const s3Client = new S3Client({});
 const TABLE_NAME = process.env.TABLE_NAME;
+const RECORDING_BUCKET_NAME = process.env.RECORDING_BUCKET_NAME;
 const EMAIL_LAMBDA_ARN = process.env.EMAIL_LAMBDA_ARN;
 const SCHEDULER_ROLE_ARN = process.env.SCHEDULER_ROLE_ARN;
 
@@ -404,6 +407,35 @@ function getCountdown(scheduledStart) {
  * Public access - no authentication required.
  * Includes displayMode and countdown for landing page state logic.
  */
+/**
+ * HEAD the recording manifest behind an hlsPlaybackUrl. The URL's path is
+ * the S3 key (the recordings CloudFront distribution maps 1:1 onto the
+ * bucket). Fails open on unexpected errors so a transient S3 hiccup can't
+ * hide a valid recording; only a definitive 404/NotFound hides the URL.
+ * @param {string} hlsPlaybackUrl
+ * @returns {Promise<boolean>}
+ */
+async function recordingObjectExists(hlsPlaybackUrl) {
+  if (!RECORDING_BUCKET_NAME) return true; // env not wired — legacy behavior
+  let key;
+  try {
+    key = decodeURIComponent(new URL(hlsPlaybackUrl).pathname.replace(/^\//, ''));
+  } catch (e) {
+    return true;
+  }
+  try {
+    await s3Client.send(new HeadObjectCommand({ Bucket: RECORDING_BUCKET_NAME, Key: key }));
+    return true;
+  } catch (err) {
+    if (err.name === 'NotFound' || err.name === 'NoSuchKey'
+        || (err.$metadata && err.$metadata.httpStatusCode === 404)) {
+      return false;
+    }
+    console.error('Recording existence check failed, failing open:', err.message);
+    return true;
+  }
+}
+
 async function getEvent(eventId) {
   const result = await docClient.send(new GetCommand({
     TableName: TABLE_NAME,
@@ -451,9 +483,20 @@ async function getEvent(eventId) {
     response.countdown = getCountdown(item.scheduledStart);
   }
 
-  // Include recording URL when event has ended and recording is available
+  // Include recording URL when event has ended and recording is available.
+  // The URL is written optimistically at stop from IVS's reported prefix,
+  // but IVS uploads nothing for sessions where no media was published (and
+  // uploads lag a stop by up to a few minutes) — verify the manifest object
+  // actually exists before pointing a player at it. Missing object →
+  // recordingStatus 'processing' so the UI shows a friendly state instead
+  // of a broken player / raw NoSuchKey XML.
   if ((item.status === EVENT_STATUS.ENDED || item.status === EVENT_STATUS.PUBLISHED) && item.hlsPlaybackUrl) {
-    response.recordingUrl = item.hlsPlaybackUrl;
+    const exists = await recordingObjectExists(item.hlsPlaybackUrl);
+    if (exists) {
+      response.recordingUrl = item.hlsPlaybackUrl;
+    } else {
+      response.recordingStatus = 'processing';
+    }
   }
 
   // Include engagement metrics for ended/published events

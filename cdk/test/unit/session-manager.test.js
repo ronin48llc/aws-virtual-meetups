@@ -443,6 +443,48 @@ describe('Session Manager Lambda handler', () => {
       expect(metadataBody.hlsPlaybackUrl).toContain('ivs/v1/abc/media/hls/master.m3u8');
     });
 
+    it('skips the playback URL and metadata when the composition FAILED', async () => {
+      mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });
+      // StopComposition
+      mockIvsRealTimeSend.mockResolvedValueOnce({});
+      // GetComposition — FAILED composition recorded nothing
+      mockIvsRealTimeSend.mockResolvedValueOnce({
+        composition: {
+          state: 'FAILED',
+          destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }],
+        },
+      });
+      // UpdateCommand: update event status (NO hlsPlaybackUrl update first)
+      mockDdbSend.mockResolvedValueOnce({});
+      // QueryCommand: connections broadcast
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
+      // DeleteStage
+      mockIvsRealTimeSend.mockResolvedValueOnce({});
+      // Engagement metrics
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({});
+
+      const event = buildEvent({
+        method: 'POST',
+        resource: '/events/{id}/stop',
+        pathParameters: { id: 'evt_abc' },
+        claims: validClaims,
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+
+      // No metadata.json written, no hlsPlaybackUrl set.
+      const putObject = mockS3Send.mock.calls.map((c) => c[0]).find((cmd) => cmd && cmd.type === 'PutObject');
+      expect(putObject).toBeUndefined();
+      const hlsUpdate = mockDdbSend.mock.calls.map((c) => c[0]).find(
+        (cmd) => cmd && cmd.type === 'Update' && cmd.params.UpdateExpression
+          && cmd.params.UpdateExpression.includes('hlsPlaybackUrl')
+      );
+      expect(hlsUpdate).toBeUndefined();
+    });
+
     it('still ends the event when the metadata write fails (non-blocking)', async () => {
       mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });
       mockIvsRealTimeSend.mockResolvedValueOnce({});
