@@ -53,7 +53,12 @@ class ApiStack extends Stack {
     // (signup, join, GET) keep the 200/400 default since aggregate scales
     // with audience size. This throttling is the API's primary abuse guard —
     // WAFv2 cannot attach to API Gateway v2 stages (see the WAF note below).
-    configureHttpApiThrottling(httpApi);
+    //
+    // NOTE: called AFTER all addRoutes() below (see the call site) — the
+    // stage's per-route RouteSettings are validated against existing routes,
+    // so on a fresh stack create the stage must depend on every route or
+    // CloudFormation fails with "Unable to find Route by key ..." (observed
+    // 2026-07-05 recreating VirtualMeetup-dev-Api).
 
     // Access logs for HTTP API $default stage. Lambda CloudWatch Logs cover
     // handler execution but not routing/authz/throttle decisions; without
@@ -540,6 +545,11 @@ class ApiStack extends Stack {
       });
     }
 
+    // Must run after every addRoutes() above: it wires the stage's
+    // RouteSettings AND makes the stage depend on all routes so a fresh
+    // create doesn't validate throttle keys against not-yet-created routes.
+    configureHttpApiThrottling(httpApi);
+
     // -------------------------------------------------------
     // WebSocket API
     // -------------------------------------------------------
@@ -788,6 +798,18 @@ function configureHttpApiThrottling(httpApi) {
   cfnStage.addPropertyOverride('DefaultRouteSettings', HTTP_API_DEFAULT_THROTTLE);
   for (const routeKey of HTTP_API_OPERATOR_ROUTES) {
     cfnStage.addPropertyOverride(`RouteSettings.${routeKey}`, HTTP_API_OPERATOR_THROTTLE);
+  }
+  // API Gateway validates per-route RouteSettings keys against EXISTING
+  // routes when the stage is created/updated. Routes and stage otherwise
+  // have no dependency edge, so a fresh stack create can order the stage
+  // first and fail with "Unable to find Route by key POST /events/{id}/...".
+  // Depend on every route of this API (call this function after all
+  // addRoutes()). HttpRoute constructs live under the HttpApi scope.
+  for (const child of httpApi.node.findAll()) {
+    if (child.node && child.node.defaultChild &&
+        child.node.defaultChild.cfnResourceType === 'AWS::ApiGatewayV2::Route') {
+      cfnStage.node.addDependency(child);
+    }
   }
 }
 

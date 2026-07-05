@@ -118,7 +118,10 @@ describe('Event Management Property Tests', () => {
         ),
         { numRuns: 100 }
       );
-    });
+      // 100 async property runs sit right at jest's 5s default when the
+      // full suite runs in parallel; passes in ~1s in isolation. Explicit
+      // timeout stops the load-dependent flake.
+    }, 15000);
 
     it('should produce distinct event IDs across multiple creations', async () => {
       await fc.assert(
