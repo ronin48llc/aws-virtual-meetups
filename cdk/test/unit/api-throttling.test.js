@@ -76,3 +76,39 @@ describe('HTTP API throttling (issue #28)', () => {
     ]));
   });
 });
+
+describe('stage/route creation ordering (fresh-create fix)', () => {
+  // API Gateway validates per-route RouteSettings keys against existing
+  // routes at stage create time. Without DependsOn edges, a fresh stack
+  // create can order the stage before the routes and fail with
+  // "Unable to find Route by key ..." (observed 2026-07-05 recreating
+  // VirtualMeetup-dev-Api).
+  test('the default stage depends on every route of the API', () => {
+    const { HttpLambdaIntegration } = require('aws-cdk-lib/aws-apigatewayv2-integrations');
+    const { HttpMethod } = require('aws-cdk-lib/aws-apigatewayv2');
+    const lambda = require('aws-cdk-lib/aws-lambda');
+
+    const app = new App();
+    const stack = new Stack(app, 'OrderingStack');
+    const httpApi = new HttpApi(stack, 'TestApi', { apiName: 'TestApi' });
+    const fn = new lambda.Function(stack, 'Fn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline('exports.handler = async () => ({});'),
+    });
+    httpApi.addRoutes({
+      path: '/events/{id}/go-live',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('I', fn),
+    });
+    configureHttpApiThrottling(httpApi);
+
+    const template = Template.fromStack(stack);
+    const stage = Object.values(template.findResources('AWS::ApiGatewayV2::Stage'))[0];
+    const routeIds = Object.keys(template.findResources('AWS::ApiGatewayV2::Route'));
+    expect(routeIds.length).toBeGreaterThan(0);
+    for (const routeId of routeIds) {
+      expect(stage.DependsOn).toContain(routeId);
+    }
+  });
+});
