@@ -326,6 +326,7 @@ const LiveSession = (() => {
                 <button class="btn btn--control" data-action="extend-duration" data-minutes="15" aria-label="Extend event by 15 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+15m</button>
                 <button class="btn btn--control" data-action="extend-duration" data-minutes="30" aria-label="Extend event by 30 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+30m</button>
                 <button class="btn btn--control" data-action="extend-duration" data-minutes="60" aria-label="Extend event by 60 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+60m</button>
+                <button id="btn-end-session" class="btn btn--control" data-action="end-session" aria-label="End the session for everyone" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #da3633; background: #da3633; color: #fff; cursor: pointer; margin-left: auto;">⏹ End Session</button>
               </div>
             </div>
 
@@ -533,6 +534,48 @@ const LiveSession = (() => {
       }
     } catch (err) {
       showNotification('Failed to extend event: ' + (err.message || 'Unknown error'));
+    }
+  }
+
+  /**
+   * End the session for everyone (presenter only). The backend stops the
+   * composition, tears down the stage, and broadcasts EVENT_ENDED — the
+   * existing handler renders the ended state (with recording link when
+   * available) for every participant including this presenter.
+   */
+  async function endSession() {
+    if (!eventId) return;
+    if (!confirm('End this session for everyone? Attendees will be disconnected and the recording will be finalized.')) return;
+
+    var btn = document.getElementById('btn-end-session');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Ending…';
+    }
+
+    try {
+      var apiBase = window.API_BASE_URL || '/api';
+      var token = Auth.getIdToken();
+
+      var res = await fetch(apiBase + '/events/' + encodeURIComponent(eventId) + '/stop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token,
+        },
+      });
+
+      if (!res.ok) {
+        var errData = await res.json().catch(function() { return {}; });
+        throw new Error(errData.message || 'Failed to end session (' + res.status + ')');
+      }
+      // Success — the EVENT_ENDED broadcast drives the UI from here.
+    } catch (err) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '⏹ End Session';
+      }
+      showNotification('Failed to end session: ' + (err.message || 'Unknown error'));
     }
   }
 
@@ -2674,6 +2717,7 @@ const LiveSession = (() => {
     'switch-chat-tab': function(el) { switchChatTab(el.dataset.tab); },
     'go-live': function() { goLive(); },
     'extend-duration': function(el) { extendDuration(parseInt(el.dataset.minutes, 10)); },
+    'end-session': function() { endSession(); },
     'unban-user': function(el) { unbanUser(el.dataset.userId); },
     'promote-user': function(el) { promoteUser(el.dataset.connectionId, el.dataset.userId); },
     'demote-user': function(el) { demoteUser(el.dataset.connectionId, el.dataset.userId); },
@@ -2841,6 +2885,7 @@ const LiveSession = (() => {
     unbanUser: unbanUser,
     goLive: goLive,
     extendDuration: extendDuration,
+    endSession: endSession,
     showUserProfilePopover: showUserProfilePopover,
     dismissProfilePopover: dismissProfilePopover,
     disconnect: disconnect

@@ -869,6 +869,12 @@ const App = (() => {
           '<p class="mt-sm" style="color: #8b949e;">IVS Web Broadcast SDK not loaded. Video streaming requires the SDK to be included.</p>';
       }
     } catch (err) {
+      // "Event is not currently live" means the meeting simply hasn't
+      // started (or already ended) — that's a waiting room, not an error.
+      if (/not currently live/i.test(err.message || '')) {
+        var handled = await showNotStartedOrEnded(eventId, statusEl);
+        if (handled) return;
+      }
       if (statusEl) {
         statusEl.innerHTML = '<p style="color: #e63946;">Failed to join session: ' + escapeHtml(err.message) + '</p>' +
           '<button class="btn btn--outline mt-md" data-action="navigate" data-path="/events/' + escapeHtml(eventId) + '">Back to Event</button>';
@@ -877,15 +883,66 @@ const App = (() => {
   }
 
   /**
-   * Show a waiting screen for attendees when event is in staging.
-   * Auto-polls every 5 seconds until the event goes live.
+   * A join was rejected because the event isn't live. Look up its actual
+   * status: scheduled → waiting room with auto-join; ended → ended notice.
+   * @returns {boolean} true when a friendly state was rendered.
    */
-  function showWaitingScreen(eventId, statusEl) {
+  async function showNotStartedOrEnded(eventId, statusEl) {
+    try {
+      var apiBase = window.API_BASE_URL || '/api';
+      var res = await fetch(apiBase + '/events/' + encodeURIComponent(eventId));
+      if (!res.ok) return false;
+      var evt = await res.json();
+
+      if (evt.status === 'scheduled' || evt.status === 'staging') {
+        showWaitingScreen(eventId, statusEl, {
+          notStarted: evt.status === 'scheduled',
+          scheduledStart: evt.scheduledStart,
+        });
+        return true;
+      }
+      if (evt.status === 'ended' || evt.status === 'published' || evt.status === 'cancelled') {
+        var container = statusEl || document.getElementById('live-session-status') || document.getElementById('stage-placeholder');
+        if (container) {
+          container.innerHTML = '<div style="text-align: center; padding: 60px 20px;">' +
+            '<h2 style="color: #e6edf3; margin-bottom: 12px;">This meeting has ended</h2>' +
+            '<p style="color: #8b949e; font-size: 16px;">If a recording is available, you can watch it from the event page.</p>' +
+            '<button class="btn btn--primary mt-lg" data-action="navigate" data-path="/events/' + escapeHtml(eventId) + '">Back to Event</button>' +
+          '</div>';
+        }
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * Show a waiting screen for attendees before the session is joinable
+   * (event still scheduled, or presenter in the green room).
+   * Auto-polls every 5 seconds and joins the moment tokens are issued.
+   * @param {Object} [opts] - { notStarted, scheduledStart }
+   */
+  function showWaitingScreen(eventId, statusEl, opts) {
+    opts = opts || {};
     var container = statusEl || document.getElementById('live-session-status') || document.getElementById('stage-placeholder');
     if (container) {
+      var heading = opts.notStarted ? 'This meeting hasn\'t started yet' : 'Starting soon...';
+      var detail = opts.notStarted
+        ? 'You\'ll join automatically as soon as the presenter starts the session.'
+        : 'The presenter is setting up. The session will begin shortly.';
+      var scheduleLine = '';
+      if (opts.notStarted && opts.scheduledStart) {
+        try {
+          scheduleLine = '<p style="color: #e6edf3; font-size: 15px; margin-top: 8px;">Scheduled for ' +
+            escapeHtml(new Date(opts.scheduledStart).toLocaleString()) + '</p>';
+        } catch (e) { /* unparseable date — omit */ }
+      }
       container.innerHTML = '<div style="text-align: center; padding: 60px 20px;">' +
-        '<h2 style="color: #e6edf3; margin-bottom: 12px;">Starting soon...</h2>' +
-        '<p style="color: #8b949e; font-size: 16px;">The presenter is setting up. The session will begin shortly.</p>' +
+        '<h2 style="color: #e6edf3; margin-bottom: 12px;">' + heading + '</h2>' +
+        '<p style="color: #8b949e; font-size: 16px;">' + detail + '</p>' +
+        scheduleLine +
         '<div style="margin-top: 24px;"><span class="badge badge--upcoming" style="font-size: 14px; padding: 6px 16px;">Waiting for presenter</span></div>' +
       '</div>';
     }
@@ -893,6 +950,12 @@ const App = (() => {
     // Auto-poll every 5 seconds
     var pollInterval = setInterval(async function() {
       try {
+        // Stop polling once the user navigates away and the waiting screen
+        // is no longer in the document.
+        if (container && !document.body.contains(container)) {
+          clearInterval(pollInterval);
+          return;
+        }
         var apiBase = window.API_BASE_URL || '/api';
         var token = Auth.getIdToken();
         if (!token) {
