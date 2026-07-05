@@ -26,7 +26,23 @@ class ObservabilityStack extends Stack {
 
     const { httpApi, webSocketApi, mainTable, connectionsTable, publicationDlq, emailDlq } = props;
     const envName = this.node.tryGetContext('env') || 'dev';
-    const alarmEmails = this.node.tryGetContext('alarmEmails') || [];
+
+    // Alarm subscribers. Accepts an array (cdk.context.json) or a comma-
+    // separated string (-c alarmEmails=a@x.com,b@y.com from CI). Prod
+    // refuses to deploy without at least one subscriber — an alarm topic
+    // nobody is subscribed to is indistinguishable from no alarms at all.
+    const rawAlarmEmails = this.node.tryGetContext('alarmEmails') || [];
+    const alarmEmails = (Array.isArray(rawAlarmEmails)
+      ? rawAlarmEmails
+      : String(rawAlarmEmails).split(','))
+      .map((email) => email.trim())
+      .filter(Boolean);
+    if (envName === 'prod' && alarmEmails.length === 0) {
+      throw new Error(
+        'ObservabilityStack: -c alarmEmails=<email[,email...]> is required for prod '
+        + 'so CloudWatch alarms actually notify someone.'
+      );
+    }
 
     // Lambda function names — used below to build dashboard widgets and
     // Logs Insights query definitions. Log RETENTION on these groups is
@@ -55,11 +71,9 @@ class ObservabilityStack extends Stack {
     });
 
     // Add email subscribers from CDK context
-    if (Array.isArray(alarmEmails)) {
-      alarmEmails.forEach((email) => {
-        alarmTopic.addSubscription(new snsSubscriptions.EmailSubscription(email));
-      });
-    }
+    alarmEmails.forEach((email) => {
+      alarmTopic.addSubscription(new snsSubscriptions.EmailSubscription(email));
+    });
 
     // -------------------------------------------------------
     // CloudWatch Alarms

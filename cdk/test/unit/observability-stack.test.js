@@ -128,3 +128,45 @@ describe('ObservabilityStack — alarm dimension scoping (#109)', () => {
     });
   });
 });
+
+describe('alarm email subscribers', () => {
+  function synth(context) {
+    const { App, Stack } = require('aws-cdk-lib');
+    const dynamodb = require('aws-cdk-lib/aws-dynamodb');
+    const app = new App({ context });
+    const parent = new Stack(app, 'Parent', {
+      env: { account: '123456789012', region: 'us-east-1' },
+    });
+    const mainTable = new dynamodb.Table(parent, 'Main', {
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+    });
+    const connectionsTable = new dynamodb.Table(parent, 'Conn', {
+      partitionKey: { name: 'connectionId', type: dynamodb.AttributeType.STRING },
+    });
+    return Template.fromStack(new ObservabilityStack(app, 'Obs', {
+      env: { account: '123456789012', region: 'us-east-1' },
+      mainTable,
+      connectionsTable,
+    }));
+  }
+
+  test('comma-separated -c alarmEmails string subscribes each address', () => {
+    const template = synth({ alarmEmails: 'a@example.com, b@example.com' });
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'a@example.com',
+    });
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: 'b@example.com',
+    });
+  });
+
+  test('prod without alarmEmails refuses to synth', () => {
+    expect(() => synth({ env: 'prod' })).toThrow(/alarmEmails/);
+  });
+
+  test('prod with alarmEmails synths', () => {
+    expect(() => synth({ env: 'prod', alarmEmails: 'ops@example.com' })).not.toThrow();
+  });
+});
