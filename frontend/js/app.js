@@ -158,12 +158,12 @@ const App = (() => {
       const user = Auth.getCurrentUser();
       authContainer.innerHTML = `
         <a href="#/profile" class="nav__link" style="cursor: pointer; font-size: 13px;">${escapeHtml(user.displayName || user.email)}</a>
-        <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3);" onclick="App.handleSignOut()">Sign Out</button>
+        <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3);" data-action="sign-out">Sign Out</button>
       `;
     } else {
       authContainer.innerHTML = `
-        <button class="btn btn--primary" onclick="App.showAuthModal('signin')">Sign In</button>
-        <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3); margin-left: 8px;" onclick="App.showAuthModal('signup')">Sign Up</button>
+        <button class="btn btn--primary" data-action="show-auth-modal" data-mode="signin">Sign In</button>
+        <button class="btn btn--outline" style="color: white; border-color: rgba(255,255,255,0.3); margin-left: 8px;" data-action="show-auth-modal" data-mode="signup">Sign Up</button>
       `;
     }
   }
@@ -202,7 +202,7 @@ const App = (() => {
       modal.innerHTML = `
         <h2 class="modal__title">Create Account</h2>
         <div class="modal__error" id="auth-error"></div>
-        <form id="auth-form" onsubmit="App.handleSignUp(event)">
+        <form id="auth-form" data-action="signup">
           <div class="form-group">
             <label for="auth-name">Display Name</label>
             <input type="text" id="auth-name" class="form-input" placeholder="Your name" required>
@@ -222,17 +222,17 @@ const App = (() => {
           <button type="submit" class="btn btn--primary" style="width: 100%;">Sign Up</button>
         </form>
         <div class="modal__toggle">
-          Already have an account? <a onclick="App.showAuthModal('signin')">Sign In</a>
+          Already have an account? <a data-action="show-auth-modal" data-mode="signin">Sign In</a>
         </div>
         <div class="mt-md text-center">
-          <button class="btn btn--sm" onclick="App.hideAuthModal()">Cancel</button>
+          <button class="btn btn--sm" data-action="hide-auth-modal">Cancel</button>
         </div>
       `;
     } else {
       modal.innerHTML = `
         <h2 class="modal__title">Sign In</h2>
         <div class="modal__error" id="auth-error"></div>
-        <form id="auth-form" onsubmit="App.handleSignIn(event)">
+        <form id="auth-form" data-action="signin">
           <div class="form-group">
             <label for="auth-email">Email</label>
             <input type="email" id="auth-email" class="form-input" placeholder="you@example.com" required>
@@ -244,13 +244,13 @@ const App = (() => {
           <button type="submit" class="btn btn--primary" style="width: 100%;">Sign In</button>
         </form>
         <div class="modal__toggle" style="margin-top: 8px;">
-          <a onclick="App.showForgotPassword()" style="cursor: pointer;">Forgot Password?</a>
+          <a data-action="show-forgot-password" style="cursor: pointer;">Forgot Password?</a>
         </div>
         <div class="modal__toggle">
-          Don't have an account? <a onclick="App.showAuthModal('signup')">Sign Up</a>
+          Don't have an account? <a data-action="show-auth-modal" data-mode="signup">Sign Up</a>
         </div>
         <div class="mt-md text-center">
-          <button class="btn btn--sm" onclick="App.hideAuthModal()">Cancel</button>
+          <button class="btn btn--sm" data-action="hide-auth-modal">Cancel</button>
         </div>
       `;
     }
@@ -306,7 +306,7 @@ const App = (() => {
           <h2 class="modal__title">Verify Email</h2>
           <p class="text-center mb-md">We sent a verification code to <strong>${escapeHtml(email)}</strong>. Enter it below to complete sign-up.</p>
           <div class="modal__error" id="auth-error"></div>
-          <form onsubmit="App.handleConfirm(event, '${escapeHtml(email)}')">
+          <form data-action="confirm-signup" data-email="${escapeHtml(email)}">
             <div class="form-group">
               <label for="auth-code">Verification Code</label>
               <input type="text" id="auth-code" class="form-input" placeholder="123456" required>
@@ -314,7 +314,7 @@ const App = (() => {
             <button type="submit" class="btn btn--primary" style="width: 100%;">Verify</button>
           </form>
           <div class="mt-md text-center">
-            <button class="btn btn--sm" onclick="App.hideAuthModal()">Cancel</button>
+            <button class="btn btn--sm" data-action="hide-auth-modal">Cancel</button>
           </div>
         `;
       }
@@ -383,7 +383,7 @@ const App = (() => {
             ${createBtn}
           </section>
           <section class="mt-lg">
-            <input type="text" id="event-search" placeholder="Search events..." oninput="App.filterEvents()" style="width: 100%; max-width: 400px; padding: 10px 16px; border: 1px solid #D1D5DB; border-radius: 4px; font-size: 14px; margin-bottom: 16px;">
+            <input type="text" id="event-search" placeholder="Search events..." data-action="filter-events" style="width: 100%; max-width: 400px; padding: 10px 16px; border: 1px solid #D1D5DB; border-radius: 4px; font-size: 14px; margin-bottom: 16px;">
           </section>
           <section class="mt-lg">
             <h2>Popular Events</h2>
@@ -607,7 +607,7 @@ const App = (() => {
 
       // Shareable link — subtle, with copy button
       html += '<div class="mt-sm" style="font-size: 12px; color: #6b7280;">' +
-        '<button class="btn btn--sm btn--outline" onclick="navigator.clipboard.writeText(\'' + shareUrl + '\');this.textContent=\'✓ Copied!\';" style="font-size: 11px;">📋 Share Link</button>' +
+        '<button class="btn btn--sm btn--outline" data-action="copy-share-link" data-share-url="' + escapeHtml(shareUrl) + '" style="font-size: 11px;">📋 Share Link</button>' +
       '</div>';
 
       // Show content based on status
@@ -636,14 +636,14 @@ const App = (() => {
           '<h3>Register</h3>' +
           '<div id="signup-message" style="display:none; margin-top:8px; padding:8px 12px; border-radius:4px;"></div>' +
           '<p class="mt-sm text-muted">Signed in as ' + escapeHtml(Auth.getCurrentUser().email || '') + '</p>' +
-          '<button class="btn btn--primary mt-md" onclick="App.handleEventSignup(event, \'' + eventId + '\')">Register for this Event</button>' +
+          '<button class="btn btn--primary mt-md" data-action="event-signup" data-event-id="' + escapeHtml(eventId) + '">Register for this Event</button>' +
         '</div>';
       } else {
         // Not signed in — prompt to sign in
         registrationSection = '<div class="mt-lg">' +
           '<h3>Register</h3>' +
           '<p class="mt-sm text-muted">Sign in to register for this event and receive updates.</p>' +
-          '<button class="btn btn--primary mt-md" onclick="App.showAuthModal(\'signin\')">Sign In to Register</button>' +
+          '<button class="btn btn--primary mt-md" data-action="show-auth-modal" data-mode="signin">Sign In to Register</button>' +
         '</div>';
       }
 
@@ -850,7 +850,7 @@ const App = (() => {
         if (!wsUrl) {
           if (statusEl) {
             statusEl.innerHTML = '<p style="color: #e63946;">Live session unavailable: WebSocket endpoint not configured.</p>' +
-              '<button class="btn btn--outline mt-md" onclick="App.navigate(\'/events/' + eventId + '\')">Back to Event</button>';
+              '<button class="btn btn--outline mt-md" data-action="navigate" data-path="/events/' + escapeHtml(eventId) + '">Back to Event</button>';
           }
           return;
         }
@@ -871,7 +871,7 @@ const App = (() => {
     } catch (err) {
       if (statusEl) {
         statusEl.innerHTML = '<p style="color: #e63946;">Failed to join session: ' + escapeHtml(err.message) + '</p>' +
-          '<button class="btn btn--outline mt-md" onclick="App.navigate(\'/events/' + eventId + '\')">Back to Event</button>';
+          '<button class="btn btn--outline mt-md" data-action="navigate" data-path="/events/' + escapeHtml(eventId) + '">Back to Event</button>';
       }
     }
   }
@@ -949,7 +949,7 @@ const App = (() => {
           <div class="container text-center">
             <h1>Manage Events</h1>
             <p class="text-muted mt-md">You need to sign in to manage events.</p>
-            <button class="btn btn--primary mt-lg" onclick="App.showAuthModal('signin')">Sign In</button>
+            <button class="btn btn--primary mt-lg" data-action="show-auth-modal" data-mode="signin">Sign In</button>
           </div>
         </div>
       `;
@@ -1025,7 +1025,7 @@ const App = (() => {
           <div class="container text-center">
             <h1>Profile</h1>
             <p class="text-muted mt-md">You need to sign in to view your profile.</p>
-            <button class="btn btn--primary mt-lg" onclick="App.showAuthModal('signin')">Sign In</button>
+            <button class="btn btn--primary mt-lg" data-action="show-auth-modal" data-mode="signin">Sign In</button>
           </div>
         </div>
       `;
@@ -1087,7 +1087,7 @@ const App = (() => {
       <h2 class="modal__title">Reset Password</h2>
       <div class="modal__error" id="auth-error"></div>
       <p class="text-center mb-md" style="font-size: 14px; color: #5A6B7B;">Enter your email and we'll send you a reset code.</p>
-      <form id="auth-form" onsubmit="App.handleForgotPassword(event)">
+      <form id="auth-form" data-action="forgot-password">
         <div class="form-group">
           <label for="auth-email">Email</label>
           <input type="email" id="auth-email" class="form-input" placeholder="you@example.com" required>
@@ -1095,10 +1095,10 @@ const App = (() => {
         <button type="submit" class="btn btn--primary" style="width: 100%;">Send Reset Code</button>
       </form>
       <div class="modal__toggle">
-        <a onclick="App.showAuthModal('signin')" style="cursor: pointer;">Back to Sign In</a>
+        <a data-action="show-auth-modal" data-mode="signin" style="cursor: pointer;">Back to Sign In</a>
       </div>
       <div class="mt-md text-center">
-        <button class="btn btn--sm" onclick="App.hideAuthModal()">Cancel</button>
+        <button class="btn btn--sm" data-action="hide-auth-modal">Cancel</button>
       </div>
     `;
   }
@@ -1120,7 +1120,7 @@ const App = (() => {
           <h2 class="modal__title">Enter Reset Code</h2>
           <div class="modal__error" id="auth-error"></div>
           <p class="text-center mb-md" style="font-size: 14px; color: #5A6B7B;">Check your email for the verification code.</p>
-          <form onsubmit="App.handleResetPassword(event, '${escapeHtml(email)}')">
+          <form data-action="reset-password" data-email="${escapeHtml(email)}">
             <div class="form-group">
               <label for="auth-code">Verification Code</label>
               <input type="text" id="auth-code" class="form-input" placeholder="123456" required>
@@ -1132,7 +1132,7 @@ const App = (() => {
             <button type="submit" class="btn btn--primary" style="width: 100%;">Reset Password</button>
           </form>
           <div class="mt-md text-center">
-            <button class="btn btn--sm" onclick="App.hideAuthModal()">Cancel</button>
+            <button class="btn btn--sm" data-action="hide-auth-modal">Cancel</button>
           </div>
         `;
       }
@@ -1196,7 +1196,7 @@ const App = (() => {
   function escapeHtml(str) {
     // Escapes all five HTML/attr-significant chars so the result is safe to
     // interpolate into both element text and attribute contexts (incl.
-    // single- or double-quoted onclick="...").
+    // single- or double-quoted data-* attributes).
     return String(str == null ? '' : str)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -1225,6 +1225,59 @@ const App = (() => {
     return null;
   }
 
+  // --- Delegated event handling ---
+  //
+  // Rendered HTML carries data-action attributes instead of inline on*
+  // handlers so the CloudFront CSP can serve script-src without
+  // 'unsafe-inline'. Handler arguments travel as data-* attributes.
+  // Action names must stay unique across all modules — every module
+  // installs its own document-level listener and ignores unknown actions.
+
+  const CLICK_ACTIONS = {
+    'sign-out': function() { handleSignOut(); },
+    'show-auth-modal': function(el) { showAuthModal(el.dataset.mode || 'signin'); },
+    'hide-auth-modal': function() { hideAuthModal(); },
+    'show-forgot-password': function() { showForgotPassword(); },
+    'event-signup': function(el, e) { handleEventSignup(e, el.dataset.eventId); },
+    'navigate': function(el) { navigate(el.dataset.path); },
+    'copy-share-link': function(el) {
+      navigator.clipboard.writeText(el.dataset.shareUrl);
+      el.textContent = '✓ Copied!';
+    },
+  };
+
+  const SUBMIT_ACTIONS = {
+    'signin': handleSignIn,
+    'signup': handleSignUp,
+    'confirm-signup': function(e, form) { handleConfirm(e, form.dataset.email); },
+    'forgot-password': handleForgotPassword,
+    'reset-password': function(e, form) { handleResetPassword(e, form.dataset.email); },
+  };
+
+  function initDelegatedEvents() {
+    document.addEventListener('click', function(e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      var handler = CLICK_ACTIONS[el.getAttribute('data-action')];
+      if (!handler) return;
+      e.preventDefault();
+      handler(el, e);
+    });
+
+    document.addEventListener('submit', function(e) {
+      var form = e.target;
+      var handler = form && form.getAttribute && SUBMIT_ACTIONS[form.getAttribute('data-action')];
+      if (handler) handler(e, form);
+    });
+
+    document.addEventListener('input', function(e) {
+      var t = e.target;
+      if (t && t.getAttribute && t.getAttribute('data-action') === 'filter-events') {
+        filterEvents();
+      }
+    });
+  }
+
   // --- Initialization ---
 
   function init() {
@@ -1235,6 +1288,7 @@ const App = (() => {
     }
 
     defineRoutes();
+    initDelegatedEvents();
 
     // Initialize auth
     Auth.init();

@@ -129,14 +129,14 @@ function createMockDOM() {
     parent.childNodes = [];
 
     // Parse data attributes and classes from the HTML for querySelectorAll
-    const divRegex = /<div[^>]*class="([^"]*)"[^>]*data-start="([^"]*)"[^>]*data-end="([^"]*)"[^>]*onclick="([^"]*)"[^>]*>/g;
+    const divRegex = /<div[^>]*class="([^"]*)"[^>]*data-start="([^"]*)"[^>]*data-end="([^"]*)"[^>]*data-action="([^"]*)"[^>]*>/g;
     let match;
     while ((match = divRegex.exec(html)) !== null) {
       const child = createElement('div');
       child.attributes.class = match[1];
       child.attributes['data-start'] = match[2];
       child.attributes['data-end'] = match[3];
-      child.attributes.onclick = match[4];
+      child.attributes['data-action'] = match[4];
       parent.children.push(child);
       parent.childNodes.push(child);
       child.parentNode = parent;
@@ -535,7 +535,7 @@ Let us begin.`)
       expect(content.innerHTML).toContain('Let us begin.');
     });
 
-    test('transcript cues include onclick with seekToTranscriptTime', async () => {
+    test('transcript cues carry the delegated seek-transcript action', async () => {
       setupHlsMock();
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -553,7 +553,7 @@ Test cue text.`)
       await new Promise(resolve => setTimeout(resolve, 50));
 
       const content = mockDOM.document.getElementById('playback-transcript-content');
-      expect(content.innerHTML).toContain('Playback.seekToTranscriptTime(5)');
+      expect(content.innerHTML).toContain('data-action="seek-transcript"');
       expect(content.innerHTML).toContain('data-start="5"');
       expect(content.innerHTML).toContain('data-end="10"');
     });

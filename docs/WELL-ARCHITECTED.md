@@ -45,7 +45,7 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 ### Gaps and accepted risks
 
 - **Recordings are publicly accessible via CloudFront — accepted by design.** The publication flow deliberately publishes every recording to a public GitHub Pages site after the event, so signed URLs would only protect content the platform then publishes anyway. Revisit only if private/paid events are introduced.
-- **CSP `script-src` retains `'unsafe-inline'`** — the SPA renders ~74 inline `onclick` attribute handlers via innerHTML templates; dropping the directive requires refactoring them to addEventListener (tracked follow-up). Mitigations in place: strict `connect-src`/`frame-ancestors`, SRI on CDN scripts, no user-generated HTML rendered unescaped.
+- **CSP `style-src` retains `'unsafe-inline'`** — the SPA uses inline `style` attributes heavily. `script-src` no longer allows `'unsafe-inline'`: all inline `onclick` handlers were refactored to delegated `data-action` listeners. Mitigations in place: strict `connect-src`/`frame-ancestors`, SRI on CDN scripts, no user-generated HTML rendered unescaped.
 - No WAF IP reputation list or geographic restrictions (frontend WebACL)
 - No automated rotation for the GitHub PAT in Secrets Manager (manual rotation procedure in [RUNBOOK.md](RUNBOOK.md) §5)
 
@@ -147,10 +147,9 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 
 | Recommendation | Pillar | Effort | Impact |
 |---------------|--------|--------|--------|
-| Refactor inline onclick handlers; drop CSP 'unsafe-inline' | Security | Medium | Removes the main XSS-hardening gap |
 | Add Lambda reserved concurrency for critical paths | Performance | Low | Prevents cold starts on session start and token generation |
 
-Previously listed here and since implemented: DynamoDB point-in-time recovery (both tables), per-connection WebSocket rate limiting (websocket/rate-limiter.js), per-message token-expiry checks, cost allocation tags, health check endpoint (GET /health), anonymous WebSocket session validation. CloudFront signed URLs were evaluated and rejected — recordings are published publicly by design (see Security).
+Previously listed here and since implemented: inline onclick handler refactor (CSP script-src no longer allows 'unsafe-inline'), DynamoDB point-in-time recovery (both tables), per-connection WebSocket rate limiting (websocket/rate-limiter.js), per-message token-expiry checks, cost allocation tags, health check endpoint (GET /health), anonymous WebSocket session validation. CloudFront signed URLs were evaluated and rejected — recordings are published publicly by design (see Security).
 
 ### Medium Priority
 

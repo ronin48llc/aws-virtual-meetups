@@ -1,8 +1,8 @@
 'use strict';
 
-// Guard test: prevents reintroducing inline <script> blocks (which would
-// force the CloudFront CSP to keep 'unsafe-inline') or external CDN script
-// tags without Subresource Integrity attributes.
+// Guard test: prevents reintroducing inline <script> blocks (the CloudFront
+// CSP serves script-src without 'unsafe-inline', so the browser would block
+// them) or external CDN script tags without Subresource Integrity attributes.
 // Tracks issue #22.
 
 const fs = require('fs');
@@ -77,7 +77,7 @@ describe('frontend/index.html security guards (issue #22)', () => {
       const detail = inline.map((t) => `  - ${t.raw.slice(0, 120)}...`).join('\n');
       throw new Error(
         `Inline <script> blocks are not allowed in frontend/index.html — ` +
-        `they force the CloudFront CSP to permit 'unsafe-inline'. ` +
+        `the CloudFront CSP serves script-src without 'unsafe-inline', so the browser would block them. ` +
         `Move the code to a same-origin JS file under frontend/js/ and reference it with src=.\n` +
         `Offending tags:\n${detail}`,
       );

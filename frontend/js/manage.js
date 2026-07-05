@@ -308,7 +308,7 @@ const ManageEvents = (() => {
 
     var durationVal = evt.durationMinutes || '';
 
-    container.innerHTML = '<form onsubmit="ManageEvents.editEvent(event)">' +
+    container.innerHTML = '<form data-action="edit-event">' +
       '<h3 style="margin-bottom: 12px;">Edit Event</h3>' +
       '<div class="form-group">' +
         '<label for="edit-event-title">Title</label>' +
@@ -329,7 +329,7 @@ const ManageEvents = (() => {
       '<div id="form-error" style="display: none; color: #e63946; margin-bottom: 8px;"></div>' +
       '<div style="display: flex; gap: 8px;">' +
         '<button type="submit" class="btn btn--primary" id="form-submit-btn">Save Changes</button>' +
-        '<button type="button" class="btn btn--outline" onclick="ManageEvents.hideEditForm()">Cancel</button>' +
+        '<button type="button" class="btn btn--outline" data-action="hide-edit-form">Cancel</button>' +
       '</div>' +
     '</form>';
 
@@ -355,7 +355,7 @@ const ManageEvents = (() => {
       '<div class="container text-center">' +
         '<h1>Manage Events</h1>' +
         '<p class="text-muted mt-md">You need to sign in to manage events.</p>' +
-        '<button class="btn btn--primary mt-lg" onclick="App.showAuthModal(\'signin\')">Sign In</button>' +
+        '<button class="btn btn--primary mt-lg" data-action="show-auth-modal" data-mode="signin">Sign In</button>' +
       '</div>' +
     '</div>';
   }
@@ -365,12 +365,12 @@ const ManageEvents = (() => {
       '<div class="container">' +
         '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">' +
           '<h1>Manage Events</h1>' +
-          '<button class="btn btn--primary" onclick="ManageEvents.showCreateForm()">+ Create Event</button>' +
+          '<button class="btn btn--primary" data-action="show-create-form">+ Create Event</button>' +
         '</div>' +
 
         // Create event form (hidden by default)
         '<div id="create-event-form" style="display: none; margin-bottom: 24px; padding: 20px; background: #f8f9fa; border-radius: 8px;">' +
-          '<form onsubmit="ManageEvents.createEvent(event)">' +
+          '<form data-action="create-event">' +
             '<h3 style="margin-bottom: 12px;">Create New Event</h3>' +
             '<div class="form-group">' +
               '<label for="event-title">Title</label>' +
@@ -391,7 +391,7 @@ const ManageEvents = (() => {
             '<div id="form-error" style="display: none; color: #e63946; margin-bottom: 8px;"></div>' +
             '<div style="display: flex; gap: 8px;">' +
               '<button type="submit" class="btn btn--primary" id="form-submit-btn">Create Event</button>' +
-              '<button type="button" class="btn btn--outline" onclick="ManageEvents.hideCreateForm()">Cancel</button>' +
+              '<button type="button" class="btn btn--outline" data-action="hide-create-form">Cancel</button>' +
             '</div>' +
           '</form>' +
         '</div>' +
@@ -451,23 +451,23 @@ const ManageEvents = (() => {
     var controls = '';
     if (status === 'scheduled') {
       controls = '<div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">' +
-        '<button class="btn btn--primary btn--sm" onclick="ManageEvents.startEvent(\'' + _escapeAttr(id) + '\')">🎬 Enter Green Room</button>' +
+        '<button class="btn btn--primary btn--sm" data-action="start-event" data-event-id="' + _escapeAttr(id) + '">🎬 Enter Green Room</button>' +
         viewLink +
-        '<button class="btn btn--outline btn--sm" onclick="ManageEvents.showEditForm(\'' + _escapeAttr(id) + '\')">✏️ Edit</button>' +
-        '<button class="btn btn--outline btn--sm" onclick="ManageEvents.viewSignups(\'' + _escapeAttr(id) + '\')">👥 Sign-ups</button>' +
-        '<button class="btn btn--outline btn--sm" style="color: #e63946; border-color: #e63946;" onclick="ManageEvents.deleteEvent(\'' + _escapeAttr(id) + '\')">🗑️ Delete</button>' +
+        '<button class="btn btn--outline btn--sm" data-action="show-edit-form" data-event-id="' + _escapeAttr(id) + '">✏️ Edit</button>' +
+        '<button class="btn btn--outline btn--sm" data-action="view-signups" data-event-id="' + _escapeAttr(id) + '">👥 Sign-ups</button>' +
+        '<button class="btn btn--outline btn--sm" style="color: #e63946; border-color: #e63946;" data-action="delete-event" data-event-id="' + _escapeAttr(id) + '">🗑️ Delete</button>' +
       '</div>';
     } else if (status === 'live' || status === 'staging') {
       controls = '<div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">' +
-        '<button class="btn btn--primary btn--sm" style="background: #e63946;" onclick="ManageEvents.stopEvent(\'' + _escapeAttr(id) + '\')">⏹ End Event</button>' +
+        '<button class="btn btn--primary btn--sm" style="background: #e63946;" data-action="stop-event" data-event-id="' + _escapeAttr(id) + '">⏹ End Event</button>' +
         viewLink +
-        '<button class="btn btn--outline btn--sm" onclick="ManageEvents.viewSignups(\'' + _escapeAttr(id) + '\')">👥 Sign-ups</button>' +
+        '<button class="btn btn--outline btn--sm" data-action="view-signups" data-event-id="' + _escapeAttr(id) + '">👥 Sign-ups</button>' +
       '</div>';
     } else {
       controls = '<div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">' +
         viewLink +
-        '<button class="btn btn--outline btn--sm" onclick="ManageEvents.viewSignups(\'' + _escapeAttr(id) + '\')">👥 Sign-ups</button>' +
-        '<button class="btn btn--outline btn--sm" style="color: #e63946; border-color: #e63946;" onclick="ManageEvents.deleteEvent(\'' + _escapeAttr(id) + '\')">🗑️ Delete</button>' +
+        '<button class="btn btn--outline btn--sm" data-action="view-signups" data-event-id="' + _escapeAttr(id) + '">👥 Sign-ups</button>' +
+        '<button class="btn btn--outline btn--sm" style="color: #e63946; border-color: #e63946;" data-action="delete-event" data-event-id="' + _escapeAttr(id) + '">🗑️ Delete</button>' +
       '</div>';
     }
 
@@ -490,7 +490,7 @@ const ManageEvents = (() => {
     if (!signups || signups.length === 0) {
       container.innerHTML = '<div style="display: flex; justify-content: space-between; align-items: center;">' +
         '<h3>Sign-ups</h3>' +
-        '<button class="btn btn--sm btn--outline" onclick="ManageEvents.closeSignups()">Close</button>' +
+        '<button class="btn btn--sm btn--outline" data-action="close-signups">Close</button>' +
       '</div>' +
       '<p class="text-muted mt-sm">No sign-ups yet for this event.</p>';
       return;
@@ -498,7 +498,7 @@ const ManageEvents = (() => {
 
     var html = '<div style="display: flex; justify-content: space-between; align-items: center;">' +
       '<h3>Sign-ups (' + signups.length + ')</h3>' +
-      '<button class="btn btn--sm btn--outline" onclick="ManageEvents.closeSignups()">Close</button>' +
+      '<button class="btn btn--sm btn--outline" data-action="close-signups">Close</button>' +
     '</div>' +
     '<table style="width: 100%; margin-top: 12px; border-collapse: collapse;">' +
       '<thead><tr style="border-bottom: 1px solid #dee2e6;">' +
@@ -633,6 +633,48 @@ const ManageEvents = (() => {
 
   function _escapeAttr(str) {
     return (str || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // --- Delegated event handling ---
+  //
+  // Rendered HTML carries data-action attributes instead of inline on*
+  // handlers so the CloudFront CSP can serve script-src without
+  // 'unsafe-inline'. Action names must stay unique across all modules —
+  // every module installs its own document-level listener and ignores
+  // unknown actions.
+
+  var CLICK_ACTIONS = {
+    'show-create-form': function() { showCreateForm(); },
+    'hide-create-form': function() { _hideCreateForm(); },
+    'hide-edit-form': function() { hideEditForm(); },
+    'show-edit-form': function(el) { showEditForm(el.dataset.eventId); },
+    'start-event': function(el) { startEvent(el.dataset.eventId); },
+    'stop-event': function(el) { stopEvent(el.dataset.eventId); },
+    'view-signups': function(el) { viewSignups(el.dataset.eventId); },
+    'delete-event': function(el) { deleteEvent(el.dataset.eventId); },
+    'close-signups': function() { closeSignups(); },
+  };
+
+  var SUBMIT_ACTIONS = {
+    'create-event': createEvent,
+    'edit-event': editEvent,
+  };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', function(e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      var handler = CLICK_ACTIONS[el.getAttribute('data-action')];
+      if (!handler) return;
+      e.preventDefault();
+      handler(el, e);
+    });
+
+    document.addEventListener('submit', function(e) {
+      var form = e.target;
+      var handler = form && form.getAttribute && SUBMIT_ACTIONS[form.getAttribute('data-action')];
+      if (handler) handler(e, form);
+    });
   }
 
   // --- Public API ---

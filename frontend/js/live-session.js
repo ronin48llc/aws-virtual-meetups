@@ -299,7 +299,7 @@ const LiveSession = (() => {
             <div id="caption-area" style="margin-top: 12px; background: rgba(0,0,0,0.7); border-radius: 8px; padding: 12px 16px; min-height: 48px;">
               <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
                 <span style="font-size: 12px; color: #8b949e;">Captions</span>
-                <select id="caption-language-select" onchange="LiveSession.setCaptionLanguage(this.value)" style="background: ${SQUID_INK}; color: #fff; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-size: 12px;" aria-label="Caption language">
+                <select id="caption-language-select" data-action="set-caption-language" style="background: ${SQUID_INK}; color: #fff; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-size: 12px;" aria-label="Caption language">
                   ${CAPTION_LANGUAGES.map(function(lang) { return '<option value="' + lang.code + '"' + (lang.code === 'en' ? ' selected' : '') + '>' + lang.label + '</option>'; }).join('')}
                 </select>
               </div>
@@ -309,39 +309,39 @@ const LiveSession = (() => {
             <!-- Presenter Controls (shown only for presenters) -->
             <div id="presenter-controls" style="display: none; margin-top: 12px; padding: 12px 16px; background: ${SQUID_INK}; border-radius: 8px;">
               <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                <button id="btn-screen-share" class="btn btn--control" onclick="LiveSession.toggleScreenShare()" aria-label="Toggle screen share" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                <button id="btn-screen-share" class="btn btn--control" data-action="toggle-screen-share" aria-label="Toggle screen share" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   🖥️ Screen Share
                 </button>
-                <button id="btn-webcam" class="btn btn--control" onclick="LiveSession.toggleWebcam()" aria-label="Toggle webcam" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                <button id="btn-webcam" class="btn btn--control" data-action="toggle-webcam" aria-label="Toggle webcam" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   📷 Webcam
                 </button>
-                <button id="btn-mic" class="btn btn--control" onclick="LiveSession.toggleMic()" aria-label="Toggle microphone" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                <button id="btn-mic" class="btn btn--control" data-action="toggle-mic" aria-label="Toggle microphone" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   🎤 Mic
                 </button>
-                <button id="btn-device-audio" class="btn btn--control" onclick="LiveSession.toggleDeviceAudio()" aria-label="Toggle device audio" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                <button id="btn-device-audio" class="btn btn--control" data-action="toggle-device-audio" aria-label="Toggle device audio" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   🔊 Device Audio
                 </button>
                 <span style="border-left: 1px solid #30363d; margin: 0 4px;" aria-hidden="true"></span>
                 <span style="align-self: center; font-size: 12px; color: #8b949e;">Extend:</span>
-                <button class="btn btn--control" onclick="LiveSession.extendDuration(15)" aria-label="Extend event by 15 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+15m</button>
-                <button class="btn btn--control" onclick="LiveSession.extendDuration(30)" aria-label="Extend event by 30 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+30m</button>
-                <button class="btn btn--control" onclick="LiveSession.extendDuration(60)" aria-label="Extend event by 60 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+60m</button>
+                <button class="btn btn--control" data-action="extend-duration" data-minutes="15" aria-label="Extend event by 15 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+15m</button>
+                <button class="btn btn--control" data-action="extend-duration" data-minutes="30" aria-label="Extend event by 30 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+30m</button>
+                <button class="btn btn--control" data-action="extend-duration" data-minutes="60" aria-label="Extend event by 60 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+60m</button>
               </div>
             </div>
 
             <!-- Presenter Dashboard Panel (visible only for presenters) -->
             <div id="presenter-dashboard" style="display: none; margin-top: 12px; background: ${SQUID_INK}; border-radius: 8px; overflow: hidden;">
               <div style="display: flex; border-bottom: 1px solid #30363d;">
-                <button id="dashboard-tab-attendees" onclick="LiveSession.switchDashboardTab('attendees')" style="flex: 1; padding: 10px 16px; border: none; background: ${AWS_ORANGE}; color: #000; font-weight: 600; font-size: 13px; cursor: pointer;">
+                <button id="dashboard-tab-attendees" data-action="switch-dashboard-tab" data-tab="attendees" style="flex: 1; padding: 10px 16px; border: none; background: ${AWS_ORANGE}; color: #000; font-weight: 600; font-size: 13px; cursor: pointer;">
                   Attendees <span id="dashboard-count-attendees" style="margin-left: 4px; padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,0.2); font-size: 11px;">0</span>
                 </button>
-                <button id="dashboard-tab-questions" onclick="LiveSession.switchDashboardTab('questions')" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
+                <button id="dashboard-tab-questions" data-action="switch-dashboard-tab" data-tab="questions" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
                   Questions <span id="dashboard-count-questions" style="margin-left: 4px; padding: 2px 6px; border-radius: 10px; background: rgba(255,255,255,0.1); font-size: 11px;">0</span>
                 </button>
-                <button id="dashboard-tab-hands" onclick="LiveSession.switchDashboardTab('hands')" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
+                <button id="dashboard-tab-hands" data-action="switch-dashboard-tab" data-tab="hands" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
                   Hands <span id="dashboard-count-hands" style="margin-left: 4px; padding: 2px 6px; border-radius: 10px; background: rgba(255,255,255,0.1); font-size: 11px;">0</span>
                 </button>
-                <button id="dashboard-tab-bans" onclick="LiveSession.switchDashboardTab('bans')" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
+                <button id="dashboard-tab-bans" data-action="switch-dashboard-tab" data-tab="bans" style="flex: 1; padding: 10px 16px; border: none; background: #21262d; color: #8b949e; font-size: 13px; cursor: pointer;">
                   Bans <span id="dashboard-count-bans" style="margin-left: 4px; padding: 2px 6px; border-radius: 10px; background: rgba(255,255,255,0.1); font-size: 11px;">0</span>
                 </button>
               </div>
@@ -356,16 +356,16 @@ const LiveSession = (() => {
             <!-- Attendee Controls -->
             <div id="attendee-controls" style="display: none; margin-top: 12px; padding: 12px 16px; background: ${SQUID_INK}; border-radius: 8px;">
               <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                <button id="btn-hand-raise" class="btn btn--control" onclick="LiveSession.toggleHandRaise()" aria-label="Raise or lower hand" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                <button id="btn-hand-raise" class="btn btn--control" data-action="toggle-hand-raise" aria-label="Raise or lower hand" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   ✋ Raise Hand
                 </button>
-                <button id="btn-show-question-form" onclick="LiveSession.toggleQuestionForm()" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                <button id="btn-show-question-form" data-action="toggle-question-form" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   ❓ Ask Question
                 </button>
               </div>
               <!-- Question submission form -->
               <div id="question-form-container" style="display: none; margin-top: 12px;">
-                <form id="question-form" onsubmit="LiveSession.submitQuestion(event)">
+                <form id="question-form" data-action="submit-question">
                   <div style="display: flex; gap: 8px;">
                     <input type="text" id="question-input" placeholder="Type your question..." required style="flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #fff; font-size: 14px;" aria-label="Question text">
                     <button type="submit" style="padding: 8px 16px; border-radius: 4px; border: none; background: ${AWS_ORANGE}; color: #000; font-weight: 600; cursor: pointer;">Send</button>
@@ -381,8 +381,8 @@ const LiveSession = (() => {
             <!-- Chat Panel -->
             <div id="chat-panel" style="flex: 1; background: ${SQUID_INK}; border-radius: 8px; display: flex; flex-direction: column; min-height: 400px;">
               <div style="padding: 12px 16px; border-bottom: 1px solid #30363d; display: flex; gap: 8px;">
-                <button id="btn-chat-group" onclick="LiveSession.switchChatTab('group')" style="padding: 4px 12px; border-radius: 4px; border: 1px solid ${AWS_ORANGE}; background: ${AWS_ORANGE}; color: #000; font-size: 12px; font-weight: 600; cursor: pointer;">Group</button>
-                <button id="btn-chat-direct" onclick="LiveSession.switchChatTab('direct')" style="padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: transparent; color: #8b949e; font-size: 12px; cursor: pointer;">Direct</button>
+                <button id="btn-chat-group" data-action="switch-chat-tab" data-tab="group" style="padding: 4px 12px; border-radius: 4px; border: 1px solid ${AWS_ORANGE}; background: ${AWS_ORANGE}; color: #000; font-size: 12px; font-weight: 600; cursor: pointer;">Group</button>
+                <button id="btn-chat-direct" data-action="switch-chat-tab" data-tab="direct" style="padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: transparent; color: #8b949e; font-size: 12px; cursor: pointer;">Direct</button>
               </div>
               <div id="dm-recipient-selector" style="display: none; padding: 8px 16px; border-bottom: 1px solid #30363d;">
                 <select id="dm-recipient" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #fff; font-size: 12px;" aria-label="Direct message recipient">
@@ -390,7 +390,7 @@ const LiveSession = (() => {
                 </select>
               </div>
               <div id="chat-messages" style="flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; font-size: 13px; line-height: 1.6;" role="log" aria-live="polite" aria-label="Chat messages"></div>
-              <form id="chat-form" onsubmit="LiveSession.sendChatMessage(event)" style="padding: 12px 16px; border-top: 1px solid #30363d;">
+              <form id="chat-form" data-action="send-chat-message" style="padding: 12px 16px; border-top: 1px solid #30363d;">
                 <div style="display: flex; gap: 8px;">
                   <input type="text" id="chat-input" placeholder="Type a message..." required style="flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #fff; font-size: 13px;" aria-label="Chat message">
                   <button type="submit" style="padding: 8px 12px; border-radius: 4px; border: none; background: ${AWS_ORANGE}; color: #000; font-weight: 600; cursor: pointer;" aria-label="Send message">→</button>
@@ -458,7 +458,7 @@ const LiveSession = (() => {
     banner.id = 'green-room-banner';
     banner.style.cssText = 'margin-bottom: 12px; padding: 16px 20px; background: #21262d; border: 2px solid ' + AWS_ORANGE + '; border-radius: 8px; text-align: center;';
     banner.innerHTML = '<p style="margin: 0 0 12px 0; font-size: 14px; color: #e6edf3;">You\'re in the Green Room. Set up your devices, then click Go Live when ready.</p>' +
-      '<button id="btn-go-live" onclick="LiveSession.goLive()" style="padding: 12px 32px; border-radius: 6px; border: none; background: #e63946; color: #fff; font-weight: 700; font-size: 16px; cursor: pointer;">🔴 Go Live</button>';
+      '<button id="btn-go-live" data-action="go-live" style="padding: 12px 32px; border-radius: 6px; border: none; background: #e63946; color: #fff; font-weight: 700; font-size: 16px; cursor: pointer;">🔴 Go Live</button>';
 
     controlsEl.parentNode.insertBefore(banner, controlsEl);
   }
@@ -1574,18 +1574,18 @@ const LiveSession = (() => {
 
         var promoteHtml = '';
         if (attendee.role !== 'presenter' && attendee.role !== 'co-presenter') {
-          promoteHtml = '<button onclick="LiveSession.promoteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 10px; cursor: pointer;" title="Promote to co-presenter">Promote</button>';
+          promoteHtml = '<button data-action="promote-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 10px; cursor: pointer;" title="Promote to co-presenter">Promote</button>';
         } else if (attendee.role === 'co-presenter') {
-          promoteHtml = '<button onclick="LiveSession.demoteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Demote to attendee">Demote</button>';
+          promoteHtml = '<button data-action="demote-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Demote to attendee">Demote</button>';
         }
 
         var moderationHtml = '';
         if (attendee.role !== 'presenter') {
           moderationHtml = '<div style="display: flex; gap: 2px; margin-top: 4px;">'
-            + '<button onclick="LiveSession.muteUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Mute this user\'s audio — they won\'t be able to unmute until you grant permission again">🔇 Mute</button>'
-            + '<button onclick="LiveSession.restrictUserChat(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict chat — this user won\'t be able to send messages">💬 Chat Off</button>'
-            + '<button onclick="LiveSession.kickUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #da3633; color: #fff; font-size: 10px; cursor: pointer;" title="Kick — remove this user from the session immediately">❌ Kick</button>'
-            + '<button onclick="LiveSession.banUser(\'' + escapeHtml(attendee.connectionId) + '\', \'' + escapeHtml(attendee.userId) + '\')" style="padding: 2px 6px; border-radius: 3px; border: none; background: #8b0000; color: #fff; font-size: 10px; cursor: pointer;" title="Ban — permanently block this user from rejoining this event">🚫 Ban</button>'
+            + '<button data-action="mute-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Mute this user\'s audio — they won\'t be able to unmute until you grant permission again">🔇 Mute</button>'
+            + '<button data-action="restrict-user-chat" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict chat — this user won\'t be able to send messages">💬 Chat Off</button>'
+            + '<button data-action="kick-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #da3633; color: #fff; font-size: 10px; cursor: pointer;" title="Kick — remove this user from the session immediately">❌ Kick</button>'
+            + '<button data-action="ban-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #8b0000; color: #fff; font-size: 10px; cursor: pointer;" title="Ban — permanently block this user from rejoining this event">🚫 Ban</button>'
             + '</div>';
         }
 
@@ -1665,9 +1665,9 @@ const LiveSession = (() => {
           + '<span style="color: #8b949e; font-size: 11px;">' + escapeHtml(q.displayName || 'Anonymous') + ' · ' + timeStr + '</span>'
           + '</div>'
           + '<div style="display: flex; gap: 4px; margin-left: 8px;">'
-          + '<button onclick="LiveSession.answerQuestion(\'' + escapeHtml(q.questionId) + '\', \'' + escapeHtml(q.submittedAt || q.timestamp || '') + '\')" style="padding: 4px 8px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 11px; cursor: pointer;">Answer</button>'
-          + '<button onclick="LiveSession.pinQuestion(\'' + escapeHtml(q.questionId) + '\', \'' + escapeHtml(q.text) + '\', \'' + escapeHtml(q.displayName || 'Anonymous') + '\')" style="padding: 4px 8px; border-radius: 3px; border: none; background: #1f6feb; color: #fff; font-size: 11px; cursor: pointer;">Pin</button>'
-          + '<button onclick="LiveSession.dismissQuestion(\'' + escapeHtml(q.questionId) + '\', \'' + escapeHtml(q.submittedAt || q.timestamp || '') + '\')" style="padding: 4px 8px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 11px; cursor: pointer;">Dismiss</button>'
+          + '<button data-action="answer-question" data-question-id="' + escapeHtml(q.questionId) + '" data-timestamp="' + escapeHtml(q.submittedAt || q.timestamp || '') + '" style="padding: 4px 8px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 11px; cursor: pointer;">Answer</button>'
+          + '<button data-action="pin-question" data-question-id="' + escapeHtml(q.questionId) + '" data-text="' + escapeHtml(q.text) + '" data-display-name="' + escapeHtml(q.displayName || 'Anonymous') + '" style="padding: 4px 8px; border-radius: 3px; border: none; background: #1f6feb; color: #fff; font-size: 11px; cursor: pointer;">Pin</button>'
+          + '<button data-action="dismiss-question" data-question-id="' + escapeHtml(q.questionId) + '" data-timestamp="' + escapeHtml(q.submittedAt || q.timestamp || '') + '" style="padding: 4px 8px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 11px; cursor: pointer;">Dismiss</button>'
           + '</div>'
           + '</div>'
           + '</div>';
@@ -1720,8 +1720,8 @@ const LiveSession = (() => {
         + '<span style="color: #8b949e; font-size: 11px; margin-left: 8px;">' + timeStr + '</span>'
         + '</div>'
         + '<div style="display: flex; gap: 4px;">'
-        + '<button onclick="LiveSession.acknowledgeHand(\'' + escapeHtml(h.userId) + '\', \'' + escapeHtml(h.timestamp || '') + '\')" style="padding: 4px 8px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 11px; cursor: pointer;">Acknowledge</button>'
-        + '<button onclick="LiveSession.dismissHand(\'' + escapeHtml(h.userId) + '\', \'' + escapeHtml(h.timestamp || '') + '\')" style="padding: 4px 8px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 11px; cursor: pointer;">Dismiss</button>'
+        + '<button data-action="acknowledge-hand" data-user-id="' + escapeHtml(h.userId) + '" data-timestamp="' + escapeHtml(h.timestamp || '') + '" style="padding: 4px 8px; border-radius: 3px; border: none; background: #238636; color: #fff; font-size: 11px; cursor: pointer;">Acknowledge</button>'
+        + '<button data-action="dismiss-hand" data-user-id="' + escapeHtml(h.userId) + '" data-timestamp="' + escapeHtml(h.timestamp || '') + '" style="padding: 4px 8px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 11px; cursor: pointer;">Dismiss</button>'
         + '</div>'
         + '</div>';
     });
@@ -1762,7 +1762,7 @@ const LiveSession = (() => {
         html += '<div style="font-size: 11px; color: #6e7681;">' + escapeHtml(new Date(ban.timestamp).toLocaleString()) + '</div>';
       }
       html += '</div>';
-      html += '<button onclick="LiveSession.unbanUser(\'' + escapeHtml(ban.userId) + '\')" aria-label="Unban user" style="padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; font-size: 12px; cursor: pointer;">Unban</button>';
+      html += '<button data-action="unban-user" data-user-id="' + escapeHtml(ban.userId) + '" aria-label="Unban user" style="padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; font-size: 12px; cursor: pointer;">Unban</button>';
       html += '</div>';
     });
     panel.innerHTML = html;
@@ -1858,7 +1858,7 @@ const LiveSession = (() => {
 
     var unpinHtml = '';
     if (userRole === 'presenter') {
-      unpinHtml = '<button onclick="LiveSession.unpinQuestion(\'' + escapeHtml(pinnedQuestion.questionId) + '\')" style="padding: 4px 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.4); background: transparent; color: #fff; font-size: 11px; cursor: pointer; margin-left: 8px;">Unpin</button>';
+      unpinHtml = '<button data-action="unpin-question" data-question-id="' + escapeHtml(pinnedQuestion.questionId) + '" style="padding: 4px 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.4); background: transparent; color: #fff; font-size: 11px; cursor: pointer; margin-left: 8px;">Unpin</button>';
     }
 
     banner.innerHTML = textHtml + unpinHtml;
@@ -2584,13 +2584,76 @@ const LiveSession = (() => {
   function escapeHtml(str) {
     // Escapes all five HTML/attr-significant chars so the result is safe to
     // interpolate into both element text and attribute contexts (incl.
-    // single- or double-quoted onclick="...").
+    // single- or double-quoted data-* attributes).
     return String(str == null ? '' : str)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  // --- Delegated event handling ---
+  //
+  // Rendered HTML carries data-action attributes instead of inline on*
+  // handlers so the CloudFront CSP can serve script-src without
+  // 'unsafe-inline'. Handler arguments travel as data-* attributes.
+  // Action names must stay unique across all modules — every module
+  // installs its own document-level listener and ignores unknown actions.
+
+  var CLICK_ACTIONS = {
+    'toggle-screen-share': function() { toggleScreenShare(); },
+    'toggle-webcam': function() { toggleWebcam(); },
+    'toggle-mic': function() { toggleMic(); },
+    'toggle-device-audio': function() { toggleDeviceAudio(); },
+    'toggle-hand-raise': function() { toggleHandRaise(); },
+    'toggle-question-form': function() { toggleQuestionForm(); },
+    'switch-dashboard-tab': function(el) { switchDashboardTab(el.dataset.tab); },
+    'switch-chat-tab': function(el) { switchChatTab(el.dataset.tab); },
+    'go-live': function() { goLive(); },
+    'extend-duration': function(el) { extendDuration(parseInt(el.dataset.minutes, 10)); },
+    'unban-user': function(el) { unbanUser(el.dataset.userId); },
+    'promote-user': function(el) { promoteUser(el.dataset.connectionId, el.dataset.userId); },
+    'demote-user': function(el) { demoteUser(el.dataset.connectionId, el.dataset.userId); },
+    'mute-user': function(el) { muteUser(el.dataset.connectionId, el.dataset.userId); },
+    'restrict-user-chat': function(el) { restrictUserChat(el.dataset.connectionId, el.dataset.userId); },
+    'kick-user': function(el) { kickUser(el.dataset.connectionId, el.dataset.userId); },
+    'ban-user': function(el) { banUser(el.dataset.connectionId, el.dataset.userId); },
+    'answer-question': function(el) { answerQuestion(el.dataset.questionId, el.dataset.timestamp); },
+    'pin-question': function(el) { pinQuestion(el.dataset.questionId, el.dataset.text, el.dataset.displayName); },
+    'dismiss-question': function(el) { dismissQuestion(el.dataset.questionId, el.dataset.timestamp); },
+    'acknowledge-hand': function(el) { acknowledgeHand(el.dataset.userId, el.dataset.timestamp); },
+    'dismiss-hand': function(el) { dismissHand(el.dataset.userId, el.dataset.timestamp); },
+    'unpin-question': function(el) { unpinQuestion(el.dataset.questionId); },
+  };
+
+  var SUBMIT_ACTIONS = {
+    'submit-question': submitQuestion,
+    'send-chat-message': sendChatMessage,
+  };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', function(e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      var handler = CLICK_ACTIONS[el.getAttribute('data-action')];
+      if (!handler) return;
+      e.preventDefault();
+      handler(el, e);
+    });
+
+    document.addEventListener('submit', function(e) {
+      var form = e.target;
+      var handler = form && form.getAttribute && SUBMIT_ACTIONS[form.getAttribute('data-action')];
+      if (handler) handler(e, form);
+    });
+
+    document.addEventListener('change', function(e) {
+      var t = e.target;
+      if (t && t.getAttribute && t.getAttribute('data-action') === 'set-caption-language') {
+        setCaptionLanguage(t.value);
+      }
+    });
   }
 
   // --- Cleanup ---

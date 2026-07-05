@@ -85,15 +85,13 @@ describe('frontend/index.html structural smoke (issue #7)', () => {
     expect(appScripts[appScripts.length - 1]).toBe('js/app.js');
   });
 
-  test('inline script count is tracked (CSP "unsafe-inline" minimization)', () => {
+  test('no inline scripts (CSP script-src has no "unsafe-inline")', () => {
     const inlineScripts = Array.from(document.querySelectorAll('script:not([src])'));
-    // Today there are two inline blocks: a brand-config block and the
-    // window.COGNITO_* / API_BASE_URL bootstrap. The CSP issue #3
-    // currently relaxes script-src with 'unsafe-inline' to allow them.
-    // The follow-up to drop 'unsafe-inline' is to migrate these out;
-    // this assertion locks the count so a regression (adding a third
-    // inline block) trips the build and forces the conversation.
-    expect(inlineScripts.length).toBeLessThanOrEqual(2);
+    // The CloudFront CSP (cdk/lib/frontend-stack.js) serves script-src
+    // WITHOUT 'unsafe-inline', so any inline <script> block would be
+    // silently blocked in production. This assertion trips the build
+    // before a regression ships.
+    expect(inlineScripts.length).toBe(0);
   });
 
   test('has at least one element with the auth modal trigger (sign-in flow exists)', () => {

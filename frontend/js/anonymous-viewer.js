@@ -530,7 +530,7 @@ const AnonymousViewer = (() => {
           '<span style="font-size: 16px;" aria-hidden="true">🔒</span>' +
           '<span style="font-size: 14px; color: #e6edf3;">Register to participate — chat, ask questions, and interact with the presenter.</span>' +
         '</div>' +
-        '<button onclick="AnonymousViewer.promptRegister()" style="padding: 8px 20px; border-radius: 4px; border: none; background: ' + AWS_ORANGE + '; color: #000; font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap;">Register to Participate</button>' +
+        '<button data-action="prompt-register" style="padding: 8px 20px; border-radius: 4px; border: none; background: ' + AWS_ORANGE + '; color: #000; font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap;">Register to Participate</button>' +
       '</div>';
   }
 
@@ -1215,6 +1215,20 @@ const AnonymousViewer = (() => {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  // --- Delegated event handling ---
+  //
+  // Rendered HTML carries data-action attributes instead of inline on*
+  // handlers so the CloudFront CSP can serve script-src without
+  // 'unsafe-inline'. Action names must stay unique across all modules.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', function(e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-action="prompt-register"]') : null;
+      if (!el) return;
+      e.preventDefault();
+      promptRegister();
+    });
   }
 
   // --- Public API ---

@@ -54,6 +54,18 @@ describe('FrontendStack — CloudFront security response headers (issue #3)', ()
     expect(csp).toMatch(/script-src[^;]*'self'/);
   });
 
+  test("script-src does not allow 'unsafe-inline' (style-src still may)", () => {
+    // The SPA uses addEventListener / delegated data-action attributes, so
+    // inline script must stay blocked. Inline style attributes are a
+    // separate concern and style-src keeps 'unsafe-inline'.
+    const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    const policy = Object.values(policies)[0];
+    const csp = policy.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.ContentSecurityPolicy;
+    const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src'));
+    expect(scriptSrc).toBeDefined();
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+  });
+
   test('CSP blocks framing with frame-ancestors none', () => {
     const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
     const policy = Object.values(policies)[0];
