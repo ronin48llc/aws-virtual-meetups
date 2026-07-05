@@ -572,7 +572,10 @@ const LiveSession = (() => {
         var errData = await res.json().catch(function() { return {}; });
         throw new Error(errData.message || 'Failed to end session (' + res.status + ')');
       }
-      // Success — the EVENT_ENDED broadcast drives the UI from here.
+      // Render the ended state immediately — don't depend on the
+      // EVENT_ENDED broadcast making it back to this connection (it also
+      // arrives and re-renders idempotently when it does).
+      handleEventEnded({});
     } catch (err) {
       if (btn) {
         btn.disabled = false;
@@ -2128,6 +2131,14 @@ const LiveSession = (() => {
       clearInterval(countdownInterval);
       countdownInterval = null;
     }
+
+    // The session is over — remove the presenter controls and dashboard
+    // outright. Leaving them rendered stranded the End Session button on
+    // its disabled "Ending…" state forever.
+    ['presenter-controls', 'presenter-dashboard'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
 
     // Clear all video/audio elements from the stage container
     var videoContainer = document.getElementById('stage-video-container');
