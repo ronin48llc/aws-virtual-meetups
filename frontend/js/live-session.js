@@ -554,16 +554,25 @@ const LiveSession = (() => {
       const { Stage, LocalStageStream, SubscribeType, StageEvents, Strategy } = window.IVSBroadcastClient;
 
       stageStrategy = {
+        // IVS Real-Time rejects the publish outright if the strategy returns
+        // more than ONE video or ONE audio stream ("stageStreamsToPublish
+        // strategy function returned more than 1 video or audio stream").
+        // Video: screen share wins over the camera — the camera keeps
+        // capturing and resumes publishing the moment the share ends.
+        // Audio: mic and device audio are mixed into a single WebAudio
+        // track when both are enabled.
         stageStreamsToPublish: function() {
           const streams = [];
-          if (localStreams.screen) streams.push(new LocalStageStream(localStreams.screen));
-          if (localStreams.camera) streams.push(new LocalStageStream(localStreams.camera));
-          if (localStreams.mic) streams.push(new LocalStageStream(localStreams.mic));
-          if (localStreams.deviceAudio) streams.push(new LocalStageStream(localStreams.deviceAudio));
+          const videoTrack = localStreams.screen || localStreams.camera;
+          const audioTrack = getPublishAudioTrack();
+          if (videoTrack) streams.push(new LocalStageStream(videoTrack));
+          if (audioTrack) streams.push(new LocalStageStream(audioTrack));
           return streams;
         },
         shouldPublishParticipant: function() {
-          return userRole === 'presenter';
+          // Co-presenters receive PUBLISH-capable tokens on promotion; the
+          // strategy must not veto what the token allows.
+          return userRole === 'presenter' || userRole === 'co-presenter';
         },
         shouldSubscribeToParticipant: function() {
           return SubscribeType.AUDIO_VIDEO;
@@ -686,6 +695,13 @@ const LiveSession = (() => {
       refreshStagePublish();
       // Render screen share preview
       renderScreenSharePreview();
+
+      // IVS allows one video stream: while sharing, the camera keeps
+      // capturing but attendees see the screen. Tell the presenter so the
+      // "my face disappeared" moment isn't a surprise.
+      if (localStreams.camera) {
+        showNotification('Screen share is now the published video — your webcam resumes when sharing stops.');
+      }
 
       // Handle user stopping share via browser UI
       localStreams.screen.onended = function() {
@@ -909,6 +925,52 @@ const LiveSession = (() => {
     if (videoEl) {
       videoEl.srcObject = null;
       videoEl.remove();
+    }
+  }
+
+  // WebAudio mixer state for combining mic + device audio into the single
+  // audio stream IVS allows per participant.
+  let audioMixer = null;
+
+  /**
+   * Pick the single audio track to publish. Mixes mic + device audio via
+   * WebAudio when both are live; falls back to whichever exists (mic wins
+   * if mixing is unavailable in this browser).
+   * @returns {MediaStreamTrack|null}
+   */
+  function getPublishAudioTrack() {
+    const mic = localStreams.mic;
+    const device = localStreams.deviceAudio;
+    if (mic && device) {
+      return getMixedAudioTrack(mic, device);
+    }
+    teardownAudioMixer();
+    return mic || device || null;
+  }
+
+  function getMixedAudioTrack(micTrack, deviceTrack) {
+    if (audioMixer && audioMixer.micTrack === micTrack && audioMixer.deviceTrack === deviceTrack) {
+      return audioMixer.destination.stream.getAudioTracks()[0];
+    }
+    teardownAudioMixer();
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const context = new AudioCtx();
+      const destination = context.createMediaStreamDestination();
+      context.createMediaStreamSource(new MediaStream([micTrack])).connect(destination);
+      context.createMediaStreamSource(new MediaStream([deviceTrack])).connect(destination);
+      audioMixer = { context: context, destination: destination, micTrack: micTrack, deviceTrack: deviceTrack };
+      return destination.stream.getAudioTracks()[0];
+    } catch (err) {
+      console.warn('LiveSession: audio mixing unavailable, publishing mic only', err);
+      return micTrack;
+    }
+  }
+
+  function teardownAudioMixer() {
+    if (audioMixer) {
+      try { audioMixer.context.close(); } catch (e) {}
+      audioMixer = null;
     }
   }
 
@@ -2732,6 +2794,7 @@ const LiveSession = (() => {
       countdownInterval = null;
     }
     scheduledEnd = null;
+    teardownAudioMixer();
     // Stop all local streams
     Object.keys(localStreams).forEach(function(key) {
       if (localStreams[key]) {
