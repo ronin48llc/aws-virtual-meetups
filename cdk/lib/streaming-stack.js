@@ -88,6 +88,26 @@ class StreamingStack extends Stack {
       ],
     });
 
+    // IVS composite recording writes via the ivs-composite service
+    // principal, authorized by the BUCKET POLICY — not the composition
+    // role below. CreateStorageConfiguration installs this statement
+    // automatically, but CloudFormation rewrites the bucket policy on
+    // every deploy and WIPED it (observed live 2026-07-05: every
+    // composition FAILED ~2s after start, S3 destination denied). Owning
+    // the statement here makes it survive deploys. Statement mirrors
+    // exactly what CreateStorageConfiguration installs.
+    recordingBucket.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'IVSCompositeRecordingWrite',
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ServicePrincipal(`ivs-composite.${this.region}.amazonaws.com`)],
+      actions: ['s3:PutObject', 's3:PutObjectAcl'],
+      resources: [recordingBucket.arnForObjects('*')],
+      conditions: {
+        StringEquals: { 's3:x-amz-acl': 'bucket-owner-full-control' },
+        Bool: { 'aws:SecureTransport': 'true' },
+      },
+    }));
+
     // IAM role for IVS Composition to write recordings to S3
     const ivsCompositionRole = new iam.Role(this, 'IvsCompositionRole', {
       assumedBy: new iam.ServicePrincipal('ivs.amazonaws.com'),

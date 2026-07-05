@@ -163,3 +163,34 @@ describe('StreamingStack — chat-review URL_BLOCKLIST is configurable via conte
     });
   });
 });
+
+describe('recording bucket policy — IVS composite write access', () => {
+  // CreateStorageConfiguration installs this statement itself, but CFN
+  // rewrites the bucket policy every deploy and wiped it — every
+  // composition FAILED ~2s after start with the S3 destination denied
+  // (observed live 2026-07-05). The stack must own the statement.
+  test('bucket policy grants ivs-composite service principal PutObject', () => {
+    const { App } = require('aws-cdk-lib');
+    const { Template, Match } = require('aws-cdk-lib/assertions');
+    const { StreamingStack } = require('../../lib/streaming-stack');
+    const app = new App();
+    const stack = new StreamingStack(app, 'PolicyTest', {
+      env: { account: '123456789012', region: 'us-east-1' },
+    });
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::S3::BucketPolicy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'IVSCompositeRecordingWrite',
+            Principal: { Service: 'ivs-composite.us-east-1.amazonaws.com' },
+            Action: ['s3:PutObject', 's3:PutObjectAcl'],
+            Condition: Match.objectLike({
+              StringEquals: { 's3:x-amz-acl': 'bucket-owner-full-control' },
+            }),
+          }),
+        ]),
+      }),
+    });
+  });
+});
