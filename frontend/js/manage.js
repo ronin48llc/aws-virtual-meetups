@@ -299,9 +299,11 @@ const ManageEvents = (() => {
     if (!container) return;
 
     var startTimeLocal = '';
-    if (evt.scheduledStartTime) {
-      var d = new Date(evt.scheduledStartTime);
-      startTimeLocal = d.toISOString().slice(0, 16);
+    if (evt.scheduledStart) {
+      var d = new Date(evt.scheduledStart);
+      // Convert UTC to local for datetime-local input (which has no timezone)
+      var localISO = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      startTimeLocal = localISO;
     }
 
     var durationVal = evt.durationMinutes || '';
