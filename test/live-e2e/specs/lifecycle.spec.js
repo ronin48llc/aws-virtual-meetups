@@ -241,9 +241,51 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     // a broadcast role change from affecting non-targeted recipients).
     const presenterRole = await presenter.page.evaluate(() => LiveSession.getRole());
     expect(presenterRole).toBe('presenter');
-    // NOTE: co-presenter *publishing* (publish token + A/V controls) is a
-    // known-incomplete feature — see COVERAGE.md. This asserts only the
-    // role-change targeting, which is what currently works.
+    // Co-presenter *publishing* is verified in the next test.
+  });
+
+  test('promoted co-presenter can actually publish audio and video', async () => {
+    // The prior test left the attendee as co-presenter. Promotion delivers a
+    // PUBLISH-capable IVS token to that user alone, so publishing now works
+    // end-to-end: the split A/V controls render, the co-presenter sees a
+    // self-view, AND the presenter (a separate IVS participant) subscribes to
+    // the newly published stream. If the publish token were never minted or
+    // never delivered, IVS would reject the publish and the presenter would
+    // see no new stream.
+    const a = attendee.page;
+
+    // The A/V publish controls (#btn-mic lives in #publish-controls) render
+    // for a co-presenter; a plain attendee never has this button.
+    await a.waitForSelector('#btn-mic', { timeout: 30000 });
+
+    // Let the promotion-triggered stage re-join (leave + rejoin with the
+    // publish token) settle before capturing tracks.
+    await sleep(4000);
+
+    // Baseline: streams the presenter renders before the co-presenter
+    // publishes. Nobody else is publishing (anon + attendee were subscribers).
+    const beforeCount = await presenter.page.evaluate(
+      () => document.querySelectorAll('#stage-video-container video').length
+    );
+
+    // Co-presenter turns on mic + webcam (fake devices). getUserMedia +
+    // publish only reaches IVS if the token carries PUBLISH capability.
+    await a.evaluate(async () => {
+      await LiveSession.toggleMic();
+      await LiveSession.toggleWebcam();
+    });
+
+    // The co-presenter captures their own webcam — the local self-view
+    // element only renders when getUserMedia + publish succeed.
+    await a.waitForSelector('#video-local-preview', { timeout: 20000 });
+
+    // The presenter subscribes to the co-presenter's new stream — a real IVS
+    // round-trip that only happens when the publish token is accepted.
+    await presenter.page.waitForFunction(
+      (before) => document.querySelectorAll('#stage-video-container video').length > before,
+      beforeCount,
+      { timeout: 45000 }
+    );
   });
 
   test('presenter bans then unbans the attendee', async () => {

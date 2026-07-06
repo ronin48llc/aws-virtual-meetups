@@ -115,3 +115,55 @@ describe('ApiStack — Admin API routes', () => {
     expect(Object.keys(routes)).toHaveLength(0);
   });
 });
+
+describe('ApiStack — signaling Lambda IVS token permission', () => {
+  let template;
+
+  beforeAll(() => {
+    const app = new App();
+    const env = { account: '123456789012', region: 'us-east-1' };
+    const dataStack = new DataStack(app, 'IvsTokenData', { env });
+    const authStack = new AuthStack(app, 'IvsTokenAuth', { env });
+    const emailStack = new EmailStack(app, 'IvsTokenEmail', {
+      env,
+      tableName: dataStack.mainTable.tableName,
+      tableArn: dataStack.mainTable.tableArn,
+      frontendUrl: 'https://example.invalid',
+    });
+    const apiStack = new ApiStack(app, 'IvsTokenApi', {
+      env,
+      userPool: authStack.userPool,
+      userPoolClient: authStack.userPoolClient,
+      mainTable: dataStack.mainTable,
+      connectionsTable: dataStack.connectionsTable,
+      emailSenderFunction: emailStack.emailSenderFunction,
+      schedulerRole: emailStack.schedulerRole,
+      domainName: 'example.invalid',
+    });
+    template = Template.fromStack(apiStack);
+  });
+
+  // Promoting a co-presenter (or granting speak permission) mints a
+  // PUBLISH-capable IVS stage token inside the signaling Lambda. Without this
+  // grant the mint fails and the promoted user can never publish.
+  test('the WsSignaling role can call ivs:CreateParticipantToken', () => {
+    const fns = template.findResources('AWS::Lambda::Function', {
+      Properties: { Handler: 'websocket/signaling.handler' },
+    });
+    const fnKeys = Object.keys(fns);
+    expect(fnKeys).toHaveLength(1);
+    const roleRef = fns[fnKeys[0]].Properties.Role['Fn::GetAtt'][0];
+
+    const policies = template.findResources('AWS::IAM::Policy');
+    const granted = Object.values(policies).some((p) => {
+      const roles = (p.Properties.Roles || []).map((r) => r.Ref);
+      if (!roles.includes(roleRef)) return false;
+      const statements = p.Properties.PolicyDocument.Statement;
+      return statements.some((s) => {
+        const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+        return actions.includes('ivs:CreateParticipantToken');
+      });
+    });
+    expect(granted).toBe(true);
+  });
+});

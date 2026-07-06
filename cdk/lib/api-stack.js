@@ -423,6 +423,17 @@ class ApiStack extends Stack {
       resources: ['*'],
     }));
 
+    // The signaling Lambda mints PUBLISH-capable stage tokens when a
+    // presenter promotes a co-presenter or grants speak permission, then
+    // delivers them to the target connection only.
+    wsSignalingFn.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ivs:CreateParticipantToken',
+      ],
+      resources: ['*'],
+    }));
+
     // -------------------------------------------------------
     // HTTP API Routes — Lambda Integrations
     // -------------------------------------------------------

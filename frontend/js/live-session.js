@@ -24,7 +24,8 @@ const LiveSession = (() => {
   let eventId = null;
   let participantToken = null;
   let chatToken = null;
-  let userRole = 'attendee'; // 'presenter' | 'attendee'
+  let userRole = 'attendee'; // 'presenter' | 'co-presenter' | 'attendee'
+  let hasSpeakPermission = false; // attendee granted mic (publish) without a role change
   let currentUserId = null;
   let currentUserEmail = null;
   let isHandRaised = false;
@@ -323,8 +324,9 @@ const LiveSession = (() => {
               <div id="caption-text" style="font-size: 14px; line-height: 1.5; color: #e6edf3;" aria-live="polite" aria-atomic="true"></div>
             </div>
 
-            <!-- Presenter Controls (shown only for presenters) -->
-            <div id="presenter-controls" style="display: none; margin-top: 12px; padding: 12px 16px; background: ${SQUID_INK}; border-radius: 8px;">
+            <!-- A/V Publish Controls (presenter, co-presenter, or a
+                 speak-granted attendee — anyone with a PUBLISH token) -->
+            <div id="publish-controls" style="display: none; margin-top: 12px; padding: 12px 16px; background: ${SQUID_INK}; border-radius: 8px;">
               <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                 <button id="btn-screen-share" class="btn btn--control" data-action="toggle-screen-share" aria-label="Toggle screen share" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   🖥️ Screen Share
@@ -338,7 +340,12 @@ const LiveSession = (() => {
                 <button id="btn-device-audio" class="btn btn--control" data-action="toggle-device-audio" aria-label="Toggle device audio" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
                   🔊 Device Audio
                 </button>
-                <span style="border-left: 1px solid #30363d; margin: 0 4px;" aria-hidden="true"></span>
+              </div>
+            </div>
+
+            <!-- Presenter Controls (owner-only: extend / end session) -->
+            <div id="presenter-controls" style="display: none; margin-top: 12px; padding: 12px 16px; background: ${SQUID_INK}; border-radius: 8px;">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
                 <span style="align-self: center; font-size: 12px; color: #8b949e;">Extend:</span>
                 <button class="btn btn--control" data-action="extend-duration" data-minutes="15" aria-label="Extend event by 15 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+15m</button>
                 <button class="btn btn--control" data-action="extend-duration" data-minutes="30" aria-label="Extend event by 30 minutes" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">+30m</button>
@@ -425,10 +432,16 @@ const LiveSession = (() => {
    * Render UI elements after page is in the DOM.
    */
   function renderUI() {
-    if (userRole === 'presenter') {
+    var isPresenter = userRole === 'presenter';
+    var isCoPresenter = userRole === 'co-presenter';
+    // Anyone holding a PUBLISH token: the owner, a promoted co-presenter, or a
+    // speak-granted attendee. This gates the A/V publish controls only — the
+    // owner-only extend/end + dashboard stay presenter-gated below.
+    var canPublish = isPresenter || isCoPresenter || hasSpeakPermission;
+
+    if (isPresenter) {
       showElement('presenter-controls');
       showElement('presenter-dashboard');
-      hideElement('attendee-controls');
       // Dashboard state is requested in connectWebSocket onopen — don't call here
       // as WS isn't connected yet when renderUI runs.
 
@@ -439,6 +452,20 @@ const LiveSession = (() => {
     } else {
       hideElement('presenter-controls');
       hideElement('presenter-dashboard');
+    }
+
+    // A/V publish controls (screen share / webcam / mic / device audio).
+    if (canPublish) {
+      showElement('publish-controls');
+    } else {
+      hideElement('publish-controls');
+    }
+
+    // Hand-raise / ask-question belong to attendees (including speak-granted
+    // ones), never the presenter or a co-presenter running the session.
+    if (isPresenter || isCoPresenter) {
+      hideElement('attendee-controls');
+    } else {
       showElement('attendee-controls');
     }
 
@@ -1044,6 +1071,37 @@ const LiveSession = (() => {
     if (stage && stage.refreshStrategy) {
       stage.refreshStrategy();
     }
+  }
+
+  /**
+   * Stop every local publishing track and reset its control button. Used when
+   * a co-presenter is demoted or an attendee's speak permission is revoked —
+   * their new token is SUBSCRIBE-only, so anything still capturing must stop.
+   */
+  function stopLocalPublishing() {
+    if (isScreenSharing) stopScreenShare();
+    if (isCameraEnabled) stopWebcam();
+    if (isMicEnabled) stopMic();
+    if (isDeviceAudioEnabled) stopDeviceAudio();
+  }
+
+  /**
+   * Leave the current stage and rejoin with a freshly issued token. IVS bakes
+   * capabilities (PUBLISH vs SUBSCRIBE) into the token, so the only way to
+   * change what a participant may do mid-session is a clean re-join. Called
+   * when a role/permission change delivers a new stage token to this user.
+   *
+   * @param {string} newToken - The replacement participant token.
+   */
+  async function applyStageToken(newToken) {
+    if (!newToken || !window.IVSBroadcastClient) return;
+    participantToken = newToken;
+    if (stage) {
+      try { stage.leave(); } catch (e) { /* already gone */ }
+      stage = null;
+      stageStrategy = null;
+    }
+    await joinStage();
   }
 
 
@@ -2151,10 +2209,10 @@ const LiveSession = (() => {
     // state or the next page after navigating away.
     removeBodyOverlays();
 
-    // The session is over — remove the presenter controls and dashboard
-    // outright. Leaving them rendered stranded the End Session button on
-    // its disabled "Ending…" state forever.
-    ['presenter-controls', 'presenter-dashboard'].forEach(function(id) {
+    // The session is over — remove the presenter/publish controls and
+    // dashboard outright. Leaving them rendered stranded the End Session
+    // button on its disabled "Ending…" state forever.
+    ['presenter-controls', 'publish-controls', 'presenter-dashboard'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
@@ -2442,24 +2500,60 @@ const LiveSession = (() => {
           //
           // ROLE_CHANGED is broadcast to the whole event but applies ONLY to
           // the promoted/demoted user — gate on the target userId so it
-          // can't change every recipient's role.
+          // can't change every recipient's role. The token-bearing copy is
+          // sent to the target connection alone (never broadcast), so only
+          // this user's message carries `stageToken`.
           var changedRole = msg.data && (msg.data.newRole || msg.data.role);
           if (changedRole && msg.data.userId === currentUserId) {
+            var wasPublisher = (userRole === 'presenter' || userRole === 'co-presenter');
+            var nowPublisher = (changedRole === 'presenter' || changedRole === 'co-presenter');
             userRole = changedRole;
+            // Demotion also clears speak permission server-side — mirror it so
+            // canPublish doesn't stay true off a stale speak flag.
+            if (changedRole === 'attendee') {
+              hasSpeakPermission = false;
+            }
+            // Demotion strips publish capability — stop any live tracks before
+            // rejoining SUBSCRIBE-only so devices are released and buttons reset.
+            if (wasPublisher && !nowPublisher) {
+              stopLocalPublishing();
+            }
+            // Rejoin the stage with the new-capability token when one was
+            // delivered; renderUI() then shows/hides the publish controls.
+            if (msg.data.stageToken) {
+              applyStageToken(msg.data.stageToken);
+            }
             renderUI();
+            if (changedRole === 'co-presenter') {
+              showNotification('You are now a co-presenter — you can share audio and video.');
+            } else if (changedRole === 'attendee' && wasPublisher) {
+              showNotification('You are no longer a co-presenter.');
+            }
+          }
+          break;
+        }
+        case 'SPEAK_PERMISSION_CHANGED': {
+          // Granting/revoking speak permission keeps the attendee role but
+          // flips PUBLISH capability. Like ROLE_CHANGED, the token-bearing
+          // copy reaches only the target connection, so act on self alone.
+          if (msg.data && msg.data.userId === currentUserId) {
+            hasSpeakPermission = msg.data.hasSpeakPermission === true;
+            if (!hasSpeakPermission) {
+              stopLocalPublishing();
+            }
+            if (msg.data.stageToken) {
+              applyStageToken(msg.data.stageToken);
+            }
+            renderUI();
+            showNotification(hasSpeakPermission
+              ? 'You have been granted speaking permission — turn on your mic to speak.'
+              : 'Speaking permission revoked.');
           }
           break;
         }
         case 'MUTED_BY_PRESENTER':
           stopMic();
           showNotification('You have been muted by the presenter.');
-          break;
-        case 'SPEAK_GRANTED':
-          showNotification('You have been granted speaking permission.');
-          break;
-        case 'SPEAK_REVOKED':
-          stopMic();
-          showNotification('Speaking permission revoked.');
           break;
         case 'TIME_WARNING':
           showTimeWarning('TIME_WARNING', msg.data || {});
