@@ -196,6 +196,100 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     expect(counts.questions, 'question should reach presenter').toBeGreaterThanOrEqual(1);
   });
 
+  test('attendee group chat reaches the presenter', async () => {
+    // Group chat rides the native IVS Chat room both personas joined — a
+    // real cross-service round-trip (send via SDK → IVS → deliver to the
+    // other participant's message listener), not our WebSocket.
+    const marker = 'e2e-chat-' + Date.now();
+    const a = attendee.page;
+    await a.waitForSelector('#chat-input', { timeout: 15000 });
+    await a.fill('#chat-input', marker);
+    await a.locator('#chat-form').dispatchEvent('submit');
+
+    // The presenter's chat pane should show the attendee's message.
+    await presenter.page.waitForFunction(
+      (m) => {
+        const el = document.getElementById('chat-messages');
+        return el && el.textContent.includes(m);
+      },
+      marker,
+      { timeout: 20000 }
+    );
+  });
+
+  test('promoting the attendee changes only their role, not everyone\'s', async () => {
+    // Regression guard for two ROLE_CHANGED bugs: the handler read the wrong
+    // field (role vs newRole) so promotion never applied, and it lacked a
+    // self-target check so a broadcast role change could hit every recipient.
+    const attendeeSub = await attendee.page.evaluate(
+      () => JSON.parse(atob(Auth.getIdToken().split('.')[1])).sub
+    );
+
+    await presenter.page.evaluate(() => LiveSession.switchDashboardTab('attendees'));
+    const promoteBtn = presenter.page.locator(
+      `[data-action="promote-user"][data-user-id="${attendeeSub}"]`
+    );
+    await promoteBtn.waitFor({ timeout: 15000 });
+    await promoteBtn.dispatchEvent('click');
+
+    // The promoted attendee becomes co-presenter…
+    await attendee.page.waitForFunction(
+      () => LiveSession.getRole && LiveSession.getRole() === 'co-presenter',
+      { timeout: 30000 }
+    );
+    // …and the presenter stays a presenter (the self-target guard prevents
+    // a broadcast role change from affecting non-targeted recipients).
+    const presenterRole = await presenter.page.evaluate(() => LiveSession.getRole());
+    expect(presenterRole).toBe('presenter');
+    // NOTE: co-presenter *publishing* (publish token + A/V controls) is a
+    // known-incomplete feature — see COVERAGE.md. This asserts only the
+    // role-change targeting, which is what currently works.
+  });
+
+  test('presenter bans then unbans the attendee', async () => {
+    const attendeeSub = await attendee.page.evaluate(
+      () => JSON.parse(atob(Auth.getIdToken().split('.')[1])).sub
+    );
+
+    // Ban from the attendee row (auto-accepts the confirm dialog via the
+    // Actor's dialog handler). Server-side: a BAN#<sub> record appears.
+    await presenter.page.evaluate(() => LiveSession.switchDashboardTab('attendees'));
+    const banBtn = presenter.page.locator(
+      `[data-action="ban-user"][data-user-id="${attendeeSub}"]`
+    );
+    await banBtn.waitFor({ timeout: 15000 });
+    await banBtn.dispatchEvent('click');
+
+    // The ban WS write and a Bans-tab listBans query race if fired back to
+    // back (observed: listBans returned count 0 before the ban persisted).
+    // Give the write a beat, then open the Bans tab (fires a fresh
+    // listBans) and re-fire it each poll until the ban shows.
+    await sleep(3000);
+    await presenter.page.waitForFunction(
+      (sub) => {
+        LiveSession.switchDashboardTab('bans'); // re-query each poll
+        const p = document.getElementById('dashboard-panel-bans');
+        return p && p.textContent.includes(sub);
+      },
+      attendeeSub,
+      { timeout: 15000, polling: 2000 }
+    );
+
+    // Unban — the ban record is removed and the row leaves the Bans list.
+    const unbanBtn = presenter.page.locator(
+      `[data-action="unban-user"][data-user-id="${attendeeSub}"]`
+    );
+    await unbanBtn.dispatchEvent('click');
+    await presenter.page.waitForFunction(
+      (sub) => {
+        const p = document.getElementById('dashboard-panel-bans');
+        return p && !p.textContent.includes(sub);
+      },
+      attendeeSub,
+      { timeout: 15000 }
+    );
+  });
+
   test('presenter extends the event duration', async () => {
     const before = await presenter.publicGet('/events/' + shared.eventId);
     // The extend control sits in the presenter toolbar, which the published
