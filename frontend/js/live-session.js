@@ -2434,12 +2434,22 @@ const LiveSession = (() => {
             displayCaption(msg.data.text);
           }
           break;
-        case 'ROLE_CHANGED':
-          if (msg.data && msg.data.role) {
-            userRole = msg.data.role;
+        case 'ROLE_CHANGED': {
+          // The backend sends the new role as `newRole` (promote/demote in
+          // signaling.js). The handler previously read `msg.data.role`,
+          // which is always undefined — so ROLE_CHANGED never actually
+          // changed anyone's role. Read `newRole` (with a `role` fallback).
+          //
+          // ROLE_CHANGED is broadcast to the whole event but applies ONLY to
+          // the promoted/demoted user — gate on the target userId so it
+          // can't change every recipient's role.
+          var changedRole = msg.data && (msg.data.newRole || msg.data.role);
+          if (changedRole && msg.data.userId === currentUserId) {
+            userRole = changedRole;
             renderUI();
           }
           break;
+        }
         case 'MUTED_BY_PRESENTER':
           stopMic();
           showNotification('You have been muted by the presenter.');
@@ -2957,6 +2967,7 @@ const LiveSession = (() => {
     switchChatTab: switchChatTab,
     setCaptionLanguage: setCaptionLanguage,
     switchDashboardTab: switchDashboardTab,
+    getRole: function() { return userRole; },
     acknowledgeHand: acknowledgeHand,
     dismissHand: dismissHand,
     answerQuestion: answerQuestion,

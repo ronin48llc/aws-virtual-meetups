@@ -53,9 +53,12 @@ E2E, **S** = smoke.
 | Extend duration (+15/30/60) | Presenter | `presenter extends the event duration` | U (session-manager extend) |
 | End Session (presenter button) | Presenter | `presenter holds live… then ends` | U (session-manager stop) |
 | Ended-state UI (no stuck "Ending…") | Presenter | same | — |
-| Group / direct chat | Attendee | *partial* — see gaps | U (signaling chat), M |
+| Group chat round-trip (IVS Chat) | Attendee → Presenter | `attendee group chat reaches the presenter` | U (signaling chat), M |
+| Direct chat | — | *gap — see below* | U (signaling chat) |
 | Live captions | — | *excluded* (needs real speech — see below) | U (signaling broadcastCaption) |
-| Moderation: mute/kick/ban/unban, promote/demote | — | *gap — see below* | U (signaling), M |
+| Moderation: ban + unban | Presenter | `presenter bans then unbans the attendee` | U (signaling), M |
+| Role change targeting (promote) | Presenter → Attendee | `promoting the attendee changes only their role` | — |
+| Moderation: mute/kick, restrict-chat | — | *gap — see below* | U (signaling), M |
 
 ### After the event
 
@@ -91,15 +94,35 @@ E2E, **S** = smoke.
 
 These are real requirements not yet exercised live — good next additions:
 
-1. **Chat round-trip** — send a group message as attendee, assert the
-   presenter receives it (and a direct message to the presenter only).
-2. **Moderation** — presenter mutes / grants-speak / kicks the attendee;
-   assert the attendee's client reflects it. Ban → unban via the Bans tab.
-3. **Promote to co-presenter** — attendee gains publish capability.
-4. **Multi-attendee** — a second signed-in attendee to exercise the
+1. **Direct chat** — a DM from attendee to presenter (presenter-only visibility).
+2. **Moderation: mute / kick / restrict-chat** — assert the attendee's
+   client reflects the action (mute stops their mic; kick disconnects).
+3. **Multi-attendee** — a second signed-in attendee to exercise the
    attendee list and broadcast fan-out at n>1.
-5. **Co-presenter publishing** — verify the strategy change that unblocked
-   `role==='co-presenter'` actually publishes.
+
+## Incomplete features found (NOT test gaps — product gaps)
+
+These are advertised capabilities that do not actually work end-to-end.
+The live suite documents them rather than asserting broken behavior:
+
+- **Co-presenter publishing** — a promoted co-presenter is granted publish
+  capability in the stage strategy, but (a) the frontend only shows the A/V
+  publish controls for `role === 'presenter'`, not co-presenter, and (b) no
+  publish-capable IVS token is ever re-issued to the promoted user (the
+  signaling Lambda lacks `ivs:CreateParticipantToken` and never mints one).
+  So "Promote to co-presenter" changes a role label and nothing else.
+- **Grant speak permission** — acknowledging a raised hand sends
+  `SPEAK_GRANTED`, which only shows a notification; the attendee gets no mic
+  control and no publish token, so they still cannot speak.
+
+Both need a backend change (mint + deliver a PUBLISH token to the target
+only) plus frontend work (rejoin the stage, show controls). Flagged as a
+follow-up task.
+
+Two related ROLE_CHANGED bugs were FIXED here and are guarded by the promote
+test above: (1) the handler read `msg.data.role` but the backend sends
+`newRole`, so role changes never applied at all; (2) it now also gates on
+the target `userId` so a broadcast role change can't affect every recipient.
 
 ## Bugs surfaced while building this suite
 
