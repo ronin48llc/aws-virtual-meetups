@@ -1,0 +1,15 @@
+{
+  "name": "virtual-meetup-live-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Persona-based end-to-end tests that run against the REAL deployed environment (presenter, signed-in attendee, anonymous viewer) across the event lifecycle. Distinct from test/e2e (mocked-local, CI-safe): this suite needs real IVS/Cognito/DynamoDB and disposable Cognito users, so it runs on demand, not in CI.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1050.0"
+  }
+}
