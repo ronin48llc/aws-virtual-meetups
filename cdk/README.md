@@ -1,6 +1,6 @@
 # Virtual Meetup Platform — CDK Deployment
 
-Serverless AWS application for hosting live meetup sessions with real-time streaming, interactive chat, Q&A, transcription, and post-event recording publication.
+Serverless AWS application for hosting live meetup sessions with real-time streaming, interactive chat, Q&A, live captions, and post-event recording publication.
 
 ## Prerequisites
 
@@ -16,24 +16,29 @@ cdk/
 ├── bin/
 │   └── app.js              # CDK app entry point — wires all stacks
 ├── lib/
+│   ├── dns-stack.js        # Route53 hosted zone + ACM certificate (us-east-1)
 │   ├── auth-stack.js       # Cognito User Pool, Identity Pool, Admin API
 │   ├── data-stack.js       # DynamoDB tables (main + connections)
+│   ├── streaming-stack.js  # S3 recording bucket, IVS composition role, chat-review Lambda
+│   ├── frontend-stack.js   # S3 + CloudFront SPA hosting, CLOUDFRONT WAF
+│   ├── email-stack.js      # SES identity, Email Sender Lambda, EventBridge Scheduler
 │   ├── api-stack.js        # HTTP API, WebSocket API, Lambda functions
-│   ├── streaming-stack.js  # S3 recording bucket, IVS composition role
-│   ├── transcription-stack.js  # Transcription Lambda (Transcribe + Translate)
-│   ├── frontend-stack.js   # S3 + CloudFront SPA hosting
 │   ├── publication-stack.js    # EventBridge + Publisher Lambda + GitHub Pages
-│   └── waf-construct.js    # Reusable WAF WebACL construct
+│   ├── observability-stack.js  # CloudWatch dashboard, alarms, SNS, IVS metrics
+│   ├── waf-construct.js    # Reusable WAF WebACL construct (used by Frontend)
+│   └── env-config.js       # Env-suffixed naming + prod RETAIN policy helpers
 ├── lambda/                 # Lambda function source code
 │   ├── admin-api/
+│   ├── anonymous-token/
 │   ├── chat-review/
 │   ├── event-crud/
+│   ├── email-sender/
+│   ├── ivs-metrics/
 │   ├── publisher/
 │   ├── session-manager/
 │   ├── shared/             # Shared utilities (validation, response, dynamo-utils)
 │   ├── signup/
 │   ├── token-generator/
-│   ├── transcription/
 │   └── websocket/
 ├── test/                   # Unit and property-based tests
 ├── cdk.json                # CDK configuration
@@ -42,26 +47,28 @@ cdk/
 
 ## Stack Dependency Order
 
-The stacks are deployed in the following order based on cross-stack references:
+Nine stacks; CDK resolves the deploy order from cross-stack references.
 
 ```
-Auth ─────┐
-           ├──→ API
-Data ─────┘
-Streaming ────→ Publication
-Transcription   (independent)
-Frontend        (independent)
+DNS ──┬──→ Streaming ─┐
+      ├──→ Frontend ──┼──→ Email ──→ API ──→ Publication
+Auth ─┤               │            │
+Data ─┴───────────────┴────────────┴──→ Observability
 ```
 
 | Stack | Description | Dependencies |
 |-------|-------------|--------------|
+| **DNS** | Route53 hosted zone + ACM certificate (pinned to us-east-1) | None |
 | **Auth** | Cognito User Pool, Identity Pool, Admin API Lambda | None |
 | **Data** | DynamoDB main table + WebSocket connections table | None |
-| **API** | HTTP API (REST), WebSocket API, all route Lambdas, WAF | Auth, Data |
-| **Streaming** | S3 recording bucket, IVS composition role | None |
-| **Transcription** | Transcription Lambda with Transcribe/Translate permissions | None |
-| **Frontend** | S3 bucket + CloudFront distribution for SPA, WAF | None |
-| **Publication** | EventBridge rule, Publisher Lambda, DLQ, GitHub token secret | Streaming |
+| **Streaming** | S3 recording bucket, IVS composition role, chat-review Lambda | DNS |
+| **Frontend** | S3 bucket + CloudFront distribution for SPA, CLOUDFRONT WAF | DNS |
+| **Email** | SES identity, Email Sender Lambda, EventBridge Scheduler | Data, Frontend, DNS |
+| **API** | HTTP API (REST), WebSocket API, all route Lambdas | Auth, Data, Email, DNS, Streaming |
+| **Publication** | EventBridge rule, Publisher Lambda, DLQ, GitHub token secret | Streaming, Email |
+| **Observability** | CloudWatch dashboard, alarms, SNS, IVS metrics | API, Data, Publication, Email |
+
+> The HTTP/WebSocket APIs are **not** fronted by a WAF — WAFv2 cannot associate with API Gateway v2 stages. They are protected by stage throttling, Cognito authorizers, and per-fingerprint rate limiting. The CLOUDFRONT-scope WAF protects the frontend distribution.
 
 ## Environment Setup
 
@@ -153,12 +160,14 @@ npx cdk synth VirtualMeetup-dev-Auth > auth-template.yaml
 After deployment, update the Secrets Manager secret with your GitHub personal access token:
 
 ```bash
+# The secret name is env-suffixed: VirtualMeetup-<env>/GitHubToken
+export GITHUB_PAT='ghp_your_actual_token_here'
 aws secretsmanager put-secret-value \
-  --secret-id VirtualMeetup/GitHubToken \
-  --secret-string '{"token":"ghp_your_actual_token_here"}'
+  --secret-id VirtualMeetup-dev/GitHubToken \
+  --secret-string "$(jq -n --arg t "$GITHUB_PAT" '{token:$t}')"
 ```
 
-The token needs `repo` scope for pushing to the GitHub Pages repository.
+The token needs `contents:write` scope on the GitHub Pages publication repository. See [../docs/RUNBOOK.md](../docs/RUNBOOK.md) §5 for rotation.
 
 ### Frontend Deployment
 
@@ -202,9 +211,10 @@ After deployment, key outputs are available via CloudFormation:
 | `VirtualMeetupHttpApiUrl` | API | HTTP API endpoint |
 | `VirtualMeetupWebSocketApiUrl` | API | WebSocket API endpoint |
 | `RecordingBucketName` | Streaming | S3 recording bucket name |
-| `TranscriptionFunctionArn` | Transcription | Transcription Lambda ARN |
 | `DistributionUrl` | Frontend | CloudFront URL |
 | `PublisherFunctionArn` | Publication | Publisher Lambda ARN |
+
+> Output export names are env-suffixed (e.g. `VirtualMeetupUserPoolId-dev`).
 
 ## Troubleshooting
 
@@ -223,4 +233,4 @@ CloudFront WAF WebACLs must be created in `us-east-1`. The Frontend stack handle
 Amazon IVS Real-Time is available in select regions. Ensure your deployment region supports IVS Real-Time stages. Recommended: `us-east-1`, `us-west-2`, `eu-west-1`.
 
 **Cognito Advanced Security**
-Advanced Security Mode (ENFORCED) requires the account to be opted in. If deployment fails on the Auth stack, verify your account supports Cognito Advanced Security features.
+The Auth stack enables Advanced Security in AUDIT mode (logs risk without blocking logins). If deployment fails on the Auth stack, verify your account supports Cognito Advanced Security features.

@@ -20,7 +20,6 @@ graph TB
     subgraph "API Layer"
         APIGW_HTTP[API Gateway HTTP API<br/>api.awsvirtualmeetups.com]
         APIGW_WS[API Gateway WebSocket<br/>ws.awsvirtualmeetups.com]
-        WAF_API[WAF WebACL<br/>REGIONAL scope]
     end
 
     subgraph "Authentication"
@@ -217,7 +216,8 @@ sequenceDiagram
     Presenter->>Session: POST /events/{id}/stop
     Session->>IVS: StopComposition
     Note over IVS,S3: Composition renders HLS segments
-    IVS->>S3: Upload master.m3u8 + .ts segments
+    IVS->>S3: Upload multivariant.m3u8 + .ts segments
+    Session->>S3: Write metadata.json (with playback URL)
     S3->>EB: Object Created (metadata.json)
     EB->>Pub: Trigger Publisher Lambda
     Pub->>S3: Read recording metadata

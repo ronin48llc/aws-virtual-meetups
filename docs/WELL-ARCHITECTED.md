@@ -8,7 +8,7 @@ Review of the Virtual Meetups Platform against the six pillars of the AWS Well-A
 
 ### Strengths
 
-- **Infrastructure as Code (CDK)** — All 10 stacks defined in AWS CDK with explicit dependency management, enabling repeatable deployments across environments (`dev`, `prod`)
+- **Infrastructure as Code (CDK)** — All 9 stacks defined in AWS CDK with explicit dependency management, enabling repeatable deployments across environments (`dev`, `prod`)
 - **Structured logging** — All Lambda functions use a shared logger module producing JSON-formatted logs with correlation IDs, action names, user context, and event IDs
 - **CloudWatch dashboard** — Single pane of glass covering API latency (p50/p95/p99), error rates, Lambda duration per function, DynamoDB capacity, WebSocket connections, and engagement metrics
 - **CloudWatch alarms** — Five alarms with SNS notification: API 5xx rate, Lambda errors, DynamoDB throttling, WebSocket failures, high Lambda duration (p99 > 5s)
