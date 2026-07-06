@@ -263,6 +263,20 @@ const LiveSession = (() => {
   }
 
   /**
+   * Remove any live-session modals/overlays that were appended to document.body.
+   * These live outside #app, so the router's innerHTML swap on navigation does
+   * not clear them. Without explicit teardown the full-screen device picker
+   * overlay lingers across hash navigation and intercepts pointer events on the
+   * next page (e.g. End Session → Manage Events leaves "Sign-ups" unclickable).
+   */
+  function removeBodyOverlays() {
+    ['device-picker-overlay'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.remove();
+    });
+  }
+
+  /**
    * Apply dark theme (Squid Ink) to the live session container.
    */
   function applyDarkTheme() {
@@ -2132,6 +2146,11 @@ const LiveSession = (() => {
       countdownInterval = null;
     }
 
+    // Tear down the device picker (and any other body-appended overlay) that
+    // may still be open when the session ends, so it can't block the ended
+    // state or the next page after navigating away.
+    removeBodyOverlays();
+
     // The session is over — remove the presenter controls and dashboard
     // outright. Leaving them rendered stranded the End Session button on
     // its disabled "Ending…" state forever.
@@ -2881,6 +2900,9 @@ const LiveSession = (() => {
    * Disconnect from stage, chat, and WebSocket.
    */
   function disconnect() {
+    // Tear down any body-appended overlays (e.g. the device picker) so they
+    // don't linger across navigation and block clicks on the next page.
+    removeBodyOverlays();
     // Stop transcription if active
     if (transcriptionActive) {
       stopTranscription();
