@@ -38,6 +38,32 @@ jest.mock('../../lambda/websocket/auth-check', () => ({
   checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
 }));
 
+// Promote / grant now mint a PUBLISH-capable IVS stage token via
+// CreateParticipantToken and deliver it to the target connection only. Mock
+// the IVS Real-Time client so the token is deterministic.
+const mockIvsSend = jest.fn().mockResolvedValue({
+  participantToken: { token: 'STAGE-TOKEN', participantId: 'pid-1', expirationTime: new Date('2099-01-01T00:00:00Z') },
+});
+jest.mock('@aws-sdk/client-ivs-realtime', () => ({
+  IVSRealTimeClient: jest.fn(() => ({ send: mockIvsSend })),
+  DisconnectParticipantCommand: jest.fn((params) => ({ type: 'DisconnectParticipant', params })),
+  CreateParticipantTokenCommand: jest.fn((params) => ({ type: 'CreateParticipantToken', params })),
+}));
+
+// IVS Chat client is constructed at module load; unused on these paths.
+jest.mock('@aws-sdk/client-ivschat', () => ({
+  IvschatClient: jest.fn(() => ({ send: jest.fn().mockResolvedValue({}) })),
+  DisconnectUserCommand: jest.fn((params) => ({ type: 'DisconnectUser', params })),
+}));
+
+// API Gateway Management API — sendToConnection delivers the token to the
+// promoted/granted connection only (never on the event-wide broadcast).
+const mockApiSend = jest.fn().mockResolvedValue({});
+jest.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
+  ApiGatewayManagementApiClient: jest.fn(() => ({ send: mockApiSend })),
+  PostToConnectionCommand: jest.fn((params) => ({ type: 'PostToConnection', params })),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
@@ -132,8 +158,11 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
   });
 
   describe('promoteUser', () => {
-    it('updates connection role to co-presenter and broadcasts ROLE_CHANGED', async () => {
-      mockSend.mockResolvedValueOnce({}); // UpdateCommand
+    it('promotes to co-presenter, mints a PUBLISH token, and delivers it to the target only', async () => {
+      mockSend.mockResolvedValueOnce({}); // UpdateCommand (role -> co-presenter)
+      // mintStageToken reads the event's stageArn + the target's fresh state.
+      mockSend.mockResolvedValueOnce({ Item: { stageArn: 'arn:aws:ivs:us-east-1:1:stage/s1' } }); // event metadata
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-attendee-1', userId: 'user_xyz', displayName: 'Ann', role: 'co-presenter' } }); // connection
 
       const event = buildEvent({
         action: 'promoteUser',
@@ -155,7 +184,16 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
         ExpressionAttributeValues: { ':role': 'co-presenter' },
       });
 
-      // Verify broadcast
+      // A PUBLISH+SUBSCRIBE token is minted for the target on the event stage.
+      const { CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
+      expect(CreateParticipantTokenCommand).toHaveBeenCalledWith(expect.objectContaining({
+        stageArn: 'arn:aws:ivs:us-east-1:1:stage/s1',
+        userId: 'user_xyz',
+        capabilities: ['PUBLISH', 'SUBSCRIBE'],
+      }));
+
+      // The event-wide label change EXCLUDES the target — the token must never
+      // ride the broadcast.
       expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123', {
         type: 'ROLE_CHANGED',
         eventId: 'evt_abc123',
@@ -164,6 +202,22 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
           userId: 'user_xyz',
           newRole: 'co-presenter',
         },
+      }, { excludeConnectionId: 'conn-attendee-1' });
+
+      // The token is delivered to the promoted connection alone.
+      const { PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      expect(PostToConnectionCommand).toHaveBeenCalledWith({
+        ConnectionId: 'conn-attendee-1',
+        Data: JSON.stringify({
+          type: 'ROLE_CHANGED',
+          eventId: 'evt_abc123',
+          data: {
+            connectionId: 'conn-attendee-1',
+            userId: 'user_xyz',
+            newRole: 'co-presenter',
+            stageToken: 'STAGE-TOKEN',
+          },
+        }),
       });
     });
 
@@ -216,8 +270,10 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
   });
 
   describe('demoteUser', () => {
-    it('reverts connection role to attendee, revokes speak permission, and broadcasts ROLE_CHANGED', async () => {
-      mockSend.mockResolvedValueOnce({}); // UpdateCommand
+    it('reverts to attendee, mints a SUBSCRIBE-only token, and delivers it to the target only', async () => {
+      mockSend.mockResolvedValueOnce({}); // UpdateCommand (role -> attendee, speak false)
+      mockSend.mockResolvedValueOnce({ Item: { stageArn: 'arn:aws:ivs:us-east-1:1:stage/s1' } }); // event metadata
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-copresenter-1', userId: 'user_abc', displayName: 'Bo', role: 'attendee', hasSpeakPermission: false } }); // connection
 
       const event = buildEvent({
         action: 'demoteUser',
@@ -239,7 +295,15 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
         ExpressionAttributeValues: { ':role': 'attendee', ':speak': false },
       });
 
-      // Verify broadcast
+      // The replacement token is SUBSCRIBE-only — the demoted user can no
+      // longer publish.
+      const { CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
+      expect(CreateParticipantTokenCommand).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user_abc',
+        capabilities: ['SUBSCRIBE'],
+      }));
+
+      // Verify broadcast excludes the target (token rides the targeted send).
       expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123', {
         type: 'ROLE_CHANGED',
         eventId: 'evt_abc123',
@@ -248,6 +312,21 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
           userId: 'user_abc',
           newRole: 'attendee',
         },
+      }, { excludeConnectionId: 'conn-copresenter-1' });
+
+      const { PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      expect(PostToConnectionCommand).toHaveBeenCalledWith({
+        ConnectionId: 'conn-copresenter-1',
+        Data: JSON.stringify({
+          type: 'ROLE_CHANGED',
+          eventId: 'evt_abc123',
+          data: {
+            connectionId: 'conn-copresenter-1',
+            userId: 'user_abc',
+            newRole: 'attendee',
+            stageToken: 'STAGE-TOKEN',
+          },
+        }),
       });
     });
 
@@ -300,8 +379,10 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
   });
 
   describe('grantSpeak', () => {
-    it('updates hasSpeakPermission to true and broadcasts SPEAK_PERMISSION_CHANGED', async () => {
-      mockSend.mockResolvedValueOnce({}); // UpdateCommand
+    it('grants speak, mints a PUBLISH token, and delivers it to the target only', async () => {
+      mockSend.mockResolvedValueOnce({}); // UpdateCommand (hasSpeakPermission true)
+      mockSend.mockResolvedValueOnce({ Item: { stageArn: 'arn:aws:ivs:us-east-1:1:stage/s1' } }); // event metadata
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-attendee-1', userId: 'user_xyz', displayName: 'Cy', role: 'attendee', hasSpeakPermission: true } }); // connection
 
       const event = buildEvent({
         action: 'grantSpeak',
@@ -323,7 +404,14 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
         ExpressionAttributeValues: { ':speak': true },
       });
 
-      // Verify broadcast
+      // A speak-granted attendee gets PUBLISH capability (role stays attendee).
+      const { CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
+      expect(CreateParticipantTokenCommand).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user_xyz',
+        capabilities: ['PUBLISH', 'SUBSCRIBE'],
+      }));
+
+      // Verify broadcast excludes the target.
       expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123', {
         type: 'SPEAK_PERMISSION_CHANGED',
         eventId: 'evt_abc123',
@@ -332,6 +420,21 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
           userId: 'user_xyz',
           hasSpeakPermission: true,
         },
+      }, { excludeConnectionId: 'conn-attendee-1' });
+
+      const { PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      expect(PostToConnectionCommand).toHaveBeenCalledWith({
+        ConnectionId: 'conn-attendee-1',
+        Data: JSON.stringify({
+          type: 'SPEAK_PERMISSION_CHANGED',
+          eventId: 'evt_abc123',
+          data: {
+            connectionId: 'conn-attendee-1',
+            userId: 'user_xyz',
+            hasSpeakPermission: true,
+            stageToken: 'STAGE-TOKEN',
+          },
+        }),
       });
     });
 
@@ -384,8 +487,10 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
   });
 
   describe('revokeSpeak', () => {
-    it('updates hasSpeakPermission to false and broadcasts SPEAK_PERMISSION_CHANGED', async () => {
-      mockSend.mockResolvedValueOnce({}); // UpdateCommand
+    it('revokes speak, mints a SUBSCRIBE-only token, and delivers it to the target only', async () => {
+      mockSend.mockResolvedValueOnce({}); // UpdateCommand (hasSpeakPermission false)
+      mockSend.mockResolvedValueOnce({ Item: { stageArn: 'arn:aws:ivs:us-east-1:1:stage/s1' } }); // event metadata
+      mockSend.mockResolvedValueOnce({ Item: { connectionId: 'conn-attendee-1', userId: 'user_xyz', displayName: 'Di', role: 'attendee', hasSpeakPermission: false } }); // connection
 
       const event = buildEvent({
         action: 'revokeSpeak',
@@ -407,7 +512,14 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
         ExpressionAttributeValues: { ':speak': false },
       });
 
-      // Verify broadcast
+      // The replacement token drops PUBLISH.
+      const { CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
+      expect(CreateParticipantTokenCommand).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user_xyz',
+        capabilities: ['SUBSCRIBE'],
+      }));
+
+      // Verify broadcast excludes the target.
       expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123', {
         type: 'SPEAK_PERMISSION_CHANGED',
         eventId: 'evt_abc123',
@@ -416,6 +528,21 @@ describe('WebSocket Signaling Handler — Role Management and Chat Control', () 
           userId: 'user_xyz',
           hasSpeakPermission: false,
         },
+      }, { excludeConnectionId: 'conn-attendee-1' });
+
+      const { PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      expect(PostToConnectionCommand).toHaveBeenCalledWith({
+        ConnectionId: 'conn-attendee-1',
+        Data: JSON.stringify({
+          type: 'SPEAK_PERMISSION_CHANGED',
+          eventId: 'evt_abc123',
+          data: {
+            connectionId: 'conn-attendee-1',
+            userId: 'user_xyz',
+            hasSpeakPermission: false,
+            stageToken: 'STAGE-TOKEN',
+          },
+        }),
       });
     });
 

@@ -58,6 +58,7 @@ E2E, **S** = smoke.
 | Live captions | — | *excluded* (needs real speech — see below) | U (signaling broadcastCaption) |
 | Moderation: ban + unban | Presenter | `presenter bans then unbans the attendee` | U (signaling), M |
 | Role change targeting (promote) | Presenter → Attendee | `promoting the attendee changes only their role` | — |
+| Co-presenter publishing (publish token + A/V controls) | Attendee → Presenter | `promoted co-presenter can actually publish audio and video` | U (signaling-roles token mint) |
 | Moderation: mute/kick, restrict-chat | — | *gap — see below* | U (signaling), M |
 
 ### After the event
@@ -100,29 +101,30 @@ These are real requirements not yet exercised live — good next additions:
 3. **Multi-attendee** — a second signed-in attendee to exercise the
    attendee list and broadcast fan-out at n>1.
 
-## Incomplete features found (NOT test gaps — product gaps)
+## Previously-incomplete features, now implemented
 
-These are advertised capabilities that do not actually work end-to-end.
-The live suite documents them rather than asserting broken behavior:
+These advertised capabilities did not work end-to-end and are now fixed and
+covered live:
 
-- **Co-presenter publishing** — a promoted co-presenter is granted publish
-  capability in the stage strategy, but (a) the frontend only shows the A/V
-  publish controls for `role === 'presenter'`, not co-presenter, and (b) no
-  publish-capable IVS token is ever re-issued to the promoted user (the
-  signaling Lambda lacks `ivs:CreateParticipantToken` and never mints one).
-  So "Promote to co-presenter" changes a role label and nothing else.
-- **Grant speak permission** — acknowledging a raised hand sends
-  `SPEAK_GRANTED`, which only shows a notification; the attendee gets no mic
-  control and no publish token, so they still cannot speak.
+- **Co-presenter publishing** — promotion now mints a PUBLISH-capable IVS
+  stage token in the signaling Lambda (granted `ivs:CreateParticipantToken`)
+  and delivers it to the promoted connection ONLY (never on the event-wide
+  broadcast). The frontend splits the A/V publish controls into their own
+  `#publish-controls` container shown for presenter OR co-presenter, and on a
+  self-targeted `ROLE_CHANGED` carrying a `stageToken` it leaves and rejoins
+  the stage with the new token. Demotion reverses it (SUBSCRIBE-only token,
+  controls hidden, local tracks stopped). Verified by `promoted co-presenter
+  can actually publish audio and video`.
+- **Grant speak permission** — acknowledging a raised hand (and the explicit
+  `grantSpeak` action) now mints a PUBLISH token the same way and delivers it
+  to the target via `SPEAK_PERMISSION_CHANGED`; the frontend shows the A/V
+  controls and rejoins with the publish token. `revokeSpeak` reverses it.
 
-Both need a backend change (mint + deliver a PUBLISH token to the target
-only) plus frontend work (rejoin the stage, show controls). Flagged as a
-follow-up task.
-
-Two related ROLE_CHANGED bugs were FIXED here and are guarded by the promote
-test above: (1) the handler read `msg.data.role` but the backend sends
-`newRole`, so role changes never applied at all; (2) it now also gates on
-the target `userId` so a broadcast role change can't affect every recipient.
+Two related ROLE_CHANGED bugs were FIXED earlier and are guarded by the
+promote test above: (1) the handler read `msg.data.role` but the backend
+sends `newRole`, so role changes never applied at all; (2) it now also gates
+on the target `userId` so a broadcast role change can't affect every
+recipient.
 
 ## Bugs surfaced while building this suite
 

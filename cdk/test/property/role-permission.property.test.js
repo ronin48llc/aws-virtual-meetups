@@ -42,6 +42,25 @@ jest.mock('../../lambda/websocket/auth-check', () => ({
   checkConnectionAuth: jest.fn().mockResolvedValue({ allowed: true, connection: null }),
 }));
 
+// promote/grant/demote/revoke now mint an IVS stage token and deliver it to
+// the target connection via API Gateway. Mock both clients so no iteration
+// touches the real AWS SDK (100 runs × real network would hang the suite).
+jest.mock('@aws-sdk/client-ivs-realtime', () => ({
+  IVSRealTimeClient: jest.fn(() => ({
+    send: jest.fn().mockResolvedValue({ participantToken: { token: 'STAGE-TOKEN' } }),
+  })),
+  DisconnectParticipantCommand: jest.fn((params) => ({ type: 'DisconnectParticipant', params })),
+  CreateParticipantTokenCommand: jest.fn((params) => ({ type: 'CreateParticipantToken', params })),
+}));
+jest.mock('@aws-sdk/client-ivschat', () => ({
+  IvschatClient: jest.fn(() => ({ send: jest.fn().mockResolvedValue({}) })),
+  DisconnectUserCommand: jest.fn((params) => ({ type: 'DisconnectUser', params })),
+}));
+jest.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
+  ApiGatewayManagementApiClient: jest.fn(() => ({ send: jest.fn().mockResolvedValue({}) })),
+  PostToConnectionCommand: jest.fn((params) => ({ type: 'PostToConnection', params })),
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
 process.env.CONNECTIONS_TABLE_NAME = 'TestConnectionsTable';
@@ -258,7 +277,8 @@ describe('Role and Permission Management Property Tests', () => {
             expect(updateCall.Key).toEqual({ connectionId: targetConnectionId });
             expect(updateCall.ExpressionAttributeValues[':speak']).toBe(shouldGrant);
 
-            // Verify broadcast notifies all participants of the permission change
+            // Verify the label change is broadcast to everyone EXCEPT the
+            // target (the target instead receives a token-bearing copy).
             expect(mockBroadcast).toHaveBeenCalledWith(eventId, {
               type: 'SPEAK_PERMISSION_CHANGED',
               eventId,
@@ -267,7 +287,7 @@ describe('Role and Permission Management Property Tests', () => {
                 userId,
                 hasSpeakPermission: shouldGrant,
               },
-            });
+            }, { excludeConnectionId: targetConnectionId });
 
             // Property: hasSpeakPermission=true means audio is transmitted (mic unmuted),
             // hasSpeakPermission=false means audio is NOT transmitted (mic muted).
