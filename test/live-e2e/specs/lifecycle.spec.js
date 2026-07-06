@@ -268,12 +268,11 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     await presenter.goToManage();
     const p = presenter.page;
     await p.waitForSelector(`[data-action="view-signups"][data-event-id="${shared.eventId}"]`, { timeout: 15000 });
-    // A device-picker modal from the just-ended live session can linger in
-    // the DOM across hash navigation and intercept pointer events on Manage.
-    // dispatchEvent reaches the document-level [data-action] delegation
-    // regardless (manage.js, like live-session.js, delegates on document).
+    // The live session tears down its body-appended device-picker overlay on
+    // disconnect (navigating away from /live), so nothing lingers over Manage —
+    // a normal click reaches the button.
     await p.locator(`[data-action="view-signups"][data-event-id="${shared.eventId}"]`)
-      .dispatchEvent('click');
+      .click();
 
     // Stats strip renders with the show-rate metrics.
     await p.waitForFunction(() => {
