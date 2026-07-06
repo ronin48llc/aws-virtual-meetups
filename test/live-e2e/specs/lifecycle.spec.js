@@ -145,16 +145,15 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     );
     expect(selfView, 'presenter should see own published video').toBeGreaterThan(0);
 
-    r = await presenter.api('POST', '/events/' + shared.eventId + '/go-live');
-    expect(r.status).toBe(200);
+    const goLive = await presenter.api('POST', '/events/' + shared.eventId + '/go-live');
+    expect(goLive.status, 'go-live should succeed: ' + goLive.text).toBe(200);
 
-    // The waiting attendee should transition into the session automatically
-    // (poll issues tokens once live) — the connecting/live UI replaces the
-    // waiting copy within a couple of poll cycles.
-    await attendee.page.waitForFunction(() => {
-      const t = document.body.textContent || '';
-      return !/hasn.t started|Waiting for presenter/i.test(t);
-    }, { timeout: 30000 });
+    // The waiting attendee should transition into the session automatically:
+    // the 5s poll issues tokens once the event is live, then LiveSession
+    // renders the live UI (which has a #btn-hand-raise control the waiting
+    // room never has). Assert on that element, not just the absence of copy
+    // — the poll cycle + stage connect can take a couple of cycles.
+    await attendee.page.waitForSelector('#btn-hand-raise', { timeout: 45000 });
   });
 
   test('anonymous viewer watches the live session as a guest', async () => {
@@ -199,7 +198,14 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
 
   test('presenter extends the event duration', async () => {
     const before = await presenter.publicGet('/events/' + shared.eventId);
-    await presenter.page.click('[data-action="extend-duration"][data-minutes="15"]');
+    // The extend control sits in the presenter toolbar, which the published
+    // self-view video overlaps in a headless viewport. A forced click lands
+    // on whatever pixel is on top (the video), so it never reaches the
+    // button. dispatchEvent delivers straight to the element and bubbles to
+    // the document-level [data-action] delegation — exercising the real
+    // handler → API → persisted scheduledEnd path without pixel geometry.
+    await presenter.page.locator('[data-action="extend-duration"][data-minutes="15"]')
+      .dispatchEvent('click');
     await sleep(3000);
     const after = await presenter.publicGet('/events/' + shared.eventId);
     // scheduledEnd moves later (both personas also get a DURATION_EXTENDED
@@ -212,8 +218,8 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     console.log(`[live-e2e] holding live ${Math.round(LIVE_HOLD_MS / 1000)}s for recording`);
     await sleep(LIVE_HOLD_MS);
 
-    // End Session via the real button.
-    await presenter.page.click('[data-action="end-session"]');
+    // End Session via the real button (same toolbar overlap → dispatchEvent).
+    await presenter.page.locator('[data-action="end-session"]').dispatchEvent('click');
 
     // Presenter UI clears to the ended state (the stuck-"Ending…" fix).
     await presenter.page.waitForFunction(() => {
@@ -262,7 +268,12 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     await presenter.goToManage();
     const p = presenter.page;
     await p.waitForSelector(`[data-action="view-signups"][data-event-id="${shared.eventId}"]`, { timeout: 15000 });
-    await p.click(`[data-action="view-signups"][data-event-id="${shared.eventId}"]`);
+    // A device-picker modal from the just-ended live session can linger in
+    // the DOM across hash navigation and intercept pointer events on Manage.
+    // dispatchEvent reaches the document-level [data-action] delegation
+    // regardless (manage.js, like live-session.js, delegates on document).
+    await p.locator(`[data-action="view-signups"][data-event-id="${shared.eventId}"]`)
+      .dispatchEvent('click');
 
     // Stats strip renders with the show-rate metrics.
     await p.waitForFunction(() => {

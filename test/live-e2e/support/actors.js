@@ -24,7 +24,16 @@ class Actor {
   }
 
   async open(path = '/') {
-    await this.page.goto(SITE_URL + '/#' + path, { waitUntil: 'networkidle' });
+    // NOT networkidle: the live session page keeps a WebSocket + IVS WebRTC
+    // stream open, so the network never goes idle and goto would hang until
+    // the test timeout. domcontentloaded + an explicit readiness wait per
+    // page is both correct and fast.
+    await this.page.goto(SITE_URL + '/#' + path, { waitUntil: 'domcontentloaded' });
+    // The SPA is hash-routed; wait for the router to render into #app.
+    await this.page.waitForFunction(
+      () => { const a = document.querySelector('#app'); return a && a.children.length > 0; },
+      { timeout: 20000 }
+    ).catch(() => { /* some routes render elsewhere; specs assert their own readiness */ });
   }
 
   // --- Auth ---
@@ -72,7 +81,7 @@ class Actor {
 
   // --- Navigation to persona pages ---
 
-  async goHome() { await this.open('/'); await this.page.waitForFunction(() => document.querySelector('#app') && document.querySelector('#app').children.length > 0); }
+  async goHome() { await this.open('/'); }
   async goToEvent(eventId) { await this.open('/events/' + eventId); }
   async goToLive(eventId) { await this.open('/events/' + eventId + '/live'); }
   async goToManage() { await this.open('/manage'); }

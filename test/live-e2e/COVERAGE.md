@@ -100,3 +100,13 @@ These are real requirements not yet exercised live — good next additions:
    attendee list and broadcast fan-out at n>1.
 5. **Co-presenter publishing** — verify the strategy change that unblocked
    `role==='co-presenter'` actually publishes.
+
+## Bugs surfaced while building this suite
+
+- **Lingering device-picker modal** — after a live session ends, the
+  `#device-picker-overlay` can remain in the DOM across hash navigation and
+  intercept pointer events on the next page (observed: End Session → back to
+  Manage → the Sign-ups button is unclickable by a real mouse). Low severity
+  (narrow path), but a real UX papercut. The suite works around it with
+  `dispatchEvent`; the fix is to remove the overlay on `LiveSession`
+  teardown / route change.

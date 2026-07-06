@@ -21,6 +21,10 @@ module.exports = defineConfig({
     baseURL: process.env.SITE_URL || 'https://awsvirtualmeetups.com',
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
+    // Cap navigations so a page that never reaches its wait condition fails
+    // in 30s instead of consuming the whole per-test budget.
+    navigationTimeout: 30000,
+    actionTimeout: 30000,
     // Fake media devices so the presenter can publish real webcam/mic
     // tracks to IVS without hardware — the only way to exercise the
     // record-to-S3 path headlessly.
