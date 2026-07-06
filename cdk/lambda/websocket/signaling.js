@@ -15,7 +15,7 @@ const crypto = require('crypto');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, DeleteCommand, QueryCommand, UpdateCommand, BatchWriteCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
-const { IVSRealTimeClient, DisconnectParticipantCommand } = require('@aws-sdk/client-ivs-realtime');
+const { IVSRealTimeClient, DisconnectParticipantCommand, CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
 const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
 const { broadcast, getConnectionsForEvent } = require('./broadcast');
 const { checkRateLimit } = require('./rate-limiter');
@@ -591,9 +591,129 @@ async function handleDismissQuestion(eventId, body, connectionId) {
   return { statusCode: 200, body: 'Question dismissed' };
 }
 
+// IVS Real-Time Stage participant token duration (minutes). Matches the
+// join/upgrade token-generator (max 720 = 12h).
+const STAGE_TOKEN_DURATION_MINUTES = 720;
+
+/**
+ * IVS Stage capabilities for a connection's authoritative state. Mirrors
+ * token-generator's determineStageCapabilities so a mid-session token issued
+ * here grants exactly what a fresh join would.
+ * - presenter / co-presenter: PUBLISH + SUBSCRIBE
+ * - attendee WITH speak permission: PUBLISH + SUBSCRIBE
+ * - everyone else: SUBSCRIBE only
+ *
+ * @param {string} role - The connection's session role.
+ * @param {boolean} hasSpeakPermission - Whether the attendee may speak.
+ * @returns {string[]}
+ */
+function stageCapabilitiesFor(role, hasSpeakPermission) {
+  if (role === SESSION_ROLE.PRESENTER || role === SESSION_ROLE.CO_PRESENTER) {
+    return ['PUBLISH', 'SUBSCRIBE'];
+  }
+  if (hasSpeakPermission === true) {
+    return ['PUBLISH', 'SUBSCRIBE'];
+  }
+  return ['SUBSCRIBE'];
+}
+
+/**
+ * Mint an IVS Real-Time Stage participant token for a target connection,
+ * scoped to that connection's CURRENT role + speak permission. Call this
+ * AFTER persisting the role/permission change so the token's capabilities
+ * match the new state.
+ *
+ * The token is a publish/subscribe credential and must be delivered ONLY to
+ * the target connection — never on the event-wide broadcast. Returns null
+ * (non-fatal) when the stage or connection can't be resolved or IVS rejects
+ * the request; callers still broadcast the label change so the UI stays
+ * correct even when a token can't be issued.
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {string} targetConnectionId - The connection to mint a token for.
+ * @returns {Promise<string|null>} The participant token, or null on failure.
+ */
+async function mintStageToken(eventId, targetConnectionId) {
+  try {
+    const [eventRes, connRes] = await Promise.all([
+      docClient.send(new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: buildEventPK(eventId), SK: SK.METADATA },
+      })),
+      docClient.send(new GetCommand({
+        TableName: CONNECTIONS_TABLE_NAME,
+        Key: { connectionId: targetConnectionId },
+        // Strongly consistent: this Get runs immediately after the role/speak
+        // UpdateCommand, and the token's capabilities are derived from that
+        // fresh state. An eventually-consistent read could see the old role
+        // and mint a SUBSCRIBE-only token for a just-promoted co-presenter.
+        ConsistentRead: true,
+      })),
+    ]);
+
+    const stageArn = eventRes.Item && eventRes.Item.stageArn;
+    const conn = connRes.Item;
+    if (!stageArn || !conn || !conn.userId) {
+      console.error('Cannot mint stage token — missing stageArn or connection', {
+        eventId, targetConnectionId, hasStageArn: Boolean(stageArn), hasConn: Boolean(conn),
+      });
+      return null;
+    }
+
+    const capabilities = stageCapabilitiesFor(conn.role, conn.hasSpeakPermission);
+    const result = await ivsRealTimeClient.send(new CreateParticipantTokenCommand({
+      stageArn,
+      userId: conn.userId,
+      capabilities,
+      duration: STAGE_TOKEN_DURATION_MINUTES,
+      attributes: {
+        displayName: conn.displayName || '',
+        role: conn.role || SESSION_ROLE.ATTENDEE,
+      },
+    }));
+
+    return (result.participantToken && result.participantToken.token) || null;
+  } catch (err) {
+    console.error('Failed to mint stage token', { eventId, targetConnectionId, error: err.message });
+    return null;
+  }
+}
+
+/**
+ * Broadcast a role/permission-change message event-wide WITHOUT the stage
+ * token (so every client updates its roster label), then deliver a
+ * token-bearing copy to the target connection only. The stage token is a
+ * credential and must never ride the event-wide broadcast.
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {string} targetConnectionId - The connection the change targets.
+ * @param {Object} message - The base message (type + eventId + data).
+ * @param {string|null} stageToken - The publish/subscribe token, or null.
+ * @returns {Promise<void>}
+ */
+async function broadcastChangeWithToken(eventId, targetConnectionId, message, stageToken) {
+  // Roster labels for everyone except the target (it gets the token copy).
+  await broadcast(eventId, message, { excludeConnectionId: targetConnectionId });
+
+  // Targeted, token-bearing delivery so the promoted/granted user can leave
+  // and rejoin the stage with the new capabilities.
+  try {
+    await sendToConnection(targetConnectionId, {
+      ...message,
+      data: { ...message.data, stageToken: stageToken || null },
+    });
+  } catch (err) {
+    console.error('Failed to deliver stage token to target connection', {
+      eventId, targetConnectionId, error: err.message,
+    });
+  }
+}
+
 /**
  * Handle promoteUser action.
- * Updates the connection role to co-presenter and broadcasts ROLE_CHANGED.
+ * Promotes the connection to co-presenter, mints a PUBLISH-capable stage
+ * token, and delivers it to the target only while broadcasting the label
+ * change event-wide.
  *
  * @param {string} eventId - The event identifier.
  * @param {Object} body - The parsed message body.
@@ -616,7 +736,12 @@ async function handlePromoteUser(eventId, body, connectionId) {
     ExpressionAttributeValues: { ':role': SESSION_ROLE.CO_PRESENTER },
   }));
 
-  await broadcast(eventId, {
+  // Mint a PUBLISH token from the now-updated connection state and deliver it
+  // to the target only. Without this the promoted user keeps a SUBSCRIBE-only
+  // token and IVS rejects any publish attempt.
+  const stageToken = await mintStageToken(eventId, targetConnectionId);
+
+  await broadcastChangeWithToken(eventId, targetConnectionId, {
     type: 'ROLE_CHANGED',
     eventId,
     data: {
@@ -624,9 +749,9 @@ async function handlePromoteUser(eventId, body, connectionId) {
       userId,
       newRole: SESSION_ROLE.CO_PRESENTER,
     },
-  });
+  }, stageToken);
 
-  console.info('User promoted to co-presenter', { eventId, targetConnectionId, userId });
+  console.info('User promoted to co-presenter', { eventId, targetConnectionId, userId, tokenIssued: Boolean(stageToken) });
   return { statusCode: 200, body: 'User promoted' };
 }
 
@@ -655,7 +780,12 @@ async function handleDemoteUser(eventId, body, connectionId) {
     ExpressionAttributeValues: { ':role': SESSION_ROLE.ATTENDEE, ':speak': false },
   }));
 
-  await broadcast(eventId, {
+  // Mint a fresh SUBSCRIBE-only token so the demoted user rejoins without
+  // publish capability — their old co-presenter token stays PUBLISH-capable
+  // until it's replaced.
+  const stageToken = await mintStageToken(eventId, targetConnectionId);
+
+  await broadcastChangeWithToken(eventId, targetConnectionId, {
     type: 'ROLE_CHANGED',
     eventId,
     data: {
@@ -663,9 +793,9 @@ async function handleDemoteUser(eventId, body, connectionId) {
       userId,
       newRole: SESSION_ROLE.ATTENDEE,
     },
-  });
+  }, stageToken);
 
-  console.info('User demoted to attendee', { eventId, targetConnectionId, userId });
+  console.info('User demoted to attendee', { eventId, targetConnectionId, userId, tokenIssued: Boolean(stageToken) });
   return { statusCode: 200, body: 'User demoted' };
 }
 
@@ -694,7 +824,11 @@ async function handleGrantSpeak(eventId, body, connectionId) {
     ExpressionAttributeValues: { ':speak': true },
   }));
 
-  await broadcast(eventId, {
+  // Speak permission grants PUBLISH capability — mint the token and deliver
+  // it to the target so they can actually turn on their mic.
+  const stageToken = await mintStageToken(eventId, targetConnectionId);
+
+  await broadcastChangeWithToken(eventId, targetConnectionId, {
     type: 'SPEAK_PERMISSION_CHANGED',
     eventId,
     data: {
@@ -702,9 +836,9 @@ async function handleGrantSpeak(eventId, body, connectionId) {
       userId,
       hasSpeakPermission: true,
     },
-  });
+  }, stageToken);
 
-  console.info('Speak permission granted', { eventId, targetConnectionId, userId });
+  console.info('Speak permission granted', { eventId, targetConnectionId, userId, tokenIssued: Boolean(stageToken) });
   return { statusCode: 200, body: 'Speak permission granted' };
 }
 
@@ -733,7 +867,11 @@ async function handleRevokeSpeak(eventId, body, connectionId) {
     ExpressionAttributeValues: { ':speak': false },
   }));
 
-  await broadcast(eventId, {
+  // Mint a fresh token reflecting the revoked state (SUBSCRIBE-only for a
+  // plain attendee) so the user rejoins without publish capability.
+  const stageToken = await mintStageToken(eventId, targetConnectionId);
+
+  await broadcastChangeWithToken(eventId, targetConnectionId, {
     type: 'SPEAK_PERMISSION_CHANGED',
     eventId,
     data: {
@@ -741,9 +879,9 @@ async function handleRevokeSpeak(eventId, body, connectionId) {
       userId,
       hasSpeakPermission: false,
     },
-  });
+  }, stageToken);
 
-  console.info('Speak permission revoked', { eventId, targetConnectionId, userId });
+  console.info('Speak permission revoked', { eventId, targetConnectionId, userId, tokenIssued: Boolean(stageToken) });
   return { statusCode: 200, body: 'Speak permission revoked' };
 }
 
@@ -834,7 +972,10 @@ async function handleSendGroupMessage(eventId, body, connectionId) {
     return { statusCode: 403, body: 'Connection not found' };
   }
   const userId = senderConn.Item.userId;
-  const displayName = senderConn.Item.displayName || senderConn.Item.email || userId || 'Unknown';
+  // Never fall back to email — the sender name is broadcast to every
+  // participant. connect.js always stores a non-empty displayName; userId
+  // (a Cognito sub) is the safe non-PII fallback.
+  const displayName = senderConn.Item.displayName || userId || 'Unknown';
 
   if (senderConn.Item?.chatRestricted) {
     await sendToConnection(connectionId, {
@@ -919,7 +1060,8 @@ async function handleSendDirectMessage(eventId, body, connectionId) {
     return { statusCode: 403, body: 'Connection not found' };
   }
   const userId = senderConn.Item.userId;
-  const senderDisplayName = senderConn.Item.displayName || senderConn.Item.email || userId || 'Unknown';
+  // Never fall back to email (broadcast to all participants).
+  const senderDisplayName = senderConn.Item.displayName || userId || 'Unknown';
 
   const timestamp = new Date().toISOString();
 
@@ -1535,9 +1677,12 @@ async function handleAcknowledgeHand(eventId, body, connectionId) {
     data: { userId, timestamp },
   });
 
-  // Broadcast speak permission change
+  // Grant speak permission with a PUBLISH token delivered to the acknowledged
+  // user only — acknowledging a raised hand is the "Grant speak permission"
+  // path, so it must actually hand them a mic-capable token.
   if (userConn) {
-    await broadcast(eventId, {
+    const stageToken = await mintStageToken(eventId, userConn.connectionId);
+    await broadcastChangeWithToken(eventId, userConn.connectionId, {
       type: 'SPEAK_PERMISSION_CHANGED',
       eventId,
       data: {
@@ -1545,7 +1690,7 @@ async function handleAcknowledgeHand(eventId, body, connectionId) {
         userId,
         hasSpeakPermission: true,
       },
-    });
+    }, stageToken);
   }
 
   console.info('Hand acknowledged', { eventId, userId, timestamp });
@@ -1818,7 +1963,7 @@ async function handleTyping(eventId, body, connectionId) {
         TableName: CONNECTIONS_TABLE_NAME,
         Key: { connectionId },
       }));
-      senderDisplayName = senderDisplayName || senderConn.Item?.displayName || senderConn.Item?.email || 'Someone';
+      senderDisplayName = senderDisplayName || senderConn.Item?.displayName || 'Someone';
       senderUserId = senderUserId || senderConn.Item?.userId || '';
     } catch (e) {
       senderDisplayName = senderDisplayName || 'Someone';
