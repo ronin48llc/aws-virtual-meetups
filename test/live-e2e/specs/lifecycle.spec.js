@@ -156,6 +156,38 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     await attendee.page.waitForSelector('#btn-hand-raise', { timeout: 45000 });
   });
 
+  test('screen share composites with the webcam into the published stream', async () => {
+    const p = presenter.page;
+    // Webcam already on from go-live. Start screen share (headless chromium
+    // auto-approves via --auto-select-desktop-capture-source).
+    await p.evaluate(async () => { await LiveSession.toggleScreenShare(); });
+    await sleep(3000);
+
+    // Both sources live → the published video is the 1280x720 composite
+    // canvas (screen full-frame + webcam PiP), NOT one source on top of the
+    // other. The self-view plays the published track, so its dimensions
+    // prove what attendees and the RECORDING receive.
+    const mode = await p.evaluate(() => LiveSession.getPublishVideoMode());
+    expect(mode).toBe('composite');
+    await p.waitForFunction(() => {
+      // Any container video at the composite resolution (the self-view);
+      // the device-picker preview element also lives here at camera size.
+      const vids = Array.from(document.querySelectorAll('#stage-video-container video'));
+      return vids.some((v) => v.videoWidth === 1280 && v.videoHeight === 720);
+    }, { timeout: 15000 });
+
+    // The self-view is a labeled PROGRAM monitor (what attendees see).
+    await p.waitForSelector('#program-badge', { timeout: 10000 });
+
+    // Stop sharing → back to camera-only, publish still healthy.
+    await p.evaluate(async () => { await LiveSession.toggleScreenShare(); });
+    await sleep(2000);
+    expect(await p.evaluate(() => LiveSession.getPublishVideoMode())).toBe('camera');
+    expect(await p.evaluate(() =>
+      document.querySelectorAll('#stage-video-container video').length
+    )).toBeGreaterThan(0);
+  });
+
   test('anonymous viewer watches the live session as a guest', async () => {
     await anon.goToLive(shared.eventId);
     // Anonymous live view initializes (fingerprint → join-anonymous →

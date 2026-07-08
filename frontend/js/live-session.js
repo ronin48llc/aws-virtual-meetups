@@ -644,19 +644,26 @@ const LiveSession = (() => {
       const { Stage, LocalStageStream, SubscribeType, StageEvents, Strategy } = window.IVSBroadcastClient;
 
       stageStrategy = {
-        // IVS Real-Time rejects the publish outright if the strategy returns
-        // more than ONE video or ONE audio stream ("stageStreamsToPublish
-        // strategy function returned more than 1 video or audio stream").
-        // Video: screen share wins over the camera — the camera keeps
-        // capturing and resumes publishing the moment the share ends.
+        // IVS Real-Time allows exactly ONE video + ONE audio stream per
+        // participant. Video comes from the local COMPOSITOR: screen and
+        // webcam are drawn onto a single canvas (screen full-frame, webcam
+        // picture-in-picture) and the canvas track is published — so
+        // attendees and the recording get both at once, and the published
+        // track's identity never changes while any source is live.
         // Audio: mic and device audio are mixed into a single WebAudio
         // track when both are enabled.
+        //
+        // LocalStageStream wrappers are cached per track: the SDK diffs
+        // published streams by identity, so returning a FRESH wrapper for
+        // the same track on every strategy call defeats the diff (this is
+        // why swapping to screen share previously never reached attendees
+        // or the recording).
         stageStreamsToPublish: function() {
           const streams = [];
-          const videoTrack = localStreams.screen || localStreams.camera;
+          const videoTrack = getPublishVideoTrack();
           const audioTrack = getPublishAudioTrack();
-          if (videoTrack) streams.push(new LocalStageStream(videoTrack));
-          if (audioTrack) streams.push(new LocalStageStream(audioTrack));
+          if (videoTrack) streams.push(wrapStageStream(videoTrack, LocalStageStream));
+          if (audioTrack) streams.push(wrapStageStream(audioTrack, LocalStageStream));
           return streams;
         },
         shouldPublishParticipant: function() {
@@ -692,7 +699,18 @@ const LiveSession = (() => {
       });
 
       stage.on(StageEvents.STAGE_PARTICIPANT_STREAMS_REMOVED, function(participant, streams) {
-        removeParticipantVideo(participant.id);
+        // Remove ONLY the element whose stream kind was removed. Removing
+        // both blindly broke the self-view: starting screen share swaps the
+        // published AUDIO stream (mic → mic+device mix) while the video
+        // stream (compositor canvas) keeps its identity — so the audio-only
+        // removal must not tear down the video element, which would never
+        // be recreated (the matching STREAMS_ADDED carries no video).
+        streams.forEach(function(stream) {
+          var el = document.getElementById(
+            stream.mediaStreamTrack.kind + '-' + participant.id
+          );
+          if (el) el.remove();
+        });
       });
 
       await stage.join();
@@ -721,7 +739,17 @@ const LiveSession = (() => {
           // Mute local video to prevent echo
           if (participant.isLocal) {
             videoEl.muted = true;
-            videoEl.style.cssText = 'width: 100%; height: 100%; object-fit: contain; position: absolute; top: 0; left: 0; transform: scaleX(-1);';
+            // NOT mirrored: this element plays the PUBLISHED (composited)
+            // track, i.e. the program feed. Mirroring would render shared
+            // screen text backwards; program monitors show the true output.
+            videoEl.style.cssText = 'width: 100%; height: 100%; object-fit: contain; position: absolute; top: 0; left: 0;';
+            if (!document.getElementById('program-badge')) {
+              var badge = document.createElement('div');
+              badge.id = 'program-badge';
+              badge.textContent = 'PROGRAM — attendees see this';
+              badge.style.cssText = 'position: absolute; top: 8px; left: 8px; z-index: 5; background: rgba(230,57,70,0.9); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 3px; letter-spacing: 0.5px;';
+              container.appendChild(badge);
+            }
           } else {
             videoEl.style.cssText = 'width: 100%; height: 100%; object-fit: contain; position: absolute; top: 0; left: 0;';
           }
@@ -783,14 +811,9 @@ const LiveSession = (() => {
       isScreenSharing = true;
       updateControlButton('btn-screen-share', '🖥️ Stop Share', true);
       refreshStagePublish();
-      // Render screen share preview
-      renderScreenSharePreview();
 
-      // IVS allows one video stream: while sharing, the camera keeps
-      // capturing but attendees see the screen. Tell the presenter so the
-      // "my face disappeared" moment isn't a surprise.
       if (localStreams.camera) {
-        showNotification('Screen share is now the published video — your webcam resumes when sharing stops.');
+        showNotification('Screen + webcam are composited — attendees see your screen with your camera picture-in-picture.');
       }
 
       // Handle user stopping share via browser UI
@@ -816,7 +839,6 @@ const LiveSession = (() => {
     isScreenSharing = false;
     updateControlButton('btn-screen-share', '🖥️ Screen Share', false);
     refreshStagePublish();
-    removeScreenSharePreview();
   }
 
   /**
@@ -983,39 +1005,121 @@ const LiveSession = (() => {
     }
   }
 
-  /**
-   * Render screen share preview for the presenter.
-   */
-  function renderScreenSharePreview() {
-    var container = document.getElementById('stage-video-container');
-    if (!container) return;
 
-    var videoEl = document.getElementById('video-screen-preview');
-    if (!videoEl) {
-      videoEl = document.createElement('video');
-      videoEl.id = 'video-screen-preview';
-      videoEl.autoplay = true;
-      videoEl.playsInline = true;
-      videoEl.muted = true;
-      videoEl.style.cssText = 'width: 100%; height: 100%; object-fit: contain; position: absolute; top: 0; left: 0;';
-      container.appendChild(videoEl);
-    }
+  // --- Video compositor -------------------------------------------------
+  // IVS allows ONE video stream per participant, so screen + webcam are
+  // composited locally: screen full-frame (aspect-fit letterboxed — an
+  // ultrawide monitor or unusual webcam ratio letterboxes instead of
+  // stretching or cropping) with the webcam picture-in-picture bottom-right.
+  // The canvas track is what gets published AND recorded, so the presenter's
+  // self-view of it is a true PROGRAM monitor: exactly what attendees see.
+  let compositor = null;
+  const COMPOSITE_W = 1280;
+  const COMPOSITE_H = 720;
 
-    if (localStreams.screen) {
-      var mediaStream = new MediaStream([localStreams.screen]);
-      videoEl.srcObject = mediaStream;
+  // LocalStageStream cache — the SDK diffs published streams by identity.
+  var stageStreamCache = new Map();
+  function wrapStageStream(track, LocalStageStreamCtor) {
+    if (!stageStreamCache.has(track)) {
+      stageStreamCache.set(track, new LocalStageStreamCtor(track));
     }
+    return stageStreamCache.get(track);
+  }
+
+  function drawFitted(ctx, video, dx, dy, dw, dh) {
+    var vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    var scale = Math.min(dw / vw, dh / vh); // aspect-fit: letterbox, never crop
+    var w = vw * scale, h = vh * scale;
+    ctx.drawImage(video, dx + (dw - w) / 2, dy + (dh - h) / 2, w, h);
+  }
+
+  function hiddenVideoFor(track) {
+    var v = document.createElement('video');
+    v.autoplay = true;
+    v.playsInline = true;
+    v.muted = true;
+    v.srcObject = new MediaStream([track]);
+    if (v.play) { v.play().catch(function() {}); }
+    return v;
+  }
+
+  function ensureCompositor() {
+    if (compositor) return compositor;
+    var canvas = document.createElement('canvas');
+    canvas.width = COMPOSITE_W;
+    canvas.height = COMPOSITE_H;
+    if (!canvas.captureStream) return null; // very old browser — see fallback
+    var ctx = canvas.getContext('2d');
+    var stream = canvas.captureStream(30);
+    compositor = {
+      canvas: canvas, ctx: ctx, stream: stream,
+      track: stream.getVideoTracks()[0],
+      raf: null, screenVideo: null, cameraVideo: null,
+      screenTrack: null, cameraTrack: null,
+    };
+    var render = function() {
+      var c = compositor;
+      if (!c) return;
+      if (c.screenTrack !== localStreams.screen) {
+        c.screenTrack = localStreams.screen;
+        c.screenVideo = c.screenTrack ? hiddenVideoFor(c.screenTrack) : null;
+      }
+      if (c.cameraTrack !== localStreams.camera) {
+        c.cameraTrack = localStreams.camera;
+        c.cameraVideo = c.cameraTrack ? hiddenVideoFor(c.cameraTrack) : null;
+      }
+      c.ctx.fillStyle = '#000';
+      c.ctx.fillRect(0, 0, COMPOSITE_W, COMPOSITE_H);
+      if (c.screenVideo && c.cameraVideo) {
+        drawFitted(c.ctx, c.screenVideo, 0, 0, COMPOSITE_W, COMPOSITE_H);
+        var pipW = Math.round(COMPOSITE_W * 0.25);
+        var pipH = Math.round(COMPOSITE_H * 0.25);
+        var pipX = COMPOSITE_W - pipW - 16;
+        var pipY = COMPOSITE_H - pipH - 16;
+        c.ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        c.ctx.fillRect(pipX - 2, pipY - 2, pipW + 4, pipH + 4);
+        drawFitted(c.ctx, c.cameraVideo, pipX, pipY, pipW, pipH);
+      } else if (c.screenVideo) {
+        drawFitted(c.ctx, c.screenVideo, 0, 0, COMPOSITE_W, COMPOSITE_H);
+      } else if (c.cameraVideo) {
+        drawFitted(c.ctx, c.cameraVideo, 0, 0, COMPOSITE_W, COMPOSITE_H);
+      }
+      c.raf = requestAnimationFrame(render);
+    };
+    compositor.raf = requestAnimationFrame(render);
+    return compositor;
+  }
+
+  function teardownCompositor() {
+    if (!compositor) return;
+    if (compositor.raf) cancelAnimationFrame(compositor.raf);
+    try { compositor.track.stop(); } catch (e) {}
+    stageStreamCache.delete(compositor.track);
+    compositor = null;
   }
 
   /**
-   * Remove screen share preview.
+   * The single video track to publish: the compositor canvas while any
+   * video source is live; null when none. Fallback for browsers without
+   * canvas.captureStream: screen over camera directly.
    */
-  function removeScreenSharePreview() {
-    var videoEl = document.getElementById('video-screen-preview');
-    if (videoEl) {
-      videoEl.srcObject = null;
-      videoEl.remove();
+  function getPublishVideoTrack() {
+    if (!localStreams.screen && !localStreams.camera) {
+      teardownCompositor();
+      return null;
     }
+    var c = ensureCompositor();
+    if (!c) return localStreams.screen || localStreams.camera;
+    return c.track;
+  }
+
+  /** What the published video currently contains — for UI/tests. */
+  function getPublishVideoMode() {
+    if (localStreams.screen && localStreams.camera) return 'composite';
+    if (localStreams.screen) return 'screen';
+    if (localStreams.camera) return 'camera';
+    return 'none';
   }
 
   // WebAudio mixer state for combining mic + device audio into the single
@@ -1418,11 +1522,15 @@ const LiveSession = (() => {
       msgDiv.style.display = 'none';
     }
     var prefix = type === 'direct' ? '[DM] ' : '';
+    // Autoscroll ONLY when the reader is already at (near) the bottom —
+    // yanking the pane down while someone is scrolled up reading history is
+    // the "distracting scrolling" complaint. Measured BEFORE the append.
+    var nearBottom = (messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight) < 80;
     msgDiv.innerHTML = '<span style="color: ' + AWS_ORANGE + '; font-weight: 600;">' + prefix + escapeHtml(sender) + '</span>: ' + linkifyText(text);
     messagesEl.appendChild(msgDiv);
     // Use requestAnimationFrame so the DOM has updated before measuring scrollHeight
     requestAnimationFrame(function() {
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
     });
 
     // Notification sound for messages not from self (Fix #2)
@@ -1446,9 +1554,10 @@ const LiveSession = (() => {
 
     var msgDiv = document.createElement('div');
     msgDiv.style.cssText = 'margin-bottom: 8px; color: #8b949e; font-style: italic; font-size: 12px;';
+    var nearBottom = (messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight) < 80;
     msgDiv.textContent = text;
     messagesEl.appendChild(msgDiv);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   /**
@@ -1737,6 +1846,10 @@ const LiveSession = (() => {
   function renderDashboardAttendees() {
     var panel = document.getElementById('dashboard-panel-attendees');
     if (!panel) return;
+    // Join/leave churn re-renders this list; preserve the scroll position
+    // of the surrounding pane so the re-render doesn't yank it around.
+    var scrollHost = document.getElementById('dashboard-content');
+    var savedScroll = scrollHost ? scrollHost.scrollTop : 0;
 
     var totalCount = dashboardAttendees.length + dashboardAnonymousAttendees.length;
     var countEl = document.getElementById('dashboard-count-attendees');
@@ -1809,6 +1922,7 @@ const LiveSession = (() => {
     }
 
     panel.innerHTML = html;
+    if (scrollHost) scrollHost.scrollTop = savedScroll;
 
     // Attach hover event listeners to registered user entries for profile popover
     var registeredEntries = panel.querySelectorAll('.registered-attendee-entry[data-user-id]');
@@ -3030,6 +3144,7 @@ const LiveSession = (() => {
     }
     scheduledEnd = null;
     teardownAudioMixer();
+    teardownCompositor();
     // Stop all local streams
     Object.keys(localStreams).forEach(function(key) {
       if (localStreams[key]) {
@@ -3062,6 +3177,8 @@ const LiveSession = (() => {
     setCaptionLanguage: setCaptionLanguage,
     switchDashboardTab: switchDashboardTab,
     getRole: function() { return userRole; },
+    getPublishVideoMode: getPublishVideoMode,
+    appendChatMessage: appendChatMessage,
     acknowledgeHand: acknowledgeHand,
     dismissHand: dismissHand,
     answerQuestion: answerQuestion,
