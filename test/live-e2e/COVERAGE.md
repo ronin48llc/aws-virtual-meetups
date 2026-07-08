@@ -43,6 +43,9 @@ E2E, **S** = smoke.
 | Green room / staging start | Presenter | `attendee in the waiting room auto-joins…` (start) | U (session-manager) |
 | Waiting room + auto-join on go-live | Attendee | `attendee in the waiting room auto-joins…` | — |
 | Publish webcam + mic to IVS stage | Presenter | same (self-view assertion) | — |
+| Screen + webcam composited into ONE published stream (1280x720 canvas, PiP, letterboxed) | Presenter | `screen share composites with the webcam` | — |
+| PROGRAM self-view (presenter sees the true published feed, labeled) | Presenter | same (`#program-badge`) | — |
+| Chat autoscroll only when reader is at bottom | — | — | frontend unit (chat-autoscroll) |
 | Composition starts / records to S3 | Presenter | proven by the *after* recording step | U (session-manager), verified live 2026-07-05 |
 | Go Live transition | Presenter | `…auto-joins when the presenter goes live` | U |
 | Anonymous live viewing | Anonymous | `anonymous viewer watches the live session` | U (anonymous-token), U (connect anon validation) |
@@ -128,6 +131,17 @@ recipient.
 
 ## Bugs surfaced while building this suite
 
+- **Kind-blind stream removal killed the self-view** (caught by the
+  composite test on its first run). Starting screen share swaps the
+  published AUDIO stream (mic → mic+device-audio mix) while the video
+  stream — the compositor canvas — keeps its identity. The
+  `STAGE_PARTICIPANT_STREAMS_REMOVED` handler removed BOTH the video and
+  audio elements for the participant regardless of which kind was removed,
+  so the audio swap deleted the presenter's self-view video, and nothing
+  recreated it (the matching `STREAMS_ADDED` carries no video stream). The
+  same defect would have blanked a remote co-presenter's video for every
+  viewer whenever their audio stream changed. Fixed by removing only the
+  element matching each removed stream's kind.
 - **Lingering device-picker modal** — after a live session ends, the
   `#device-picker-overlay` can remain in the DOM across hash navigation and
   intercept pointer events on the next page (observed: End Session → back to

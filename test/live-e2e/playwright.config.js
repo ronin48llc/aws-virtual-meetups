@@ -31,6 +31,9 @@ module.exports = defineConfig({
     launchOptions: {
       args: [
         '--use-fake-ui-for-media-stream',
+        // Auto-approve getDisplayMedia so screen-share compositing is testable
+        // headlessly (no picker UI exists in headless chromium).
+        '--auto-select-desktop-capture-source=Entire screen',
         '--use-fake-device-for-media-stream',
         '--autoplay-policy=no-user-gesture-required',
       ],
