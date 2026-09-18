@@ -65,7 +65,10 @@ E2E, **S** = smoke.
 | Moderation: ban + unban | Presenter | `presenter bans then unbans the attendee` | U (signaling), M |
 | Role change targeting (promote) | Presenter → Attendee | `promoting the attendee changes only their role` | — |
 | Co-presenter publishing (publish token + A/V controls) | Attendee → Presenter | `promoted co-presenter can actually publish audio and video` | U (signaling-roles token mint) |
-| Moderation: mute/kick, restrict-chat | — | *gap — see below* | U (signaling), M |
+| Moderation: restrict questions (targeted QUESTIONS_RESTRICTED ack + server-side submit rejection; per-connection flag, cleared by rejoin) | Presenter → Attendee | `presenter restricts questions, global-mutes audio, and sends a group announcement` | U (signaling), frontend unit (presenter-moderation) |
+| Moderation: global audio mute + lift (GLOBAL_AUDIO_MUTE broadcast to ALL; presenter button syncs on the server echo; attendee force-mute notification) | Presenter → Attendee | same | U (signaling), frontend unit (presenter-moderation) |
+| Group announcement (sendGroupMessage → GROUP_MESSAGE broadcast incl. sender; identity derived server-side from the connection record; "(Announcement)" render) | Presenter → Attendee | same | U (signaling), frontend unit (presenter-moderation) |
+| Moderation: per-user audio/video mute, kick, restrict-chat, global video mute | — | *gap — see below* | U (signaling), M, frontend unit (presenter-moderation) |
 
 ### After the event
 
@@ -106,8 +109,12 @@ E2E, **S** = smoke.
 These are real requirements not yet exercised live — good next additions:
 
 1. **Direct chat** — a DM from attendee to presenter (presenter-only visibility).
-2. **Moderation: mute / kick / restrict-chat** — assert the attendee's
-   client reflects the action (mute stops their mic; kick disconnects).
+2. **Moderation: per-user audio/video mute, kick, restrict-chat, global
+   video mute** — restrict-questions, the global audio mute and the group
+   announcement are now live-tested (`presenter restricts questions,
+   global-mutes audio, and sends a group announcement`); the remaining
+   actions still need an attendee-side assertion (mute stops their mic;
+   kick disconnects).
 3. **Multi-attendee** — a second signed-in attendee to exercise the
    attendee list and broadcast fan-out at n>1.
 
@@ -161,6 +168,19 @@ recipient.
   same defect would have blanked a remote co-presenter's video for every
   viewer whenever their audio stream changed. Fixed by removing only the
   element matching each removed stream's kind.
+- **Ban/kick leaves a half-dead client** (surfaced while wiring the
+  moderation test). `executeKickFlow` deletes the target's CONNECTIONS
+  row but never calls the API Gateway DeleteConnection, and the frontend
+  has no handler for the `USER_KICKED` type it is sent (it only handles
+  `KICKED`). The kicked/banned client therefore keeps an open socket that
+  still receives TARGETED sends but no broadcasts (fan-out queries the
+  EventConnections GSI, where its row is gone), shows the user nothing,
+  and never reconnects — after the ban/unban phase the attendee silently
+  misses every event-wide message. The moderation test works around it by
+  having the attendee rejoin the live page for a fresh connection row;
+  the fix is for the kick flow to actually close the connection (or send
+  the `KICKED` type the client handles, which triggers a clean
+  disconnect).
 - **Lingering device-picker modal** — after a live session ends, the
   `#device-picker-overlay` can remain in the DOM across hash navigation and
   intercept pointer events on the next page (observed: End Session → back to

@@ -59,6 +59,11 @@ const LiveSession = (() => {
   let dashboardBans = [];
   let dashboardActiveTab = 'attendees';
   let pinnedQuestion = null;
+  // Event-wide moderation state — mirrors the server's metadata flags; updated
+  // from the GLOBAL_AUDIO_MUTE / GLOBAL_VIDEO_MUTE broadcasts (server is the
+  // source of truth, so the toggle buttons never drift from DynamoDB).
+  let globalAudioMuteActive = false;
+  let globalVideoMuteActive = false;
 
   // --- Constants ---
   const SQUID_INK = '#232F3E';
@@ -357,6 +362,20 @@ const LiveSession = (() => {
 
             <!-- Presenter Dashboard Panel (visible only for presenters) -->
             <div id="presenter-dashboard" style="display: none; margin-top: 12px; background: ${SQUID_INK}; border-radius: 8px; overflow: hidden;">
+              <div id="dashboard-moderation-bar" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid #30363d;">
+                <button id="btn-global-mute-audio" class="btn btn--control" data-action="toggle-global-mute-audio" aria-label="Mute audio for all attendees" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                  🔇 Mute All Audio
+                </button>
+                <button id="btn-global-mute-video" class="btn btn--control" data-action="toggle-global-mute-video" aria-label="Disable video for all attendees" style="padding: 8px 16px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #fff; cursor: pointer;">
+                  📷 Disable All Video
+                </button>
+              </div>
+              <form id="dashboard-broadcast-form" data-action="send-group-broadcast" style="padding: 10px 16px; border-bottom: 1px solid #30363d;">
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" id="dashboard-broadcast-input" placeholder="Message all attendees..." required style="flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #fff; font-size: 13px;" aria-label="Message all attendees">
+                  <button type="submit" style="padding: 8px 16px; border-radius: 4px; border: none; background: ${AWS_ORANGE}; color: #000; font-weight: 600; cursor: pointer;">📣 Send</button>
+                </div>
+              </form>
               <div style="display: flex; border-bottom: 1px solid #30363d;">
                 <button id="dashboard-tab-attendees" data-action="switch-dashboard-tab" data-tab="attendees" style="flex: 1; padding: 10px 16px; border: none; background: ${AWS_ORANGE}; color: #000; font-weight: 600; font-size: 13px; cursor: pointer;">
                   Attendees <span id="dashboard-count-attendees" style="margin-left: 4px; padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,0.2); font-size: 11px;">0</span>
@@ -1887,7 +1906,9 @@ const LiveSession = (() => {
         if (attendee.role !== 'presenter') {
           moderationHtml = '<div style="display: flex; gap: 2px; margin-top: 4px;">'
             + '<button data-action="mute-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Mute this user\'s audio — they won\'t be able to unmute until you grant permission again">🔇 Mute</button>'
+            + '<button data-action="mute-user-video" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Disable this user\'s video — their camera feed stops for everyone">📷 Video Off</button>'
             + '<button data-action="restrict-user-chat" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict chat — this user won\'t be able to send messages">💬 Chat Off</button>'
+            + '<button data-action="restrict-user-questions" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #6e7681; color: #fff; font-size: 10px; cursor: pointer;" title="Restrict questions — this user won\'t be able to submit questions">❓ Q Off</button>'
             + '<button data-action="kick-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #da3633; color: #fff; font-size: 10px; cursor: pointer;" title="Kick — remove this user from the session immediately">❌ Kick</button>'
             + '<button data-action="ban-user" data-connection-id="' + escapeHtml(attendee.connectionId) + '" data-user-id="' + escapeHtml(attendee.userId) + '" style="padding: 2px 6px; border-radius: 3px; border: none; background: #8b0000; color: #fff; font-size: 10px; cursor: pointer;" title="Ban — permanently block this user from rejoining this event">🚫 Ban</button>'
             + '</div>';
@@ -2683,9 +2704,63 @@ const LiveSession = (() => {
           }
           break;
         }
+        case 'AUDIO_MUTED':
         case 'MUTED_BY_PRESENTER':
           stopMic();
           showNotification('You have been muted by the presenter.');
+          break;
+        case 'VIDEO_DISABLED':
+          stopWebcam();
+          showNotification('Your video has been disabled by the presenter.');
+          break;
+        case 'CHAT_RESTRICTED':
+          showNotification((msg.data && msg.data.message) || 'Your chat participation has been restricted by the presenter.');
+          break;
+        case 'CHAT_DISABLED':
+          showNotification((msg.data && msg.data.message) || 'Group chat is currently disabled by the presenter.');
+          break;
+        case 'QUESTIONS_RESTRICTED':
+          showNotification((msg.data && msg.data.message) || 'Your question submission has been restricted by the presenter.');
+          break;
+        case 'GLOBAL_AUDIO_MUTE':
+          // Broadcast to everyone; the presenter's own mic stays live — the
+          // flag applies to the audience, and the presenter copy just keeps
+          // the toggle button in sync with the server.
+          globalAudioMuteActive = !!(msg.data && msg.data.globalAudioMute);
+          if (userRole === 'presenter') {
+            updateControlButton('btn-global-mute-audio', globalAudioMuteActive ? '🔇 Unmute All Audio' : '🔇 Mute All Audio', globalAudioMuteActive);
+          } else if (globalAudioMuteActive) {
+            stopMic();
+            showNotification('The presenter has muted audio for all attendees.');
+          } else {
+            showNotification('The presenter has lifted the global audio mute.');
+          }
+          break;
+        case 'GLOBAL_VIDEO_MUTE':
+          globalVideoMuteActive = !!(msg.data && msg.data.globalVideoMute);
+          if (userRole === 'presenter') {
+            updateControlButton('btn-global-mute-video', globalVideoMuteActive ? '📷 Enable All Video' : '📷 Disable All Video', globalVideoMuteActive);
+          } else if (globalVideoMuteActive) {
+            stopWebcam();
+            showNotification('The presenter has disabled video for all attendees.');
+          } else {
+            showNotification('The presenter has lifted the global video mute.');
+          }
+          break;
+        case 'GROUP_MESSAGE':
+          // WS-signaling group broadcast (dashboard "message all attendees").
+          // The sender is included in the broadcast, so no local echo is
+          // needed. Announcement framing only for presenter/co-presenter
+          // senders — senderRole is server-derived from the connection row,
+          // so an attendee sending the raw action can't gain the framing.
+          if (msg.data) {
+            var gmSender = msg.data.displayName || msg.data.userId || 'Unknown';
+            var gmRole = msg.data.senderRole;
+            if (gmRole === 'presenter' || gmRole === 'co-presenter') {
+              gmSender += ' (Announcement)';
+            }
+            appendChatMessage(gmSender, msg.data.message, 'group');
+          }
           break;
         case 'TIME_WARNING':
           showTimeWarning('TIME_WARNING', msg.data || {});
@@ -3042,7 +3117,11 @@ const LiveSession = (() => {
     'promote-user': function(el) { promoteUser(el.dataset.connectionId, el.dataset.userId); },
     'demote-user': function(el) { demoteUser(el.dataset.connectionId, el.dataset.userId); },
     'mute-user': function(el) { muteUser(el.dataset.connectionId, el.dataset.userId); },
+    'mute-user-video': function(el) { muteUserVideo(el.dataset.connectionId, el.dataset.userId); },
     'restrict-user-chat': function(el) { restrictUserChat(el.dataset.connectionId, el.dataset.userId); },
+    'restrict-user-questions': function(el) { restrictUserQuestions(el.dataset.connectionId, el.dataset.userId); },
+    'toggle-global-mute-audio': function() { toggleGlobalMuteAudio(); },
+    'toggle-global-mute-video': function() { toggleGlobalMuteVideo(); },
     'kick-user': function(el) { kickUser(el.dataset.connectionId, el.dataset.userId); },
     'ban-user': function(el) { banUser(el.dataset.connectionId, el.dataset.userId); },
     'answer-question': function(el) { answerQuestion(el.dataset.questionId, el.dataset.timestamp); },
@@ -3056,6 +3135,7 @@ const LiveSession = (() => {
   var SUBMIT_ACTIONS = {
     'submit-question': submitQuestion,
     'send-chat-message': sendChatMessage,
+    'send-group-broadcast': sendGroupBroadcast,
   };
 
   if (typeof document !== 'undefined') {
@@ -3107,11 +3187,56 @@ const LiveSession = (() => {
   }
 
   /**
+   * Disable a user's video.
+   */
+  function muteUserVideo(connectionId, userId) {
+    sendWebSocketMessage('muteVideo', { targetConnectionId: connectionId, userId: userId });
+    showNotification('Video disabled for user');
+  }
+
+  /**
    * Restrict a user's chat participation.
    */
   function restrictUserChat(connectionId, userId) {
     sendWebSocketMessage('restrictChat', { targetConnectionId: connectionId, userId: userId });
     showNotification('Chat restricted for user');
+  }
+
+  /**
+   * Restrict a user's question submission.
+   */
+  function restrictUserQuestions(connectionId, userId) {
+    sendWebSocketMessage('restrictQuestions', { targetConnectionId: connectionId, userId: userId });
+    showNotification('Questions restricted for user');
+  }
+
+  /**
+   * Toggle the event-wide audio mute. The button state flips when the
+   * server's GLOBAL_AUDIO_MUTE broadcast comes back, not optimistically.
+   */
+  function toggleGlobalMuteAudio() {
+    sendWebSocketMessage('globalMuteAudio', { enabled: !globalAudioMuteActive });
+  }
+
+  /**
+   * Toggle the event-wide video mute. The button state flips when the
+   * server's GLOBAL_VIDEO_MUTE broadcast comes back, not optimistically.
+   */
+  function toggleGlobalMuteVideo() {
+    sendWebSocketMessage('globalMuteVideo', { enabled: !globalVideoMuteActive });
+  }
+
+  /**
+   * Send a message to all attendees from the dashboard (sendGroupMessage
+   * over WS signaling). The GROUP_MESSAGE broadcast — which includes the
+   * sender — renders it in chat, so there is no local echo here.
+   */
+  function sendGroupBroadcast(event) {
+    event.preventDefault();
+    var input = document.getElementById('dashboard-broadcast-input');
+    if (!input || !input.value.trim()) return;
+    sendWebSocketMessage('sendGroupMessage', { message: input.value.trim() });
+    input.value = '';
   }
 
   /**
@@ -3197,6 +3322,7 @@ const LiveSession = (() => {
     switchDashboardTab: switchDashboardTab,
     getRole: function() { return userRole; },
     getPublishVideoMode: getPublishVideoMode,
+    requestDashboardState: requestDashboardState,
     appendChatMessage: appendChatMessage,
     acknowledgeHand: acknowledgeHand,
     dismissHand: dismissHand,
@@ -3207,7 +3333,12 @@ const LiveSession = (() => {
     promoteUser: promoteUser,
     demoteUser: demoteUser,
     muteUser: muteUser,
+    muteUserVideo: muteUserVideo,
     restrictUserChat: restrictUserChat,
+    restrictUserQuestions: restrictUserQuestions,
+    toggleGlobalMuteAudio: toggleGlobalMuteAudio,
+    toggleGlobalMuteVideo: toggleGlobalMuteVideo,
+    sendGroupBroadcast: sendGroupBroadcast,
     kickUser: kickUser,
     banUser: banUser,
     unbanUser: unbanUser,

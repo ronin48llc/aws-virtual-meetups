@@ -442,6 +442,197 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     );
   });
 
+  test('presenter restricts questions, global-mutes audio, and sends a group announcement', async () => {
+    const a = attendee.page;
+    const attendeeSub = await a.evaluate(
+      () => JSON.parse(atob(Auth.getIdToken().split('.')[1])).sub
+    );
+
+    // The ban's kick flow deleted the attendee's CONNECTION ROW but never
+    // closed the socket (the kick path has no API Gateway DeleteConnection),
+    // and the client ignores the USER_KICKED type it was sent (it only
+    // handles KICKED) — so after unban the attendee is a broadcast zombie:
+    // targeted sends to the old connectionId still land, but broadcast()
+    // fans out via the EventConnections GSI where the row no longer exists,
+    // and no client-side reconnect ever fires. The moderation flows below
+    // need BOTH delivery paths, so the attendee rejoins the live page for a
+    // clean connection row (this also drops the co-presenter grant, which
+    // lived on the deleted row). Capture the dashboard's current connection
+    // ids FIRST: the pre-ban row never got an ATTENDEE_LEFT, so it lingers
+    // and the restrict click must target the FRESH row, not the dead one.
+    // Row detection is ROLE-AGNOSTIC ([data-user-id] with any action): the
+    // rejoined user comes back as co-presenter, whose row renders Demote
+    // instead of the attendee-only moderation buttons.
+    const connIdsForUser = (sub) => Array.from(document.querySelectorAll(
+      '[data-user-id="' + sub + '"][data-connection-id]'
+    )).map((b) => b.dataset.connectionId);
+    const staleConnIds = await presenter.page.evaluate(connIdsForUser, attendeeSub);
+
+    // Waits until the attendee's dashboard row carries a connectionId not
+    // in `known`, and returns that id. PULL-based: the ATTENDEE_JOINED push
+    // is unreliable across a rejoin — the OLD socket's $disconnect can
+    // broadcast ATTENDEE_LEFT after the new join, and its handler removes
+    // rows BY USERID, wiping the fresh entry — so each attempt re-requests
+    // the authoritative list (getAttendeeList rebuilds from live connection
+    // rows, where the old row is already gone).
+    const waitForFreshAttendeeConn = async (known) => {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await presenter.page.evaluate(() => LiveSession.requestDashboardState());
+        try {
+          const handle = await presenter.page.waitForFunction(
+            ({ sub, stale }) => {
+              const btns = Array.from(document.querySelectorAll(
+                '[data-user-id="' + sub + '"][data-connection-id]'
+              ));
+              return btns.map((b) => b.dataset.connectionId)
+                .find((id) => stale.indexOf(id) === -1) || false;
+            },
+            { sub: attendeeSub, stale: known },
+            { timeout: 5000, polling: 500 }
+          );
+          return await handle.jsonValue();
+        } catch (e) { /* list not fresh yet — re-pull */ }
+      }
+      throw new Error('attendee never reappeared with a fresh connectionId');
+    };
+
+    // The co-presenter grant SURVIVES a rejoin (it is per-user, not
+    // connection-row state), and demoting AFTER the rejoin churns the fresh
+    // connection (the demote flow leaves/rejoins the stage, killing the
+    // conn id this test just captured). So demote the ZOMBIE row FIRST —
+    // targeted sends still reach zombie sockets, and the per-user demotion
+    // persists — and only then reload, so the fresh page boots as a plain
+    // attendee with one stable socket.
+    await presenter.page.evaluate(() => LiveSession.switchDashboardTab('attendees'));
+    await presenter.page.evaluate((sub) => {
+      const btn = document.querySelector(
+        '[data-action="demote-user"][data-user-id="' + sub + '"]'
+      );
+      if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    }, attendeeSub);
+    await sleep(2000);
+
+    // goToLive is a SAME-HASH navigation here (the attendee is already on
+    // the live URL), which does NOT reload an SPA page — reload() is what
+    // actually boots a fresh client with a fresh WebSocket $connect.
+    await attendee.goToLive(shared.eventId);
+    await a.reload({ waitUntil: 'domcontentloaded' });
+    await a.waitForSelector('#btn-hand-raise', { timeout: 45000 });
+    const freshConnId = await waitForFreshAttendeeConn(staleConnIds);
+    // The fresh row is attendee-role, so it renders the moderation buttons.
+    await presenter.page.waitForSelector(
+      `[data-action="restrict-user-questions"][data-connection-id="${freshConnId}"]`,
+      { timeout: 30000 }
+    );
+
+    // (a) Restrict questions. The targeted QUESTIONS_RESTRICTED goes to the
+    // attendee's connection only, and their handler's entire reaction is a
+    // role="alert" notification — the form is NOT disabled, enforcement is
+    // server-side — so assert the notification…
+    await presenter.page.locator(
+      `[data-action="restrict-user-questions"][data-connection-id="${freshConnId}"]`
+    ).dispatchEvent('click');
+    await a.waitForFunction(() =>
+      Array.from(document.querySelectorAll('[role="alert"]')).some((n) =>
+        /question submission has been restricted/i.test(n.textContent || '')),
+      { timeout: 20000 }
+    );
+
+    // …then prove enforcement. Notifications self-remove after 5s; let the
+    // ack expire first so the rejection below can't be satisfied by it.
+    await a.waitForFunction(() =>
+      !Array.from(document.querySelectorAll('[role="alert"]')).some((n) =>
+        /question submission has been restricted/i.test(n.textContent || '')),
+      { timeout: 15000 }
+    );
+    await a.click('[data-action="toggle-question-form"]');
+    await a.waitForSelector('#question-input');
+    await a.fill('#question-input', 'Should bounce — questions are restricted');
+    await a.click('#question-form button[type="submit"]');
+    // The server rejects the submit and answers the SENDER with another
+    // QUESTIONS_RESTRICTED instead of queueing the question.
+    await a.waitForFunction(() =>
+      Array.from(document.querySelectorAll('[role="alert"]')).some((n) =>
+        /question submission has been restricted/i.test(n.textContent || '')),
+      { timeout: 20000 }
+    );
+
+    // (b) Global audio mute — a broadcast to ALL connections. The attendee
+    // republished nothing after the rejoin, so their handler's stopMic() is
+    // an invisible no-op (no #btn-mic without publish controls); what the
+    // handler observably does on this client is the force-mute
+    // notification, so assert THAT. The presenter's toggle flips only on
+    // the server's echo (never optimistically), which proves the round trip
+    // reached the presenter too.
+    await presenter.page.locator('#btn-global-mute-audio').dispatchEvent('click');
+    await a.waitForFunction(() =>
+      Array.from(document.querySelectorAll('[role="alert"]')).some((n) =>
+        /muted audio for all attendees/i.test(n.textContent || '')),
+      { timeout: 20000 }
+    );
+    await presenter.page.waitForFunction(() => {
+      const b = document.getElementById('btn-global-mute-audio');
+      return b && b.textContent.indexOf('Unmute All Audio') !== -1;
+    }, { timeout: 15000 });
+
+    // (c) Group announcement — sendGroupMessage (sender identity derived
+    // server-side from the connection record; the body carries only the
+    // text) broadcasts GROUP_MESSAGE to ALL, rendered in every chat pane
+    // as '<name> (Announcement)'.
+    // Assert on the PRESENTER's chat pane: same broadcast, same rendering
+    // path, and the presenter page has zero connection churn (broadcast
+    // delivery to the attendee is already proven by the GLOBAL_AUDIO_MUTE
+    // notification in step (b)).
+    const marker = 'e2e-announce-' + Date.now();
+    await presenter.page.fill('#dashboard-broadcast-input', marker);
+    await presenter.page.locator('#dashboard-broadcast-form').dispatchEvent('submit');
+    await presenter.page.waitForFunction(
+      (m) => {
+        const el = document.getElementById('chat-messages');
+        return !!el && el.textContent.indexOf(m) !== -1
+          && el.textContent.indexOf('(Announcement)') !== -1;
+      },
+      marker,
+      { timeout: 20000 }
+    );
+
+    // --- Restore state for the extend / end-session tests that follow ---
+
+    // Lift the global mute (second toggle → enabled:false broadcast; wait
+    // on the echo-synced button text again).
+    await presenter.page.locator('#btn-global-mute-audio').dispatchEvent('click');
+    await presenter.page.waitForFunction(() => {
+      const b = document.getElementById('btn-global-mute-audio');
+      return b && b.textContent.indexOf('Unmute All Audio') === -1;
+    }, { timeout: 15000 });
+
+    // Re-enable questions. There is no unrestrict wire action — the
+    // questionsRestricted flag lives on the attendee's connection row and
+    // dies with it — so rejoin once more for a clean row, then prove
+    // questions flow again: this submit must REACH the presenter's queue.
+    await attendee.goToLive(shared.eventId);
+    await a.reload({ waitUntil: 'domcontentloaded' }); // same-hash: reload boots the fresh client
+    await a.waitForSelector('#btn-hand-raise', { timeout: 45000 });
+    await waitForFreshAttendeeConn(staleConnIds.concat([freshConnId]));
+    await sleep(2000);
+
+    const qBefore = await presenter.page.evaluate(() =>
+      parseInt((document.querySelector('#dashboard-count-questions') || {}).textContent || '0', 10)
+    );
+    await a.click('[data-action="toggle-question-form"]');
+    await a.waitForSelector('#question-input');
+    await a.fill('#question-input', 'Did the rejoin re-enable question submission?');
+    await a.click('#question-form button[type="submit"]');
+    await presenter.page.waitForFunction(
+      (before) => {
+        const el = document.querySelector('#dashboard-count-questions');
+        return !!el && parseInt(el.textContent, 10) > before;
+      },
+      qBefore,
+      { timeout: 20000 }
+    );
+  });
+
   test('presenter extends the event duration', async () => {
     const before = await presenter.publicGet('/events/' + shared.eventId);
     // The extend control sits in the presenter toolbar, which the published
