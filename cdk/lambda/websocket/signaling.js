@@ -1047,6 +1047,10 @@ async function handleSendGroupMessage(eventId, body, connectionId) {
     data: {
       userId,
       displayName,
+      // Server-derived role, so clients can frame presenter announcements
+      // differently — an attendee crafting this action can never gain
+      // announcement framing (the body's identity fields are ignored).
+      senderRole: senderConn.Item.role,
       message,
       timestamp,
     },
