@@ -18,8 +18,26 @@ jest.mock('@aws-sdk/lib-dynamodb', () => ({
   QueryCommand: jest.fn((params) => ({ type: 'Query', params })),
 }));
 
+// Mock scheduler-utils so no real @aws-sdk/client-scheduler calls are made
+// (mirrors cdk/test/unit/event-crud.test.js)
+const mockCreateReminderSchedules = jest.fn().mockResolvedValue(undefined);
+const mockDeleteReminderSchedules = jest.fn().mockResolvedValue(undefined);
+const mockDeleteAutoStopSchedule = jest.fn().mockResolvedValue(undefined);
+const mockDeleteWarningSchedules = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../lambda/shared/scheduler-utils', () => ({
+  createReminderSchedules: mockCreateReminderSchedules,
+  deleteReminderSchedules: mockDeleteReminderSchedules,
+  deleteAutoStopSchedule: mockDeleteAutoStopSchedule,
+  deleteWarningSchedules: mockDeleteWarningSchedules,
+}));
+
 // Set env before requiring handler
 process.env.TABLE_NAME = 'TestTable';
+process.env.SCHEDULER_ROLE_ARN = 'arn:aws:iam::123456789012:role/VirtualMeetup-SchedulerRole';
+
+// Required at the top (not inside tests) so no require runs after teardown;
+// jest.mock above is hoisted, so these are the mocked constructors.
+const { UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 
 const { handler } = require('../../lambda/event-crud/index');
 
@@ -373,7 +391,6 @@ describe('Event Management Property Tests', () => {
             expect(result.statusCode).toBe(200);
 
             // Verify the UpdateCommand was called with REMOVE GSI1PK, GSI1SK
-            const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
             const lastUpdateCall = UpdateCommand.mock.calls[UpdateCommand.mock.calls.length - 1][0];
             expect(lastUpdateCall.UpdateExpression).toContain('REMOVE GSI1PK, GSI1SK');
             expect(lastUpdateCall.ExpressionAttributeValues[':status']).toBe('cancelled');
@@ -450,7 +467,6 @@ describe('Event Management Property Tests', () => {
           await handler(event);
 
           // Verify QueryCommand was called with correct GSI1 parameters
-          const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
           const lastCall = QueryCommand.mock.calls[QueryCommand.mock.calls.length - 1][0];
           expect(lastCall.IndexName).toBe('GSI1');
           expect(lastCall.KeyConditionExpression).toContain('GSI1PK = :pk');
