@@ -16,7 +16,7 @@ const {
   QueryCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
-const { S3Client, HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 
 const { EVENT_STATUS, GSI, SK, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } = require('../shared/constants');
@@ -799,6 +799,245 @@ async function deleteEvent(event, eventId) {
 }
 
 /**
+ * Caption languages supported by the live-session caption lanes.
+ * Must stay in sync with CAPTION_LANGUAGES in frontend/js/live-session.js.
+ */
+const CAPTION_LANGUAGES = ['en', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh'];
+
+/**
+ * Cue timing rules for VTT generation from live caption segments:
+ * a cue ends when the next one starts, capped at 8s, floored at 1s;
+ * the final cue (which has no successor) shows for 4s.
+ */
+const CAPTION_CUE_MAX_MS = 8000;
+const CAPTION_CUE_MIN_MS = 1000;
+const CAPTION_CUE_LAST_MS = 4000;
+
+// Lazily created: @aws-sdk/client-translate ships with the nodejs20 Lambda
+// runtime but is not a local dev dependency, so it is required only when the
+// captions route actually needs an on-demand translation.
+let translateClient = null;
+
+/**
+ * Translate one caption segment to the requested target language.
+ * @param {string} text - Original segment text.
+ * @param {string} srcLang - Source language code.
+ * @param {string} targetLang - Target language code.
+ * @returns {Promise<string>} Translated text.
+ */
+async function translateCaptionText(text, srcLang, targetLang) {
+  const { TranslateClient, TranslateTextCommand } = require('@aws-sdk/client-translate');
+  if (!translateClient) {
+    translateClient = new TranslateClient({});
+  }
+  const result = await translateClient.send(new TranslateTextCommand({
+    Text: text,
+    SourceLanguageCode: srcLang,
+    TargetLanguageCode: targetLang,
+  }));
+  return result.TranslatedText;
+}
+
+/**
+ * S3 key of the cached VTT track for an event/language pair.
+ * @param {string} eventId
+ * @param {string} lang - Language code or the literal "original".
+ * @returns {string}
+ */
+function captionVttKey(eventId, lang) {
+  return `recordings/${eventId}/captions/${lang}.vtt`;
+}
+
+/**
+ * Format a millisecond offset as a WebVTT timestamp (HH:MM:SS.mmm).
+ * @param {number} ms - Non-negative offset in milliseconds.
+ * @returns {string}
+ */
+function formatVttTime(ms) {
+  const clamped = Math.max(0, Math.round(ms));
+  const hours = Math.floor(clamped / 3600000);
+  const minutes = Math.floor((clamped % 3600000) / 60000);
+  const seconds = Math.floor((clamped % 60000) / 1000);
+  const millis = clamped % 1000;
+  const pad = (n, width) => String(n).padStart(width, '0');
+  return `${pad(hours, 2)}:${pad(minutes, 2)}:${pad(seconds, 2)}.${pad(millis, 3)}`;
+}
+
+/**
+ * 200 OK response carrying a WebVTT document. buildResponse spreads extra
+ * headers after the JSON default (so Content-Type comes out as text/vtt)
+ * and passes string bodies through unstringified, so API Gateway returns
+ * the raw VTT text.
+ * @param {string} vtt - Complete WebVTT document.
+ * @returns {Object} API Gateway response.
+ */
+function vttSuccess(vtt) {
+  return buildResponse(200, vtt, { 'Content-Type': 'text/vtt' });
+}
+
+/**
+ * Fetch every CAPTION# segment row for an event, ascending by SK
+ * (SK embeds the ISO timestamp, so SK order is chronological order).
+ * @param {string} eventId
+ * @returns {Promise<Array<Object>>}
+ */
+async function queryCaptionRows(eventId) {
+  const rows = [];
+  let exclusiveStartKey;
+  do {
+    const params = {
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: {
+        ':pk': buildEventPK(eventId),
+        ':prefix': 'CAPTION#',
+      },
+      ScanIndexForward: true,
+    };
+    if (exclusiveStartKey) {
+      params.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(params));
+    rows.push(...(result.Items || []));
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return rows;
+}
+
+/**
+ * GET /events/{id}/captions/{lang} — serve a WebVTT caption track for an
+ * ended/published event. Public access - no authentication required.
+ *
+ * Serves the cached S3 object when one exists; otherwise builds the track
+ * from the CAPTION# segment rows persisted during the live broadcast
+ * (translating any segment that lacks a stored translation for the
+ * requested lane), caches the result back to S3, and returns text/vtt.
+ * @param {string} eventId
+ * @param {string} lang - A CAPTION_LANGUAGES code or the literal "original".
+ * @param {Object} logger - Logger instance.
+ * @returns {Promise<Object>} API Gateway response.
+ */
+async function getEventCaptions(eventId, lang, logger) {
+  if (lang !== 'original' && !CAPTION_LANGUAGES.includes(lang)) {
+    return badRequest(`Unsupported caption language: ${lang}`);
+  }
+
+  const result = await docClient.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: {
+      PK: buildEventPK(eventId),
+      SK: SK.METADATA,
+    },
+  }));
+
+  if (!result.Item) {
+    return notFound('Event not found');
+  }
+
+  const item = result.Item;
+  if (item.status !== EVENT_STATUS.ENDED && item.status !== EVENT_STATUS.PUBLISHED) {
+    return badRequest('Captions are only available after the event has ended');
+  }
+
+  const key = captionVttKey(eventId, lang);
+
+  // Cached track from a previous request (or an external pipeline)?
+  if (RECORDING_BUCKET_NAME) {
+    try {
+      const cached = await s3Client.send(new GetObjectCommand({
+        Bucket: RECORDING_BUCKET_NAME,
+        Key: key,
+      }));
+      return vttSuccess(await cached.Body.transformToString());
+    } catch (err) {
+      // Missing object → generate below. Any other read failure also falls
+      // through to generation rather than 500ing — the DDB rows are the
+      // source of truth and can rebuild the track.
+      if (err.name !== 'NoSuchKey' && err.name !== 'NotFound'
+          && !(err.$metadata && err.$metadata.httpStatusCode === 404)) {
+        logger.error('Cached caption VTT read failed, regenerating', {
+          action: 'getEventCaptions',
+          error: err.message,
+          extra: { eventId, lang },
+        });
+      }
+    }
+  }
+
+  const rows = await queryCaptionRows(eventId);
+  if (rows.length === 0) {
+    return buildResponse(404, { error: 'No captions recorded for this event' });
+  }
+
+  // The whole session is captioned in one source language; the first
+  // segment's language is that source.
+  const srcLang = rows[0].language;
+  const wantOriginal = lang === 'original' || lang === srcLang;
+
+  // Resolve each segment's text for the requested lane: original text,
+  // stored live translation, or a one-off TranslateText call (never
+  // written back to DDB). A failed translation falls back to the original
+  // text so the track is never silently truncated.
+  let translateFailed = false;
+  const texts = await Promise.all(rows.map(async (row) => {
+    if (wantOriginal) {
+      return row.text;
+    }
+    if (row.translations && row.translations[lang]) {
+      return row.translations[lang];
+    }
+    try {
+      return await translateCaptionText(row.text, srcLang, lang);
+    } catch (err) {
+      translateFailed = true;
+      logger.error('Caption segment translation failed, using original text', {
+        action: 'getEventCaptions',
+        error: err.message,
+        extra: { eventId, lang },
+      });
+      return row.text;
+    }
+  }));
+
+  // Cue timing is relative to when the event went live.
+  const baseMs = new Date(item.startedAt || rows[0].timestamp).getTime();
+  const starts = rows.map((row) => Math.max(0, new Date(row.timestamp).getTime() - baseMs));
+
+  const cues = rows.map((row, i) => {
+    const start = starts[i];
+    const end = i < rows.length - 1
+      ? Math.max(start + CAPTION_CUE_MIN_MS, Math.min(starts[i + 1], start + CAPTION_CUE_MAX_MS))
+      : start + CAPTION_CUE_LAST_MS;
+    return `${formatVttTime(start)} --> ${formatVttTime(end)}\n${texts[i]}`;
+  });
+
+  const vtt = `WEBVTT\n\n${cues.join('\n\n')}\n`;
+
+  // Cache the generated track so subsequent requests skip DDB + Translate.
+  // Skipped when a translation fell back to original text (a later request
+  // can retry and cache a fully translated track). Failure never fails the
+  // response.
+  if (RECORDING_BUCKET_NAME && !translateFailed) {
+    try {
+      await s3Client.send(new PutObjectCommand({
+        Bucket: RECORDING_BUCKET_NAME,
+        Key: key,
+        Body: vtt,
+        ContentType: 'text/vtt',
+      }));
+    } catch (err) {
+      logger.error('Failed to cache caption VTT to S3', {
+        action: 'getEventCaptions',
+        error: err.message,
+        extra: { eventId, lang },
+      });
+    }
+  }
+
+  return vttSuccess(vtt);
+}
+
+/**
  * Main Lambda handler.
  * Routes requests based on HTTP method and path.
  */
@@ -874,6 +1113,17 @@ exports.handler = async (event) => {
         return badRequest('Event ID is required');
       }
       return await getEvent(eventId);
+    }
+
+    // Route: GET /events/{id}/captions/{lang} — public WebVTT caption track
+    // for the ended-event player (lang = code or "original").
+    if (method === 'GET' && normalizedResource === '/events/{id}/captions/{lang}') {
+      const eventId = pathParams && pathParams.id;
+      const lang = pathParams && pathParams.lang;
+      if (!eventId || !lang) {
+        return badRequest('Event ID and caption language are required');
+      }
+      return await getEventCaptions(eventId, lang, logger);
     }
 
     // Route: PUT /events/{id}

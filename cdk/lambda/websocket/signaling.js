@@ -17,16 +17,29 @@ const { DynamoDBDocumentClient, PutCommand, DeleteCommand, QueryCommand, UpdateC
 const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
 const { IVSRealTimeClient, DisconnectParticipantCommand, CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
 const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
-const { broadcast, getConnectionsForEvent } = require('./broadcast');
+const { broadcast, getConnectionsForEvent, sendToConnections } = require('./broadcast');
 const { checkRateLimit } = require('./rate-limiter');
 const { checkConnectionAuth } = require('./auth-check');
 const { buildEventPK, buildHandSK, buildQuestionSK, chunk } = require('../shared/dynamo-utils');
 const { KEY_PREFIX, SK, SESSION_ROLE, QUESTION_STATUS, MAX_DISPLAY_NAME_LENGTH, MAX_QUESTION_TEXT_LENGTH, MAX_ANSWER_TEXT_LENGTH } = require('../shared/constants');
 
+// @aws-sdk/client-translate ships with the nodejs20 Lambda runtime (functions
+// deploy via Code.fromAsset, unbundled) but is not a local devDependency.
+// Guard the require so unit tests that don't mock it still load this module;
+// when unavailable, translation lanes fall back to the original text.
+let TranslateClient = null;
+let TranslateTextCommand = null;
+try {
+  ({ TranslateClient, TranslateTextCommand } = require('@aws-sdk/client-translate'));
+} catch (err) {
+  console.warn('@aws-sdk/client-translate unavailable — caption translation disabled');
+}
+
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
 const ivsRealTimeClient = new IVSRealTimeClient({});
 const ivsChatClient = new IvschatClient({});
+const translateClient = TranslateClient ? new TranslateClient({}) : null;
 
 const TABLE_NAME = process.env.TABLE_NAME;
 const CONNECTIONS_TABLE_NAME = process.env.CONNECTIONS_TABLE_NAME;
@@ -56,6 +69,15 @@ const PRESENTER_ONLY_ACTIONS = new Set([
   'unpinQuestion',
   'dismissQuestion',
 ]);
+
+// Caption language codes selectable by viewers — must stay in sync with
+// CAPTION_LANGUAGES in frontend/js/live-session.js. setCaptionLanguage is
+// deliberately NOT presenter-only: any connection (attendee or anonymous)
+// picks its own caption lane.
+const CAPTION_LANGUAGE_CODES = new Set(['en', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh']);
+
+// Caption segment retention: 30 days.
+const CAPTION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 /**
  * Run a Query and loop through DynamoDB's LastEvaluatedKey until the
@@ -243,6 +265,8 @@ async function handler(event) {
         return await handleTyping(eventId, body, connectionId);
       case 'broadcastCaption':
         return await handleBroadcastCaption(eventId, body, connectionId);
+      case 'setCaptionLanguage':
+        return await handleSetCaptionLanguage(eventId, body, connectionId);
       default:
         console.error('Unknown action', { connectionId, action });
         return { statusCode: 400, body: `Unknown action: ${action}` };
@@ -1999,6 +2023,12 @@ async function handleTyping(eventId, body, connectionId) {
  * Presenter sends transcribed text to all attendees via WebSocket.
  * Only presenters/co-presenters can broadcast captions.
  *
+ * Connections are grouped into language "lanes" by their captionLang
+ * selection (set via setCaptionLanguage; absent = the source language).
+ * Each non-source lane gets ONE Amazon Translate call and a targeted send
+ * to just its connections — never an event-wide broadcast per lane. A
+ * caption segment row is persisted afterwards for post-event VTT assembly.
+ *
  * @param {string} eventId - The event identifier.
  * @param {Object} body - { text, language, isFinal }
  * @param {string} connectionId - The sender's WebSocket connection ID.
@@ -2020,19 +2050,133 @@ async function handleBroadcastCaption(eventId, body, connectionId) {
     return { statusCode: 403, body: 'Only presenters can broadcast captions' };
   }
 
-  // Broadcast CAPTION to all connections
-  await broadcast(eventId, {
+  const src = language;
+  const timestamp = new Date().toISOString();
+
+  // Group connections into language lanes.
+  const lanes = new Map();
+  for (const conn of connections) {
+    const lane = conn.captionLang || src;
+    if (!lanes.has(lane)) {
+      lanes.set(lane, []);
+    }
+    lanes.get(lane).push(conn.connectionId);
+  }
+
+  const buildCaptionMessage = (laneText, laneLang, original) => ({
     type: 'CAPTION',
     eventId,
     data: {
-      text,
-      language: language || 'en',
+      text: laneText,
+      language: laneLang,
+      original,
       isFinal: isFinal !== false,
-      timestamp: new Date().toISOString(),
+      timestamp,
     },
   });
 
+  // Successful per-lane translations, collected for the segment row.
+  const translations = {};
+
+  if (lanes.size === 1 && lanes.has(src)) {
+    // Everyone is on the original lane — an event-wide broadcast IS the
+    // lane send, and reuses broadcast()'s well-worn stale-cleanup path.
+    await broadcast(eventId, buildCaptionMessage(text, src, true));
+  } else {
+    await Promise.all(Array.from(lanes.entries()).map(async ([lane, laneConnectionIds]) => {
+      if (lane === src) {
+        await sendToConnections(laneConnectionIds, buildCaptionMessage(text, src, true));
+        return;
+      }
+      try {
+        if (!translateClient) {
+          throw new Error('translate client unavailable');
+        }
+        const result = await translateClient.send(new TranslateTextCommand({
+          Text: text,
+          SourceLanguageCode: src,
+          TargetLanguageCode: lane,
+        }));
+        translations[lane] = result.TranslatedText;
+        await sendToConnections(laneConnectionIds, buildCaptionMessage(result.TranslatedText, lane, false));
+      } catch (error) {
+        // Never silence a lane — fall back to the original text.
+        console.error('Caption translation failed — sending original text', {
+          eventId, lane, source: src, error: error.message,
+        });
+        await sendToConnections(laneConnectionIds, buildCaptionMessage(text, lane, true));
+      }
+    }));
+  }
+
+  // Fire-and-forget segment persistence for post-event VTT assembly —
+  // a failed write must never fail the live broadcast.
+  try {
+    await persistCaptionSegment(eventId, text, src, translations, timestamp);
+  } catch (error) {
+    console.error('Caption segment persistence failed', { eventId, error: error.message });
+  }
+
   return { statusCode: 200, body: 'Caption broadcast' };
+}
+
+/**
+ * Persist one caption segment row for later VTT generation.
+ * SK carries the ISO timestamp (sortable) plus 4 random hex chars so two
+ * segments in the same millisecond can't collide.
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {string} text - The original caption text.
+ * @param {string} src - The source language code.
+ * @param {Object} translations - Map of lane code -> translated text (successful lanes only).
+ * @param {string} timestamp - ISO timestamp of the segment.
+ * @returns {Promise<void>}
+ */
+async function persistCaptionSegment(eventId, text, src, translations, timestamp) {
+  await docClient.send(new PutCommand({
+    TableName: TABLE_NAME,
+    Item: {
+      PK: buildEventPK(eventId),
+      SK: `${KEY_PREFIX.CAPTION}${timestamp}#${crypto.randomBytes(2).toString('hex')}`,
+      entityType: 'CAPTION',
+      text,
+      language: src,
+      translations,
+      timestamp,
+      ttl: Math.floor(Date.now() / 1000) + CAPTION_TTL_SECONDS,
+    },
+  }));
+}
+
+/**
+ * Handle setCaptionLanguage action.
+ * Records the sender's preferred caption lane on its own connection row so
+ * caption fan-out can target it. Open to ANY connection (attendee or
+ * anonymous) — viewers pick their own language. Mirrors the grantSpeak
+ * UpdateCommand pattern.
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {Object} body - { data: { language } }
+ * @param {string} connectionId - The sender's WebSocket connection ID.
+ * @returns {Object} Response with statusCode 200.
+ */
+async function handleSetCaptionLanguage(eventId, body, connectionId) {
+  const language = body.data?.language || body.language;
+
+  if (!language || !CAPTION_LANGUAGE_CODES.has(language)) {
+    return { statusCode: 400, body: 'Invalid caption language' };
+  }
+
+  await docClient.send(new UpdateCommand({
+    TableName: CONNECTIONS_TABLE_NAME,
+    Key: { connectionId },
+    UpdateExpression: 'SET #captionLang = :lang',
+    ExpressionAttributeNames: { '#captionLang': 'captionLang' },
+    ExpressionAttributeValues: { ':lang': language },
+  }));
+
+  console.info('Caption language set', { eventId, connectionId, language });
+  return { statusCode: 200, body: 'Caption language set' };
 }
 
 module.exports = { handler };
