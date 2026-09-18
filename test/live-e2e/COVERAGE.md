@@ -58,7 +58,9 @@ E2E, **S** = smoke.
 | Ended-state UI (no stuck "Ending…") | Presenter | same | — |
 | Group chat round-trip (IVS Chat) | Attendee → Presenter | `attendee group chat reaches the presenter` | U (signaling chat), M |
 | Direct chat | — | *gap — see below* | U (signaling chat) |
-| Live captions — broadcast → per-lane Amazon Translate → targeted delivery | Presenter → Attendee | `attendee selects Spanish and receives a translated live caption` | U (signaling broadcastCaption) |
+| Live captions — broadcast → per-lane Amazon Translate → targeted delivery (multi-lane: es attendee + fr anonymous lanes fan out in ONE session) | Presenter → Attendee, Anonymous | `attendee selects Spanish and receives a translated live caption`, `anonymous viewer watches the live session` | U (signaling broadcastCaption) |
+| Anonymous caption UI (guest live-view language select → setCaptionLanguage WS on an anon connection → targeted CAPTION renders in `#anon-caption-text`) | Anonymous | `anonymous viewer watches the live session` (fr assertion) | U (signaling: anon connections allowed), frontend unit |
+| Caption revert to original (`setCaptionLanguage('original')` REMOVEs the lane; never-selected viewers default to the original feed) | — | *not asserted live* | U (signaling "original" revert + next-broadcast lane), frontend unit (caption-language) |
 | Live caption speech capture (Web Speech) | — | *excluded* (needs real speech — see below) | — |
 | Moderation: ban + unban | Presenter | `presenter bans then unbans the attendee` | U (signaling), M |
 | Role change targeting (promote) | Presenter → Attendee | `promoting the attendee changes only their role` | — |

@@ -29,6 +29,10 @@ const AnonymousViewer = (() => {
   let chatRoom = null;
   let wsReconnectAttempts = 0;
   let wsReconnectTimer = null;
+  // Caption lane selection: 'original' shows the presenter's own feed;
+  // a language code asks the server to translate into that lane.
+  let captionLanguage = 'original';
+  let captionLangSelected = false; // viewer ever picked a translated lane (synced to server)
 
   // --- SessionStorage Keys ---
   const PROMPT_DISMISSED_KEY = 'vm_anon_reg_prompt_dismissed';
@@ -38,6 +42,16 @@ const AnonymousViewer = (() => {
   const DARK_BG = '#161E2D';
   const AWS_ORANGE = '#FF9900';
   const MAX_WS_RECONNECT_DELAY = 30000;
+  const CAPTION_LANGUAGES = [
+    { code: 'en', label: 'English' },
+    { code: 'es', label: 'Spanish' },
+    { code: 'fr', label: 'French' },
+    { code: 'de', label: 'German' },
+    { code: 'pt', label: 'Portuguese' },
+    { code: 'ja', label: 'Japanese' },
+    { code: 'ko', label: 'Korean' },
+    { code: 'zh', label: 'Chinese' }
+  ];
 
   // --- Initialization (Live) ---
 
@@ -206,6 +220,16 @@ const AnonymousViewer = (() => {
           '<div id="anon-stage-video-container" style="background: #0d1117; border-radius: 8px; min-height: 480px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center;">' +
             '<p id="anon-stage-placeholder" style="color: #6e7681;">Connecting to live stream...</p>' +
           '</div>' +
+          '<div id="anon-caption-area" style="margin-top: 12px; background: rgba(0,0,0,0.7); border-radius: 8px; padding: 12px 16px; min-height: 48px;">' +
+            '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">' +
+              '<span style="font-size: 12px; color: #8b949e;">Captions</span>' +
+              '<select id="anon-caption-language-select" data-action="anon-set-caption-language" style="background: ' + SQUID_INK + '; color: #fff; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-size: 12px;" aria-label="Caption language">' +
+                '<option value="original" selected>Original</option>' +
+                CAPTION_LANGUAGES.map(function(lang) { return '<option value="' + lang.code + '">' + lang.label + '</option>'; }).join('') +
+              '</select>' +
+            '</div>' +
+            '<div id="anon-caption-text" style="font-size: 14px; line-height: 1.5; color: #6e7681; font-style: italic;" aria-live="polite" aria-atomic="true">Captions will appear here when the presenter enables them.</div>' +
+          '</div>' +
           '<div id="anon-register-indicator"></div>' +
           '<div id="anon-error-container"></div>' +
         '</div>' +
@@ -358,6 +382,11 @@ const AnonymousViewer = (() => {
       websocket.onopen = function() {
         console.log('AnonymousViewer: WebSocket connected');
         wsReconnectAttempts = 0;
+        // Re-send the caption lane selection: the server stores captionLang
+        // on the connection row, and a reconnect means a brand-new row.
+        if (captionLangSelected) {
+          _sendWebSocketMessage('setCaptionLanguage', { language: captionLanguage });
+        }
       };
 
       websocket.onmessage = function(event) {
@@ -409,12 +438,67 @@ const AnonymousViewer = (() => {
         case 'STREAM_STARTED':
           _setPlaceholder('');
           break;
+        case 'CAPTION':
+          // Render the lane this viewer wants: the original feed when no
+          // translated lane was picked, otherwise an exact language match.
+          if (msg.data && ((captionLanguage === 'original' && msg.data.original) ||
+              msg.data.language === captionLanguage)) {
+            _displayCaption(msg.data.text);
+          }
+          break;
         default:
           // Anonymous viewers ignore interaction messages
           break;
       }
     } catch (e) {
       // Ignore malformed messages
+    }
+  }
+
+  /**
+   * Send a message over the signaling WebSocket.
+   * Silently no-ops when the socket isn't open — anonymous viewers have no
+   * actions worth queueing.
+   * @param {string} action
+   * @param {Object} data
+   */
+  function _sendWebSocketMessage(action, data) {
+    if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
+    websocket.send(JSON.stringify({
+      action: action,
+      eventId: currentEventId,
+      data: data
+    }));
+  }
+
+  // --- Captions ---
+
+  /**
+   * Set the caption lane for this anonymous viewer. 'original' returns the
+   * connection to the presenter's own feed (the server REMOVEs captionLang);
+   * a language code asks the server to translate captions into that lane.
+   * @param {string} langCode - 'original' or one of CAPTION_LANGUAGES codes
+   */
+  function setCaptionLanguage(langCode) {
+    captionLanguage = langCode;
+    // The latch survives a dropped socket — onopen re-sends the current
+    // selection after reconnect, once the viewer has ever left 'original'.
+    if (langCode !== 'original') {
+      captionLangSelected = true;
+    }
+    _sendWebSocketMessage('setCaptionLanguage', { language: langCode });
+  }
+
+  /**
+   * Display a caption line, replacing the muted placeholder styling.
+   * @param {string} text
+   */
+  function _displayCaption(text) {
+    var captionEl = document.getElementById('anon-caption-text');
+    if (captionEl) {
+      captionEl.textContent = text;
+      captionEl.style.fontStyle = 'normal';
+      captionEl.style.color = '#e6edf3';
     }
   }
 
@@ -1218,6 +1302,8 @@ const AnonymousViewer = (() => {
     currentSessionId = null;
     currentFingerprint = null;
     wsReconnectAttempts = 0;
+    captionLanguage = 'original';
+    captionLangSelected = false;
   }
 
   // --- Utility ---
@@ -1262,6 +1348,13 @@ const AnonymousViewer = (() => {
       e.preventDefault();
       promptRegister();
     });
+
+    document.addEventListener('change', function(e) {
+      var t = e.target;
+      if (t && t.getAttribute && t.getAttribute('data-action') === 'anon-set-caption-language') {
+        setCaptionLanguage(t.value);
+      }
+    });
   }
 
   // --- Public API ---
@@ -1273,5 +1366,6 @@ const AnonymousViewer = (() => {
     showRegistrationPrompt: showRegistrationPrompt,
     showRegistrationOverlay: showRegistrationOverlay,
     upgradeSession: upgradeSession,
+    setCaptionLanguage: setCaptionLanguage,
   };
 })();
