@@ -24,17 +24,20 @@ async function run(config, { pass, fail, skip, withRetry }) {
     fail('GET /health returns 200 with status ok', err);
   }
 
-  // GET /events - public, no auth required
+  // GET /events - public, no auth required. The endpoint returns a paginated
+  // object { events: [...] }, not a bare array — accept either shape (matches
+  // how the frontend and live-e2e read it).
   try {
     await withRetry(async () => {
       const res = await fetch(`${config.apiUrl}/events`);
       if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
       const data = await res.json();
-      if (!Array.isArray(data)) throw new Error('Expected JSON array');
+      const list = Array.isArray(data) ? data : data && data.events;
+      if (!Array.isArray(list)) throw new Error('Expected an events array (bare or under .events)');
     }, config, 'GET /events');
-    pass('GET /events returns 200 with JSON array');
+    pass('GET /events returns 200 with an events array');
   } catch (err) {
-    fail('GET /events returns 200 with JSON array', err);
+    fail('GET /events returns 200 with an events array', err);
   }
 
   // POST /events without auth - should return 401
