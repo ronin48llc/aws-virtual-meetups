@@ -2493,6 +2493,13 @@ const LiveSession = (() => {
         case 'ATTENDEE_LEFT':
           if (msg.data && userRole === 'presenter') {
             dashboardAttendees = dashboardAttendees.filter(function(a) {
+              // Remove by connectionId when the payload carries one: a user who
+              // rejoins gets a FRESH row with the same userId, and the OLD
+              // socket's late $disconnect must not wipe that new row. Fall back
+              // to userId only for older payloads without a connectionId.
+              if (msg.data.connectionId) {
+                return a.connectionId !== msg.data.connectionId;
+              }
               return a.userId !== msg.data.userId;
             });
             renderDashboardAttendees();
@@ -2790,6 +2797,22 @@ const LiveSession = (() => {
         case 'KICKED':
           showNotification('You have been removed from this session.');
           disconnect();
+          break;
+        case 'USER_KICKED':
+          // Backend sends USER_KICKED both directly to the kicked user and as a
+          // broadcast to every remaining participant. Only self-disconnect when
+          // it is about us — otherwise everyone would drop when anyone is kicked.
+          if (msg.data && msg.data.userId === currentUserId) {
+            showNotification('You have been removed from this session.');
+            disconnect();
+          } else if (msg.data && userRole === 'presenter') {
+            // Someone else was kicked — remove them from the dashboard, same as
+            // ATTENDEE_LEFT (the broadcast carries userId only).
+            dashboardAttendees = dashboardAttendees.filter(function(a) {
+              return a.userId !== msg.data.userId;
+            });
+            renderDashboardAttendees();
+          }
           break;
         case 'TYPING':
           if (msg.data && msg.data.userId !== currentUserId) {

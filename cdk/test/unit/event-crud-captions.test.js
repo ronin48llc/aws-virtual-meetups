@@ -64,6 +64,7 @@ const { handler } = require('../../lambda/event-crud/index');
 
 const EVENT_ID = 'evt_abc123def456';
 const STARTED_AT = '2026-01-01T10:00:00.000Z';
+const CALLER_IP = '203.0.113.7';
 
 function buildCaptionsRequest(lang, eventId = EVENT_ID) {
   return {
@@ -74,6 +75,17 @@ function buildCaptionsRequest(lang, eventId = EVENT_ID) {
     queryStringParameters: null,
     requestContext: {},
   };
+}
+
+/**
+ * A captions request carrying a caller IP. Defaults to the HTTP API v2 shape
+ * (requestContext.http.sourceIp); pass { rest: true } for the REST API v1
+ * fallback (requestContext.identity.sourceIp).
+ */
+function buildCaptionsRequestWithIp(lang, sourceIp, { rest = false } = {}) {
+  const req = buildCaptionsRequest(lang);
+  req.requestContext = rest ? { identity: { sourceIp } } : { http: { sourceIp } };
+  return req;
 }
 
 function endedEventItem(overrides = {}) {
@@ -108,6 +120,28 @@ function captionRow(offsetSeconds, text, extras = {}) {
 /** Route DDB sends: Get -> metadata item, Query -> caption rows. */
 function mockDynamo({ item = endedEventItem(), rows = [] } = {}) {
   mockSend.mockImplementation((cmd) => {
+    if (cmd.type === 'Get') {
+      return Promise.resolve(item ? { Item: item } : {});
+    }
+    if (cmd.type === 'Query') {
+      return Promise.resolve({ Items: rows });
+    }
+    return Promise.resolve({});
+  });
+}
+
+/**
+ * Like mockDynamo, but also routes the rate-limit Update. `rateLimit` is the
+ * post-increment count the limiter reads back (Attributes.count), or an Error
+ * to reject the Update with (simulating a limiter DynamoDB failure).
+ */
+function mockDynamoWithLimit({ item = endedEventItem(), rows = [], rateLimit = 1 } = {}) {
+  mockSend.mockImplementation((cmd) => {
+    if (cmd.type === 'Update') {
+      return rateLimit instanceof Error
+        ? Promise.reject(rateLimit)
+        : Promise.resolve({ Attributes: { count: rateLimit } });
+    }
     if (cmd.type === 'Get') {
       return Promise.resolve(item ? { Item: item } : {});
     }
@@ -374,6 +408,85 @@ describe('GET /events/{id}/captions/{lang}', () => {
 
       const result = await handler(buildCaptionsRequest('original'));
       expect(result.statusCode).toBe(200);
+    });
+  });
+
+  describe('per-IP rate limiting', () => {
+    // The handler's cap is CAPTIONS_RATE_LIMIT_PER_MIN = 30; a post-increment
+    // count of 31 is the first request past it.
+    const OVER_CAP = 31;
+
+    it('serves the track normally when under the per-IP cap', async () => {
+      mockDynamoWithLimit({ rows: [captionRow(1, 'Hello')], rateLimit: 5 });
+      mockS3CacheMiss();
+
+      const result = await handler(buildCaptionsRequestWithIp('original', CALLER_IP));
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['Content-Type']).toBe('text/vtt');
+      expect(result.body).toContain('WEBVTT');
+      expect(result.body).toContain('Hello');
+
+      // The limiter atomically incremented this IP's minute-window counter in
+      // the main table (RATELIMIT#{ip} / MINUTE#{isoMinute}).
+      const update = mockSend.mock.calls.find((c) => c[0].type === 'Update')[0];
+      expect(update.params.TableName).toBe('TestTable');
+      expect(update.params.Key.PK).toBe(`RATELIMIT#${CALLER_IP}`);
+      expect(update.params.Key.SK).toMatch(/^MINUTE#/);
+      expect(update.params.UpdateExpression).toBe('ADD #count :inc SET #ttl = :ttl');
+      expect(update.params.ReturnValues).toBe('ALL_NEW');
+    });
+
+    it('returns 429 when over the cap without calling S3 or Translate', async () => {
+      mockDynamoWithLimit({ rows: [captionRow(1, 'Hello')], rateLimit: OVER_CAP });
+      mockS3CacheMiss();
+
+      const result = await handler(buildCaptionsRequestWithIp('es', CALLER_IP));
+
+      expect(result.statusCode).toBe(429);
+      expect(JSON.parse(result.body)).toEqual({
+        error: 'Too many caption requests, please retry shortly',
+      });
+
+      // Rejected before any cost-incurring work.
+      expect(mockS3Send).not.toHaveBeenCalled();
+      expect(mockTranslateSend).not.toHaveBeenCalled();
+      // Only the limiter Update ran — no metadata Get, no CAPTION# Query.
+      expect(mockSend.mock.calls.every((c) => c[0].type === 'Update')).toBe(true);
+    });
+
+    it('still serves (200) when the rate-limit write throws', async () => {
+      mockDynamoWithLimit({ rows: [captionRow(1, 'Hello')], rateLimit: new Error('DDB throttled') });
+      mockS3CacheMiss();
+
+      const result = await handler(buildCaptionsRequestWithIp('original', CALLER_IP));
+
+      expect(result.statusCode).toBe(200);
+      expect(result.body).toContain('WEBVTT');
+      expect(result.body).toContain('Hello');
+    });
+
+    it('skips limiting when the caller IP is absent', async () => {
+      mockDynamo({ rows: [captionRow(1, 'Hello')] });
+      mockS3CacheMiss();
+
+      // buildCaptionsRequest has requestContext: {} — no sourceIp.
+      const result = await handler(buildCaptionsRequest('original'));
+
+      expect(result.statusCode).toBe(200);
+      expect(result.body).toContain('Hello');
+      // No RATELIMIT# increment attempted.
+      expect(mockSend.mock.calls.some((c) => c[0].type === 'Update')).toBe(false);
+    });
+
+    it('uses the REST API v1 identity.sourceIp fallback', async () => {
+      mockDynamoWithLimit({ rows: [captionRow(1, 'Hello')], rateLimit: OVER_CAP });
+
+      const result = await handler(buildCaptionsRequestWithIp('es', CALLER_IP, { rest: true }));
+
+      expect(result.statusCode).toBe(429);
+      const update = mockSend.mock.calls.find((c) => c[0].type === 'Update')[0];
+      expect(update.params.Key.PK).toBe(`RATELIMIT#${CALLER_IP}`);
     });
   });
 });

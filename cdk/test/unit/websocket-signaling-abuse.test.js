@@ -31,11 +31,14 @@ jest.mock('@aws-sdk/client-ivschat', () => ({
   DisconnectUserCommand: jest.fn((params) => ({ type: 'DisconnectUser', params })),
 }));
 
-// Mock API Gateway Management API
+// Mock API Gateway Management API. PostToConnection and DeleteConnection both
+// go through the client's single send mock, so send-call ordering matters:
+// executeKickFlow posts USER_KICKED first, then DeleteConnection.
 const mockPostToConnection = jest.fn();
 jest.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   ApiGatewayManagementApiClient: jest.fn(() => ({ send: mockPostToConnection })),
   PostToConnectionCommand: jest.fn((params) => ({ type: 'PostToConnection', params })),
+  DeleteConnectionCommand: jest.fn((params) => ({ type: 'DeleteConnection', params })),
 }));
 
 // Mock broadcast
@@ -160,6 +163,12 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
         Key: { connectionId: 'conn-bad-user' },
       });
 
+      // Verify the actual WebSocket was force-closed (kills the zombie socket)
+      const { DeleteConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      expect(DeleteConnectionCommand).toHaveBeenCalledWith({
+        ConnectionId: 'conn-bad-user',
+      });
+
       // Verify broadcast to remaining participants
       expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123', {
         type: 'USER_KICKED',
@@ -232,6 +241,39 @@ describe('WebSocket Signaling Handler — Kick and Ban (Abuse Management)', () =
 
       expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123', expect.objectContaining({
         data: expect.objectContaining({ reason: 'Kicked by presenter' }),
+      }));
+    });
+
+    it('swallows GoneException when the WebSocket is already closed', async () => {
+      mockSend.mockResolvedValueOnce({
+        Item: { PK: 'EVENT#evt_abc123', SK: 'METADATA' },
+      });
+      mockSend.mockResolvedValueOnce({}); // DeleteCommand
+
+      // send #1 = USER_KICKED post (succeeds); send #2 = DeleteConnection (Gone).
+      const goneError = new Error('Connection already closed');
+      goneError.name = 'GoneException';
+      mockPostToConnection.mockReset();
+      mockPostToConnection.mockResolvedValueOnce({}); // PostToConnection
+      mockPostToConnection.mockRejectedValueOnce(goneError); // DeleteConnection
+
+      const event = buildEvent({
+        action: 'kickUser',
+        eventId: 'evt_abc123',
+        data: { userId: 'user_bad', targetConnectionId: 'conn-bad-user' },
+      });
+
+      // The Gone error must be swallowed: the flow completes and still broadcasts.
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+      expect(result.body).toBe('User kicked');
+
+      const { DeleteConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+      expect(DeleteConnectionCommand).toHaveBeenCalledWith({
+        ConnectionId: 'conn-bad-user',
+      });
+      expect(mockBroadcast).toHaveBeenCalledWith('evt_abc123', expect.objectContaining({
+        type: 'USER_KICKED',
       }));
     });
   });
