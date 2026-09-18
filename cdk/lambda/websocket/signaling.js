@@ -2155,6 +2155,9 @@ async function persistCaptionSegment(eventId, text, src, translations, timestamp
  * anonymous) — viewers pick their own language. Mirrors the grantSpeak
  * UpdateCommand pattern.
  *
+ * The sentinel "original" REMOVEs captionLang instead, returning the
+ * connection to the original (source-language) lane.
+ *
  * @param {string} eventId - The event identifier.
  * @param {Object} body - { data: { language } }
  * @param {string} connectionId - The sender's WebSocket connection ID.
@@ -2163,17 +2166,26 @@ async function persistCaptionSegment(eventId, text, src, translations, timestamp
 async function handleSetCaptionLanguage(eventId, body, connectionId) {
   const language = body.data?.language || body.language;
 
-  if (!language || !CAPTION_LANGUAGE_CODES.has(language)) {
+  if (!language || (language !== 'original' && !CAPTION_LANGUAGE_CODES.has(language))) {
     return { statusCode: 400, body: 'Invalid caption language' };
   }
 
-  await docClient.send(new UpdateCommand({
-    TableName: CONNECTIONS_TABLE_NAME,
-    Key: { connectionId },
-    UpdateExpression: 'SET #captionLang = :lang',
-    ExpressionAttributeNames: { '#captionLang': 'captionLang' },
-    ExpressionAttributeValues: { ':lang': language },
-  }));
+  if (language === 'original') {
+    await docClient.send(new UpdateCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId },
+      UpdateExpression: 'REMOVE #captionLang',
+      ExpressionAttributeNames: { '#captionLang': 'captionLang' },
+    }));
+  } else {
+    await docClient.send(new UpdateCommand({
+      TableName: CONNECTIONS_TABLE_NAME,
+      Key: { connectionId },
+      UpdateExpression: 'SET #captionLang = :lang',
+      ExpressionAttributeNames: { '#captionLang': 'captionLang' },
+      ExpressionAttributeValues: { ':lang': language },
+    }));
+  }
 
   console.info('Caption language set', { eventId, connectionId, language });
   return { statusCode: 200, body: 'Caption language set' };

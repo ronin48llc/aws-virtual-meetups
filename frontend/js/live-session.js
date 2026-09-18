@@ -2615,7 +2615,12 @@ const LiveSession = (() => {
           }
           break;
         case 'CAPTION':
-          if (msg.data && msg.data.language === captionLanguage) {
+          // Exact lane match — or, when the viewer never touched the
+          // selector (latch unset), the original feed: captionLanguage
+          // defaults to 'en', which would otherwise drop everything from a
+          // presenter speaking another language.
+          if (msg.data && (msg.data.language === captionLanguage ||
+              (!captionLangSelected && msg.data.original))) {
             displayCaption(msg.data.text);
           }
           break;

@@ -1,7 +1,8 @@
 'use strict';
 
 // Caption language lanes (multi-language captions).
-// Covers: setCaptionLanguage row updates + validation, per-lane caption
+// Covers: setCaptionLanguage row updates + validation (including the
+// "original" sentinel that REMOVEs captionLang), per-lane caption
 // fan-out with one Translate call per distinct lane, targeted per-lane
 // sends, translate-failure fallback to the original text, and caption
 // segment persistence for post-event VTT assembly.
@@ -311,12 +312,70 @@ describe('setCaptionLanguage', () => {
     expect(ddbCalls('Update')[0].params.Key).toEqual({ connectionId: 'conn-anon-abc123' });
   });
 
+  it('"original" REMOVEs captionLang from the sender connection row', async () => {
+    const result = await handler(buildEvent(
+      { action: 'setCaptionLanguage', eventId: 'evt_1', data: { language: 'original' } },
+      'conn-attendee'
+    ));
+    expect(result.statusCode).toBe(200);
+
+    const updates = ddbCalls('Update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0].params).toEqual(expect.objectContaining({
+      TableName: 'TestConnectionsTable',
+      Key: { connectionId: 'conn-attendee' },
+      UpdateExpression: 'REMOVE #captionLang',
+      ExpressionAttributeNames: { '#captionLang': 'captionLang' },
+    }));
+    expect(updates[0].params.ExpressionAttributeValues).toBeUndefined();
+  });
+
+  it('a connection reverted to original joins the original lane on the next broadcastCaption', async () => {
+    // The viewer picked 'fr', then reverted via "original" — the REMOVE
+    // leaves its row with no captionLang attribute.
+    const revertResult = await handler(buildEvent(
+      { action: 'setCaptionLanguage', eventId: 'evt_1', data: { language: 'original' } },
+      'conn-att-reverted'
+    ));
+    expect(revertResult.statusCode).toBe(200);
+    expect(ddbCalls('Update')[0].params.UpdateExpression).toBe('REMOVE #captionLang');
+
+    mockGetConnectionsForEvent.mockResolvedValue([
+      { connectionId: 'conn-presenter', role: 'presenter', eventId: 'evt_1' },
+      { connectionId: 'conn-att-reverted', role: 'attendee', eventId: 'evt_1' },
+      { connectionId: 'conn-att-es', role: 'attendee', eventId: 'evt_1', captionLang: 'es' },
+    ]);
+
+    await handler(buildCaptionEvent({ text: 'Back to the source', language: 'en' }));
+
+    // The reverted connection rides the original lane, not a translated one.
+    expect(laneSend(['conn-presenter', 'conn-att-reverted']).data).toEqual(expect.objectContaining({
+      text: 'Back to the source',
+      language: 'en',
+      original: true,
+    }));
+    // Only the remaining es lane is translated.
+    expect(mockTranslateSend).toHaveBeenCalledTimes(1);
+    expect(mockTranslateSend.mock.calls[0][0].params.TargetLanguageCode).toBe('es');
+  });
+
   it('rejects codes outside the supported set', async () => {
     const result = await handler(buildEvent(
       { action: 'setCaptionLanguage', eventId: 'evt_1', data: { language: 'xx' } },
       'conn-attendee'
     ));
     expect(result.statusCode).toBe(400);
+    expect(ddbCalls('Update')).toHaveLength(0);
+  });
+
+  it('rejects near-miss sentinels — only the exact string "original" reverts', async () => {
+    for (const bad of ['Original', 'ORIGINAL', 'orig', '']) {
+      const result = await handler(buildEvent(
+        { action: 'setCaptionLanguage', eventId: 'evt_1', data: { language: bad } },
+        'conn-attendee'
+      ));
+      expect(result.statusCode).toBe(400);
+    }
     expect(ddbCalls('Update')).toHaveLength(0);
   });
 

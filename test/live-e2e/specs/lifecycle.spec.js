@@ -238,6 +238,51 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
       return el ? parseInt(el.textContent, 10) : 0;
     });
     expect(anonCount, 'presenter dashboard should show ≥1 anonymous viewer').toBeGreaterThanOrEqual(1);
+
+    // Anonymous captions: the guest opts into French via the real select in
+    // the live view (AnonymousViewer.setCaptionLanguage exists as a
+    // programmatic fallback, but the select is the surface under test). The
+    // change handler sends the setCaptionLanguage WS action so the server
+    // records the fr lane on the anonymous connection row; give the write a
+    // beat to persist. Together with the attendee's Spanish lane from the
+    // earlier caption test — still registered on this same session — the
+    // next broadcast fans out to TWO translated lanes at once.
+    await anon.page.waitForSelector('#anon-caption-language-select', { timeout: 15000 });
+    const placeholder = await anon.page.evaluate(() => {
+      const sel = document.getElementById('anon-caption-language-select');
+      sel.value = 'fr';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      // Capture the pre-broadcast caption area text (muted placeholder) so
+      // the wait below can't be satisfied by it.
+      const el = document.getElementById('anon-caption-text');
+      return el ? (el.textContent || '').trim() : '';
+    });
+    await sleep(2000);
+
+    // The presenter broadcasts an English caption line directly — speech
+    // capture stays out of scope here for the same reason as the attendee
+    // Spanish test; the anon-specific path under test is broadcast →
+    // fr-lane Translate → targeted delivery to an ANONYMOUS connection →
+    // render in the guest caption area.
+    const original = 'Good afternoon and thank you all for joining today';
+    await presenter.page.evaluate(
+      (text) => LiveSession.broadcastCaptionToAttendees(text, 'en'),
+      original
+    );
+
+    // The guest's caption line renders non-empty, differs from the English
+    // sentence (the French lane delivered a translation, not the original
+    // feed) and differs from the placeholder. Generous timeout: real
+    // Amazon Translate is in the loop.
+    await anon.page.waitForFunction(
+      ({ orig, ph }) => {
+        const el = document.getElementById('anon-caption-text');
+        const t = el ? (el.textContent || '').trim() : '';
+        return t.length > 0 && t !== orig && t !== ph;
+      },
+      { orig: original, ph: placeholder },
+      { timeout: 20000 }
+    );
   });
 
   test('attendee raises a hand and asks a question', async () => {
