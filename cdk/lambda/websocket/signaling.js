@@ -14,7 +14,7 @@
 const crypto = require('crypto');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, DeleteCommand, QueryCommand, UpdateCommand, BatchWriteCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
-const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+const { ApiGatewayManagementApiClient, PostToConnectionCommand, DeleteConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
 const { IVSRealTimeClient, DisconnectParticipantCommand, CreateParticipantTokenCommand } = require('@aws-sdk/client-ivs-realtime');
 const { IvschatClient, DisconnectUserCommand } = require('@aws-sdk/client-ivschat');
 const { broadcast, getConnectionsForEvent, sendToConnections } = require('./broadcast');
@@ -1482,6 +1482,26 @@ async function executeKickFlow(eventId, userId, targetConnectionId, reason) {
     TableName: CONNECTIONS_TABLE_NAME,
     Key: { connectionId: targetConnectionId },
   }));
+
+  // Force-close the actual WebSocket. Removing the connections row above stops
+  // future broadcasts, but the socket stays open until the client notices —
+  // leaving a "zombie" that can still send. Use the same management API client
+  // and endpoint as sendToConnection. Best-effort: a GoneException means the
+  // socket already closed, so swallow it.
+  try {
+    const apiClient = new ApiGatewayManagementApiClient({
+      endpoint: WEBSOCKET_ENDPOINT,
+    });
+    await apiClient.send(new DeleteConnectionCommand({
+      ConnectionId: targetConnectionId,
+    }));
+  } catch (error) {
+    if (error.name === 'GoneException') {
+      console.info('WebSocket already closed on kick', { eventId, userId, targetConnectionId });
+    } else {
+      console.error('Failed to close WebSocket on kick', { eventId, userId, targetConnectionId, error: error.message });
+    }
+  }
 }
 
 /**

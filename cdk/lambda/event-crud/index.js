@@ -19,8 +19,8 @@ const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 
-const { EVENT_STATUS, GSI, SK, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } = require('../shared/constants');
-const { buildEventPK, buildGSI1SK, buildGSI2PK } = require('../shared/dynamo-utils');
+const { EVENT_STATUS, GSI, SK, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, ANONYMOUS } = require('../shared/constants');
+const { buildEventPK, buildGSI1SK, buildGSI2PK, buildRateLimitPK, buildRateLimitSK } = require('../shared/dynamo-utils');
 const { success, created, badRequest, unauthorized, notFound, serverError, forbidden, buildResponse } = require('../shared/response');
 const { validateRequiredFields, isFutureDate, isValidDate, isValidLength, parseBody, sanitize, computeDurationFields, validateDurationFields } = require('../shared/validation');
 const { createLogger } = require('../shared/logger');
@@ -818,6 +818,14 @@ const CAPTION_CUE_MAX_MS = 8000;
 const CAPTION_CUE_MIN_MS = 1000;
 const CAPTION_CUE_LAST_MS = 4000;
 
+/**
+ * Per-IP-per-minute cap for the public captions route. Generous by design:
+ * a legitimate playback client fetches a given VTT track once per language,
+ * so this only trips on scripted abuse of the (cost-incurring, on a cache
+ * miss) Translate path.
+ */
+const CAPTIONS_RATE_LIMIT_PER_MIN = 30;
+
 // Lazily created: @aws-sdk/client-translate ships with the nodejs20 Lambda
 // runtime but is not a local dev dependency, so it is required only when the
 // captions route actually needs an on-demand translation.
@@ -910,6 +918,81 @@ async function queryCaptionRows(eventId) {
 }
 
 /**
+ * Resolve the caller's source IP from the request context, supporting both
+ * HTTP API v2 (requestContext.http.sourceIp) and REST API v1
+ * (requestContext.identity.sourceIp) event shapes.
+ * @param {Object} event - API Gateway event.
+ * @returns {string|null} The caller IP, or null when it cannot be determined.
+ */
+function getSourceIp(event) {
+  const ctx = event && event.requestContext;
+  if (!ctx) {
+    return null;
+  }
+  return (ctx.http && ctx.http.sourceIp)
+    || (ctx.identity && ctx.identity.sourceIp)
+    || null;
+}
+
+/**
+ * Per-IP-per-minute throttle for the public captions route, mirroring the
+ * anonymous-token rate limiter: the same RATELIMIT#/MINUTE# schema (via
+ * buildRateLimitPK/buildRateLimitSK), an atomic ADD increment, and the shared
+ * RATE_LIMIT_TTL_SECONDS window. The caller IP stands in for the fingerprint,
+ * so the counter rows live in TABLE_NAME, which this handler already
+ * reads/writes (no IAM change).
+ *
+ * Best-effort by design: a missing IP skips limiting, and any DynamoDB failure
+ * is logged and treated as under-limit — serving captions must never fail
+ * because the limiter did, matching the resilience posture of the rest of this
+ * handler.
+ *
+ * The increment params are built with native (document-client) values rather
+ * than buildIncrementRateLimitParams, which emits the low-level attribute
+ * format the raw client uses in anonymous-token; this handler talks to DynamoDB
+ * exclusively through docClient.
+ * @param {Object} event - API Gateway event.
+ * @param {Object} logger - Logger instance.
+ * @returns {Promise<Object|null>} A 429 response when over the cap, else null.
+ */
+async function enforceCaptionsRateLimit(event, logger) {
+  const sourceIp = getSourceIp(event);
+  if (!sourceIp) {
+    return null;
+  }
+
+  const isoMinute = new Date().toISOString().slice(0, 16); // "2024-01-15T10:30"
+  const ttl = Math.floor(Date.now() / 1000) + ANONYMOUS.RATE_LIMIT_TTL_SECONDS;
+
+  try {
+    const result = await docClient.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: {
+        PK: buildRateLimitPK(sourceIp),
+        SK: buildRateLimitSK(isoMinute),
+      },
+      UpdateExpression: 'ADD #count :inc SET #ttl = :ttl',
+      ExpressionAttributeNames: { '#count': 'count', '#ttl': 'ttl' },
+      ExpressionAttributeValues: { ':inc': 1, ':ttl': ttl },
+      ReturnValues: 'ALL_NEW',
+    }));
+
+    const count = result.Attributes && result.Attributes.count;
+    if (count > CAPTIONS_RATE_LIMIT_PER_MIN) {
+      return buildResponse(429, { error: 'Too many caption requests, please retry shortly' });
+    }
+  } catch (err) {
+    logger.error('Captions rate-limit check failed, serving anyway', {
+      action: 'getEventCaptions',
+      error: err.message,
+      extra: { sourceIp, isoMinute },
+    });
+  }
+
+  return null;
+}
+
+/**
  * GET /events/{id}/captions/{lang} — serve a WebVTT caption track for an
  * ended/published event. Public access - no authentication required.
  *
@@ -917,14 +1000,22 @@ async function queryCaptionRows(eventId) {
  * from the CAPTION# segment rows persisted during the live broadcast
  * (translating any segment that lacks a stored translation for the
  * requested lane), caches the result back to S3, and returns text/vtt.
+ * @param {Object} event - API Gateway event (for the caller IP / rate limit).
  * @param {string} eventId
  * @param {string} lang - A CAPTION_LANGUAGES code or the literal "original".
  * @param {Object} logger - Logger instance.
  * @returns {Promise<Object>} API Gateway response.
  */
-async function getEventCaptions(eventId, lang, logger) {
+async function getEventCaptions(event, eventId, lang, logger) {
   if (lang !== 'original' && !CAPTION_LANGUAGES.includes(lang)) {
     return badRequest(`Unsupported caption language: ${lang}`);
+  }
+
+  // Public, unauthenticated route: throttle per caller IP before any S3 read
+  // or on-demand Translate call, both of which cost money on a cache miss.
+  const limited = await enforceCaptionsRateLimit(event, logger);
+  if (limited) {
+    return limited;
   }
 
   const result = await docClient.send(new GetCommand({
@@ -1128,7 +1219,7 @@ exports.handler = async (event) => {
       if (!eventId || !lang) {
         return badRequest('Event ID and caption language are required');
       }
-      return await getEventCaptions(eventId, lang, logger);
+      return await getEventCaptions(event, eventId, lang, logger);
     }
 
     // Route: PUT /events/{id}
