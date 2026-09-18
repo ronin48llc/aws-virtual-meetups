@@ -27,6 +27,7 @@ const KEY_PREFIX = Object.freeze({
   CONN: 'CONN#',
   HAND: 'HAND#',
   QUESTION: 'QUESTION#',
+  CAPTION: 'CAPTION#',
   ANON: 'ANON#',
   RATELIMIT: 'RATELIMIT#',
   MINUTE: 'MINUTE#',

@@ -335,6 +335,19 @@ class ApiStack extends Stack {
       });
       eventCrudFn.addToRolePolicy(recordingReadPolicy);
       anonymousTokenFn.addToRolePolicy(recordingReadPolicy);
+
+      // event-crud caches generated caption VTT files back to the bucket
+      // (recordings/{eventId}/captions/{lang}.vtt) so repeat playback
+      // requests skip the DynamoDB scan + Translate calls. Reads are
+      // covered by recordingReadPolicy above; writes stay scoped to the
+      // captions prefix only.
+      eventCrudFn.addToRolePolicy(new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:PutObject'],
+        resources: [
+          `arn:aws:s3:::${props.recordingBucketName}/recordings/*/captions/*`,
+        ],
+      }));
     }
 
     // Session Manager needs S3 access for composition recording
@@ -434,6 +447,21 @@ class ApiStack extends Stack {
       resources: ['*'],
     }));
 
+    // Live caption fan-out translates each caption once per subscribed
+    // language lane; event-crud translates persisted caption rows on
+    // demand when building a VTT file for a language that was never
+    // requested live. Amazon Translate has no resource-level scoping,
+    // so '*' is the tightest possible grant.
+    const translatePolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'translate:TranslateText',
+      ],
+      resources: ['*'],
+    });
+    wsSignalingFn.addToRolePolicy(translatePolicy);
+    eventCrudFn.addToRolePolicy(translatePolicy);
+
     // -------------------------------------------------------
     // HTTP API Routes — Lambda Integrations
     // -------------------------------------------------------
@@ -460,6 +488,15 @@ class ApiStack extends Stack {
 
     httpApi.addRoutes({
       path: '/events/{id}',
+      methods: [HttpMethod.GET],
+      integration: eventCrudIntegration,
+    });
+
+    // Caption VTT for ended-event playback. Public like GET /events/{id}:
+    // <track> elements cannot attach Authorization headers, and the
+    // handler already gates on the event being ended/published.
+    httpApi.addRoutes({
+      path: '/events/{id}/captions/{lang}',
       methods: [HttpMethod.GET],
       integration: eventCrudIntegration,
     });
@@ -644,6 +681,7 @@ class ApiStack extends Stack {
       'getHandsList',
       'typing',
       'broadcastCaption',
+      'setCaptionLanguage',
     ];
 
     customRoutes.forEach((routeKey) => {

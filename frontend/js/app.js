@@ -658,10 +658,19 @@ const App = (() => {
             '<p class="text-muted mt-sm">The recording is still processing. Check back in a few minutes.</p></div>';
         } else if (evt.recordingUrl || evt.hlsPlaybackUrl) {
           var playbackUrl = evt.hlsPlaybackUrl || evt.recordingUrl;
+          // Caption language options — hidden until the probe confirms captions exist
+          var captionOptions = '<option value="">Off</option><option value="original">Original</option>';
+          for (var ci = 0; ci < CAPTION_LANGUAGES.length; ci++) {
+            captionOptions += '<option value="' + CAPTION_LANGUAGES[ci].code + '">' + CAPTION_LANGUAGES[ci].label + '</option>';
+          }
           // Show recording player for everyone (authenticated or anonymous)
           html += '<div class="mt-lg"><h3>Recording</h3>'
             + '<div style="background: #0d1117; border-radius: 8px; overflow: hidden; margin-top: 12px;">'
-            + '<video id="recording-player" controls style="width: 100%; max-height: 480px;" playsinline></video>'
+            + '<video id="recording-player" controls crossorigin="anonymous" style="width: 100%; max-height: 480px;" playsinline></video>'
+            + '</div>'
+            + '<div id="caption-selector-wrap" style="display: none; margin-top: 8px; font-size: 13px; color: #57606a;">'
+            + '<label for="caption-language-select" style="margin-right: 8px;">Captions:</label>'
+            + '<select id="caption-language-select">' + captionOptions + '</select>'
             + '</div></div>';
           // Initialize HLS.js after render
           setTimeout(function() {
@@ -673,6 +682,7 @@ const App = (() => {
             } else if (video) {
               video.src = playbackUrl;
             }
+            initCaptionSelector(video, eventId);
           }, 100);
         } else {
           html += '<div class="mt-lg"><p class="text-muted">This event has ended. A recording may be available shortly.</p></div>';
@@ -693,6 +703,66 @@ const App = (() => {
     } catch (err) {
       container.innerHTML = '<p style="color: #e63946;">Failed to load event: ' + escapeHtml(err.message) + '</p>';
     }
+  }
+
+  // Supported caption languages for recorded playback.
+  // Kept in sync with CAPTION_LANGUAGES in live-session.js (defined locally — app.js does not import from live-session).
+  var CAPTION_LANGUAGES = [
+    { code: 'en', label: 'English' },
+    { code: 'es', label: 'Spanish' },
+    { code: 'fr', label: 'French' },
+    { code: 'de', label: 'German' },
+    { code: 'pt', label: 'Portuguese' },
+    { code: 'ja', label: 'Japanese' },
+    { code: 'ko', label: 'Korean' },
+    { code: 'zh', label: 'Chinese' }
+  ];
+
+  /**
+   * Wire up the caption selector for the ended-event recording player.
+   * Probes the captions endpoint once to decide visibility (404 or fetch
+   * error keeps it hidden); on selection swaps a single <track> element.
+   * All failures are non-fatal — playback works without captions.
+   */
+  function initCaptionSelector(video, eventId) {
+    var wrap = document.getElementById('caption-selector-wrap');
+    var select = document.getElementById('caption-language-select');
+    if (!video || !wrap || !select) return;
+
+    var apiBase = window.API_BASE_URL || '/api';
+    var captionsBase = apiBase + '/events/' + encodeURIComponent(eventId) + '/captions/';
+
+    // One-time probe — only show the selector when captions were recorded
+    try {
+      fetch(captionsBase + 'original')
+        .then(function(res) {
+          if (res.ok) wrap.style.display = 'block';
+        })
+        .catch(function() { /* non-fatal — selector stays hidden */ });
+    } catch (probeErr) { /* non-fatal */ }
+
+    select.addEventListener('change', function() {
+      try {
+        // Remove any previously attached track
+        var priorTracks = video.querySelectorAll('track');
+        for (var ti = 0; ti < priorTracks.length; ti++) {
+          priorTracks[ti].remove();
+        }
+
+        var lang = select.value;
+        if (!lang) return; // "Off"
+
+        var opt = select.options[select.selectedIndex];
+        var track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.srclang = lang;
+        track.label = (opt && opt.textContent) || lang;
+        track.src = captionsBase + encodeURIComponent(lang);
+        track.default = true;
+        video.appendChild(track);
+        track.track.mode = 'showing';
+      } catch (trackErr) { /* non-fatal — captions are best-effort */ }
+    });
   }
 
   /**

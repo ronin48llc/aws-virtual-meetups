@@ -58,7 +58,8 @@ E2E, **S** = smoke.
 | Ended-state UI (no stuck "Ending…") | Presenter | same | — |
 | Group chat round-trip (IVS Chat) | Attendee → Presenter | `attendee group chat reaches the presenter` | U (signaling chat), M |
 | Direct chat | — | *gap — see below* | U (signaling chat) |
-| Live captions | — | *excluded* (needs real speech — see below) | U (signaling broadcastCaption) |
+| Live captions — broadcast → per-lane Amazon Translate → targeted delivery | Presenter → Attendee | `attendee selects Spanish and receives a translated live caption` | U (signaling broadcastCaption) |
+| Live caption speech capture (Web Speech) | — | *excluded* (needs real speech — see below) | — |
 | Moderation: ban + unban | Presenter | `presenter bans then unbans the attendee` | U (signaling), M |
 | Role change targeting (promote) | Presenter → Attendee | `promoting the attendee changes only their role` | — |
 | Co-presenter publishing (publish token + A/V controls) | Attendee → Presenter | `promoted co-presenter can actually publish audio and video` | U (signaling-roles token mint) |
@@ -71,6 +72,7 @@ E2E, **S** = smoke.
 | Recording finalizes + URL exposed after verify | — | `recording becomes available and plays back` | U (event-crud existence gate) |
 | HLS manifest is valid + served via CDN | Attendee | same (fetches `#EXTM3U`) | — |
 | Recording playback (player renders) | Attendee | same | M (playback), U |
+| Per-language playback caption VTTs (public `/captions/{lang}`, S3-cached) | Attendee | same (fetches `original` + `es`, asserts `WEBVTT`) | U (event-crud captions) |
 | Recording publication → GitHub Pages | — | *excluded* (needs real PAT — see below) | U (publisher) |
 | Recap email with recording link | — | *excluded* (SES sandbox) | U (email templates) |
 | Sign-up stats + RSVP show rate | Presenter | `presenter reviews sign-up stats` | U (signup listing) |
@@ -79,10 +81,13 @@ E2E, **S** = smoke.
 
 ## Deliberate exclusions (and why)
 
-- **Live caption generation** — captions come from the presenter browser's
-  Web Speech API, which needs a real microphone speaking real words;
-  headless fake audio produces no transcript. The *broadcast/receive* path
-  is covered by unit tests. Captions are Chrome/Edge-only by design.
+- **Live caption speech capture** — transcripts come from the presenter
+  browser's Web Speech API, which needs a real microphone speaking real
+  words; headless fake audio produces no transcript. Everything downstream
+  of capture IS now live-tested by driving `broadcastCaptionToAttendees`
+  directly: broadcast, per-lane Amazon Translate fan-out, targeted
+  delivery, segment persistence, and the per-language playback VTTs.
+  Capture itself is Chrome/Edge-only by design.
 - **Email delivery (confirmation, reminders, live alert, recap)** — SES is
   in sandbox mode; mail only reaches verified addresses and test personas
   use `@test.invalid`. Template rendering and the send trigger are unit

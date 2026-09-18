@@ -30,6 +30,7 @@ const LiveSession = (() => {
   let currentUserEmail = null;
   let isHandRaised = false;
   let captionLanguage = 'en';
+  let captionLangSelected = false; // viewer explicitly picked a caption lane (synced to server)
   let isMicEnabled = false;
   let isCameraEnabled = false;
   let isScreenSharing = false;
@@ -1773,11 +1774,11 @@ const LiveSession = (() => {
   }
 
   /**
-   * Set the caption language. Local effect only: for a presenter this sets
-   * the Web Speech API recognition language (what the browser transcribes
-   * from their mic). Captions are broadcast in whatever language the
-   * presenter speaks — server-side translation is not implemented, so this
-   * deliberately sends nothing over the WebSocket.
+   * Set the caption language. For a presenter this sets the Web Speech API
+   * recognition language (what the browser transcribes from their mic) —
+   * captions are broadcast in whatever language the presenter speaks. For
+   * everyone else it also tells the signaling server which caption lane this
+   * connection wants, so the server can translate incoming captions into it.
    */
   function setCaptionLanguage(langCode) {
     captionLanguage = langCode;
@@ -1788,6 +1789,13 @@ const LiveSession = (() => {
       // Restart to apply new language
       try { speechRecognition.abort(); } catch (e) {}
       try { speechRecognition.start(); } catch (e) {}
+    }
+    // Viewers (attendee / co-presenter / speak-granted): sync the selection
+    // to the server so caption fan-out targets this connection's lane. The
+    // latch survives a dropped socket — onopen re-sends it after reconnect.
+    if (userRole !== 'presenter') {
+      captionLangSelected = true;
+      sendWebSocketMessage('setCaptionLanguage', { language: langCode });
     }
   }
 
@@ -2397,6 +2405,11 @@ const LiveSession = (() => {
         // Re-request dashboard state on reconnect (Task 7.4)
         if (userRole === 'presenter') {
           requestDashboardState();
+        }
+        // Re-send the caption lane selection: the server stores captionLang
+        // on the connection row, and a reconnect means a brand-new row.
+        if (userRole !== 'presenter' && captionLangSelected) {
+          sendWebSocketMessage('setCaptionLanguage', { language: captionLanguage });
         }
       };
 
@@ -3175,6 +3188,7 @@ const LiveSession = (() => {
     sendChatMessage: sendChatMessage,
     switchChatTab: switchChatTab,
     setCaptionLanguage: setCaptionLanguage,
+    broadcastCaptionToAttendees: broadcastCaptionToAttendees,
     switchDashboardTab: switchDashboardTab,
     getRole: function() { return userRole; },
     getPublishVideoMode: getPublishVideoMode,

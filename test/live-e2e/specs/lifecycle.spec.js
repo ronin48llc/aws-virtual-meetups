@@ -19,7 +19,7 @@
 const { test, expect, chromium } = require('@playwright/test');
 const { Actor } = require('../support/actors');
 const { loadPersonas } = require('../support/personas');
-const { LIVE_HOLD_MS, RECORDING_WAIT_MS } = require('../support/env');
+const { API_URL, LIVE_HOLD_MS, RECORDING_WAIT_MS } = require('../support/env');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -186,6 +186,39 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     expect(await p.evaluate(() =>
       document.querySelectorAll('#stage-video-container video').length
     )).toBeGreaterThan(0);
+  });
+
+  test('attendee selects Spanish and receives a translated live caption', async () => {
+    // The attendee opts into Spanish captions. Beyond the local filter, this
+    // sends the setCaptionLanguage WS action so the server records the lane
+    // on the attendee's connection row; give the write a beat to persist.
+    await attendee.page.evaluate(() => LiveSession.setCaptionLanguage('es'));
+    await sleep(2000);
+
+    // The presenter broadcasts an English caption line directly. Speech
+    // CAPTURE stays out of scope (headless fake audio produces no Web
+    // Speech transcript) — what's under test is everything downstream:
+    // broadcast → per-lane Amazon Translate → targeted delivery.
+    const original = 'Hello everyone, welcome to the session';
+    await presenter.page.evaluate(
+      (text) => LiveSession.broadcastCaptionToAttendees(text, 'en'),
+      original
+    );
+
+    // The attendee's caption line renders non-empty AND differs from the
+    // English sentence — proving the Spanish lane delivered a translation,
+    // not the original feed (a Translate failure falls back to the original
+    // text, which this assertion would catch). Generous timeout: real
+    // Amazon Translate is in the loop.
+    await attendee.page.waitForFunction(
+      (orig) => {
+        const el = document.getElementById('caption-text');
+        const t = el ? (el.textContent || '').trim() : '';
+        return t.length > 0 && t !== orig;
+      },
+      original,
+      { timeout: 20000 }
+    );
   });
 
   test('anonymous viewer watches the live session as a guest', async () => {
@@ -430,6 +463,22 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     // The event page shows a player (not the processing message).
     await attendee.goToEvent(shared.eventId);
     await attendee.page.waitForSelector('#recording-player, video', { timeout: 15000 });
+
+    // Playback captions: the live caption broadcast persisted segment rows,
+    // and the public captions endpoint serves them as WebVTT per language
+    // (translating + caching to S3 on first request). Both the original
+    // track and the Spanish lane must be real VTT.
+    const vtts = await attendee.page.evaluate(async ({ api, id }) => {
+      const get = async (lang) => {
+        const res = await fetch(api + '/events/' + id + '/captions/' + lang);
+        return { status: res.status, text: await res.text() };
+      };
+      return { original: await get('original'), es: await get('es') };
+    }, { api: API_URL, id: shared.eventId });
+    expect(vtts.original.status, 'original VTT: ' + vtts.original.text.slice(0, 120)).toBe(200);
+    expect(vtts.original.text.startsWith('WEBVTT')).toBe(true);
+    expect(vtts.es.status, 'es VTT: ' + vtts.es.text.slice(0, 120)).toBe(200);
+    expect(vtts.es.text.startsWith('WEBVTT')).toBe(true);
   });
 
   test('presenter reviews sign-up stats and attendance', async () => {
