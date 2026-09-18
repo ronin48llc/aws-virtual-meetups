@@ -13,6 +13,7 @@
     ]
   },
   "context": {
+    "protectData": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [

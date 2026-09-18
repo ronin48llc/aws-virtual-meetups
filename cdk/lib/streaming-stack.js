@@ -51,8 +51,9 @@ class StreamingStack extends Stack {
     const recordingBucket = new s3.Bucket(this, 'RecordingBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
-      // RETAIN in prod — recordings are the platform's only irreplaceable
-      // artifact; a stack delete must not empty and remove the bucket.
+      // RETAIN in protected envs — recordings are the platform's only
+      // irreplaceable artifact; a stack delete must not empty and remove
+      // the bucket.
       removalPolicy: dataRemovalPolicy(this),
       autoDeleteObjects: !isProd(this),
       serverAccessLogsBucket: recordingAccessLogsBucket,

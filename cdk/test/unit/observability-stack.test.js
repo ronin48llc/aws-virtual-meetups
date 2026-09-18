@@ -169,4 +169,15 @@ describe('alarm email subscribers', () => {
   test('prod with alarmEmails synths', () => {
     expect(() => synth({ env: 'prod', alarmEmails: 'ops@example.com' })).not.toThrow();
   });
+
+  // -c protectData=true marks the dev-named stacks as production (the only
+  // deployment in the account), so it must enforce the same subscriber
+  // requirement as env=prod.
+  test('protectData without alarmEmails refuses to synth', () => {
+    expect(() => synth({ protectData: true })).toThrow(/alarmEmails/);
+  });
+
+  test('protectData with alarmEmails synths', () => {
+    expect(() => synth({ protectData: true, alarmEmails: 'ops@example.com' })).not.toThrow();
+  });
 });

@@ -20,6 +20,57 @@ function buildParentWithBucket() {
   return { app, parent, recordingBucket };
 }
 
+describe('PublicationStack — publish target repo context (publishOwner/publishRepo)', () => {
+  test('defaults GITHUB_OWNER/GITHUB_REPO to the original target when no context is set', () => {
+    const { app, recordingBucket } = buildParentWithBucket();
+    const stack = new PublicationStack(app, 'TestPubDefaults', {
+      env: { account: '123456789012', region: 'us-east-1' },
+      recordingBucket,
+    });
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'VirtualMeetup-Publisher-dev',
+      Environment: {
+        Variables: Match.objectLike({
+          GITHUB_OWNER: 'aws-community',
+          GITHUB_REPO: 'aws-community-meetup-recordings',
+        }),
+      },
+    });
+  });
+
+  test('publishOwner/publishRepo context flags override the Lambda env vars', () => {
+    // Switching the publication target must be a context change
+    // (-c publishOwner=... -c publishRepo=...), not a code edit.
+    const app = new App({
+      context: {
+        publishOwner: 'ronin48llc',
+        publishRepo: 'meetup-recordings-archive',
+      },
+    });
+    const parent = new Stack(app, 'TestParent', {
+      env: { account: '123456789012', region: 'us-east-1' },
+    });
+    const recordingBucket = new s3.Bucket(parent, 'TestRecordingBucket');
+    const stack = new PublicationStack(app, 'TestPubOverride', {
+      env: { account: '123456789012', region: 'us-east-1' },
+      recordingBucket,
+    });
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'VirtualMeetup-Publisher-dev',
+      Environment: {
+        Variables: Match.objectLike({
+          GITHUB_OWNER: 'ronin48llc',
+          GITHUB_REPO: 'meetup-recordings-archive',
+        }),
+      },
+    });
+  });
+});
+
 describe('PublicationStack — CLOUDFRONT_DOMAIN wiring (#107)', () => {
   test('passes recordingCloudfrontDomain into CLOUDFRONT_DOMAIN env var', () => {
     const { app, recordingBucket } = buildParentWithBucket();

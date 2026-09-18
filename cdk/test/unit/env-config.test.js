@@ -55,6 +55,89 @@ describe('environment-gated removal policies', () => {
   });
 });
 
+// The one deployed account has no VirtualMeetup-prod-* stacks and never
+// will: the dev-named stacks ARE production, and renaming the env would
+// replace every named stateful resource. -c protectData=true must therefore
+// flip all prod-grade data protections while leaving names (and logical
+// IDs) untouched.
+describe('protectData context flag', () => {
+  function synthProtected(extraContext = {}) {
+    const app = new App({ context: { protectData: true, ...extraContext } });
+    return Template.fromStack(new DataStack(app, 'TestData', { env: ENV }));
+  }
+
+  test('protectData tables are RETAINed and deletion-protected, keeping -dev names', () => {
+    const template = synthProtected();
+    const tables = template.findResources('AWS::DynamoDB::Table');
+    Object.values(tables).forEach((table) => {
+      expect(table.DeletionPolicy).toBe('Retain');
+      expect(table.UpdateReplacePolicy).toBe('Retain');
+      expect(table.Properties.DeletionProtectionEnabled).toBe(true);
+    });
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'VirtualMeetupTable-dev',
+    });
+  });
+
+  test('protectData passed as the string "true" (CLI -c) also protects', () => {
+    const app = new App({ context: { protectData: 'true' } });
+    const template = Template.fromStack(new DataStack(app, 'TestData', { env: ENV }));
+    const tables = template.findResources('AWS::DynamoDB::Table');
+    Object.values(tables).forEach((table) => {
+      expect(table.DeletionPolicy).toBe('Retain');
+      expect(table.Properties.DeletionProtectionEnabled).toBe(true);
+    });
+  });
+
+  test('without protectData, dev tables stay DESTROY and unprotected', () => {
+    const template = synthDataStack(null);
+    const tables = template.findResources('AWS::DynamoDB::Table');
+    Object.values(tables).forEach((table) => {
+      expect(table.DeletionPolicy).toBe('Delete');
+      expect(table.Properties.DeletionProtectionEnabled).toBe(false);
+    });
+  });
+
+  test('env=prod still implies deletion protection', () => {
+    const template = synthDataStack('prod');
+    const tables = template.findResources('AWS::DynamoDB::Table');
+    Object.values(tables).forEach((table) => {
+      expect(table.Properties.DeletionProtectionEnabled).toBe(true);
+    });
+  });
+
+  test('protectData user pool is RETAINed with deletion protection ACTIVE', () => {
+    const app = new App({ context: { protectData: true } });
+    const template = Template.fromStack(new AuthStack(app, 'TestAuth', { env: ENV }));
+    const pool = Object.values(template.findResources('AWS::Cognito::UserPool'))[0];
+    expect(pool.DeletionPolicy).toBe('Retain');
+    expect(pool.UpdateReplacePolicy).toBe('Retain');
+    expect(pool.Properties.DeletionProtection).toBe('ACTIVE');
+    expect(pool.Properties.UserPoolName).toBe('virtual-meetup-user-pool-dev');
+  });
+
+  test('without protectData, dev user pool deletion protection stays INACTIVE', () => {
+    const app = new App();
+    const template = Template.fromStack(new AuthStack(app, 'TestAuth', { env: ENV }));
+    const pool = Object.values(template.findResources('AWS::Cognito::UserPool'))[0];
+    expect(pool.Properties.DeletionProtection).toBe('INACTIVE');
+  });
+
+  test('protectData recording bucket is RETAINed with no auto-delete', () => {
+    const app = new App({ context: { protectData: true } });
+    const template = Template.fromStack(new StreamingStack(app, 'TestStreaming', { env: ENV }));
+    const buckets = template.findResources('AWS::S3::Bucket');
+    const recording = Object.entries(buckets).find(
+      ([id]) => id.startsWith('RecordingBucket') && !id.includes('Logs')
+    );
+    expect(recording[1].DeletionPolicy).toBe('Retain');
+    expect(recording[1].UpdateReplacePolicy).toBe('Retain');
+    const autoDelete = template.findResources('Custom::S3AutoDeleteObjects');
+    const targets = Object.values(autoDelete).map((r) => r.Properties.BucketName.Ref);
+    expect(targets).not.toContain(recording[0]);
+  });
+});
+
 describe('env-suffixed physical names', () => {
   test('prod tables carry the -prod suffix', () => {
     const template = synthDataStack('prod');

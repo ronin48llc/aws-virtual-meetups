@@ -2,27 +2,29 @@
 
 Operational procedures for the Virtual Meetup Platform. Assumes the AWS CLI is configured with a profile that can read CloudFormation, Lambda, SQS, SNS, and DynamoDB in the deployment account.
 
-Environments are namespaced by suffix: every physical resource name ends in `-dev` or `-prod` (e.g. `VirtualMeetupTable-prod`, `VirtualMeetup-EventCrud-prod`), and stacks are named `VirtualMeetup-<env>-<Stack>`. Substitute the environment you are operating on throughout this document.
+The platform runs in a **single AWS account** with a **single stack set**, and the environment name is `dev`: every physical resource name ends in `-dev` (e.g. `VirtualMeetupTable-dev`, `VirtualMeetup-EventCrud-dev`), and stacks are named `VirtualMeetup-dev-<Stack>`. **The `dev`-named stacks ARE production** (awsvirtualmeetups.com — real users, events, and recordings). There is no `VirtualMeetup-prod-*` stack set and there never will be: the env name drives physical resource names, so renaming it would create a phantom parallel stack set and replace the tables and the Cognito user pool. Production-grade behavior (RETAIN removal policies on stateful resources, mandatory alarm emails) comes from the `protectData` CDK context flag (`-c protectData=true`), not from the env name. Wherever this document shows `<env>`, substitute `dev` — it is the only environment.
 
 ---
 
 ## 1. CI/CD pipeline
 
-| Branch | Environment | GitHub Environment |
-|--------|-------------|--------------------|
-| `develop` | `dev` | `development` |
-| `main` | `prod` | `production` |
+| Branch | CDK env (`-c env=`) | GitHub Environment | `protectData` |
+|--------|---------------------|--------------------|---------------|
+| `develop` | `dev` | `development` | not set |
+| `main` | `dev` | `production` | `-c protectData=true` |
 
-Pipeline: **test → deploy (CDK + frontend) → smoke test** (`.github/workflows/deploy.yml`).
+Both branches deploy the **same** `VirtualMeetup-dev-*` stacks — there is only one stack set (see above). The GitHub Environment selects which variables apply and whether the required-reviewer gate runs; it does not select different stacks. Treat every run of this pipeline as a production deploy: a `develop` push hits the same stacks without the approval gate and without `protectData`, so push to `develop` with the same care as `main` (or leave the `development` Environment's variables unset so its deploys fail validation early).
+
+Pipeline: **test → deploy (CDK + frontend) → smoke test** (`.github/workflows/deploy.yml`). `main` deploys additionally pass `-c protectData=true` and `-c alarmEmails=$ALARM_EMAILS`, and refuse to proceed if `ALARM_EMAILS` is unset.
 
 ### One-time GitHub configuration
 
 1. **Secrets** (repo-level): `AWS_DEPLOY_ROLE_ARN` (OIDC deploy role), optionally `AWS_REGION`, `SMOKE_TEST_USERNAME`, `SMOKE_TEST_PASSWORD`. If `AWS_DEPLOY_ROLE_ARN` is unset, deploy and smoke jobs skip cleanly.
-2. **Environments** (Settings → Environments): create `production` and `development`. On `production`, add **required reviewers** — this is the approval gate for prod deploys.
+2. **Environments** (Settings → Environments): create `production` and `development`. On `production`, add **required reviewers** — this is the approval gate for `main` deploys.
 3. **Environment variables** on each environment:
    - `DOMAIN_NAME` (e.g. `awsvirtualmeetups.com`) — required
    - `HOSTED_ZONE_ID` — required
-   - `ALARM_EMAILS` (comma-separated) — required for `production`; prod synth fails without it
+   - `ALARM_EMAILS` (comma-separated) — required on `production`; `main` deploys fail validation without it, and a `protectData=true` synth refuses without it
    - `IVS_STORAGE_CONFIG_ARN`, `IVS_ENCODER_CONFIG_ARN` — required for recording
    - `SES_EMAIL_ENABLED` — set to `true` only after SES production access is granted (§7)
 
@@ -44,13 +46,14 @@ The pipeline does not auto-rollback. A smoke-test failure notifies the `VirtualM
    git checkout <good-sha>
    cd cdk && npm ci
    npx cdk deploy --all --require-approval never \
-     -c env=prod -c domainName=<domain> -c hostedZoneId=<zone> \
+     -c env=dev -c protectData=true \
+     -c domainName=<domain> -c hostedZoneId=<zone> \
      -c alarmEmails=<emails> \
      -c ivsStorageConfigArn=<arn> -c ivsEncoderConfigArn=<arn>
    ```
    Then sync the frontend (same commands the pipeline runs — see the "Deploy frontend" step in deploy.yml).
 
-CloudFormation rollback notes: stateful resources (tables, user pool, recordings bucket) are `RETAIN` in prod, so a failed stack update or rollback cannot delete data. If a stack is stuck in `UPDATE_ROLLBACK_FAILED`, use *Continue update rollback* in the CloudFormation console.
+CloudFormation rollback notes: stateful resources (tables, user pool, recordings bucket) are `RETAIN` when deployed with `protectData=true` (CI passes it on `main`), so a failed stack update or rollback cannot delete data. If a stack is stuck in `UPDATE_ROLLBACK_FAILED`, use *Continue update rollback* in the CloudFormation console.
 
 ## 3. Responding to alarms
 
@@ -73,7 +76,7 @@ Two DLQs: `VirtualMeetup-EmailDLQ-<env>` (failed email sends) and `VirtualMeetup
 Inspect without consuming:
 
 ```bash
-QUEUE_URL=$(aws sqs get-queue-url --queue-name VirtualMeetup-EmailDLQ-prod --query QueueUrl --output text)
+QUEUE_URL=$(aws sqs get-queue-url --queue-name VirtualMeetup-EmailDLQ-dev --query QueueUrl --output text)
 aws sqs receive-message --queue-url "$QUEUE_URL" --max-number-of-messages 10 \
   --visibility-timeout 30 --message-attribute-names All
 ```
@@ -83,7 +86,7 @@ Each message body is the original async invocation event. To replay after fixing
 ```bash
 # Body of the DLQ message = original Lambda payload (for Lambda-destination DLQs
 # the payload is under .requestPayload)
-aws lambda invoke --function-name VirtualMeetup-EmailSender-prod \
+aws lambda invoke --function-name VirtualMeetup-EmailSender-dev \
   --invocation-type Event --payload file://payload.json /dev/null
 # then delete the DLQ message:
 aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle <handle>
@@ -96,7 +99,7 @@ The publisher Lambda commits Jekyll posts using a PAT stored in Secrets Manager 
 ```bash
 export GITHUB_PAT='...'   # fine-grained PAT, contents:write on the publication repo only
 aws secretsmanager put-secret-value \
-  --secret-id VirtualMeetup-prod/GitHubToken \
+  --secret-id VirtualMeetup-dev/GitHubToken \
   --secret-string "$(jq -n --arg t "$GITHUB_PAT" '{token:$t}')"
 ```
 
@@ -129,6 +132,6 @@ export ADMIN_PASSWORD=<strong password>
 ./scripts/seed-admin.sh
 ```
 
-## 9. Destroying an environment
+## 9. Destroying the environment
 
-`cdk destroy --all -c env=dev ...` tears down dev cleanly (DESTROY policies). For prod, tables / user pool / recordings bucket are RETAINed and must be deleted manually after export — this is intentional friction.
+There is no disposable environment in this account — `-c env=dev` IS production, so `cdk destroy --all -c env=dev ...` is a production teardown. Never run it without an explicit decision to decommission the platform. On stacks deployed with `protectData=true` (every `main` deploy), the tables / user pool / recordings bucket are RETAINed and must be deleted manually after export — this is intentional friction. If the last deploy ran without `protectData` (e.g. from `develop`), even that safety net is absent.

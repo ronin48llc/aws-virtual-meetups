@@ -10,6 +10,7 @@ const { FrontendStack } = require('../lib/frontend-stack');
 const { PublicationStack } = require('../lib/publication-stack');
 const { ObservabilityStack } = require('../lib/observability-stack');
 const { EmailStack } = require('../lib/email-stack');
+const { GitHubDeployStack } = require('../lib/github-deploy-stack');
 
 const app = new cdk.App();
 
@@ -175,3 +176,18 @@ observabilityStack.addDependency(apiStack);
 observabilityStack.addDependency(dataStack);
 observabilityStack.addDependency(publicationStack);
 observabilityStack.addDependency(emailStack);
+
+// -------------------------------------------------------
+// Stack 10: GitHub Deploy (depends on Frontend)
+// GitHub Actions OIDC provider + deploy role for the CD pipeline
+// (.github/workflows/deploy.yml). Deployed manually once with admin
+// credentials; its DeployRoleArn output goes in the AWS_DEPLOY_ROLE_ARN
+// repo secret.
+// -------------------------------------------------------
+const gitHubDeployStack = new GitHubDeployStack(app, `${prefix}-GitHubDeploy`, {
+  env,
+  description: 'Virtual Meetup Platform - GitHub Deploy (OIDC provider + Actions deploy role)',
+  frontendBucket: frontendStack.frontendBucket,
+  distribution: frontendStack.distribution,
+});
+gitHubDeployStack.addDependency(frontendStack);
