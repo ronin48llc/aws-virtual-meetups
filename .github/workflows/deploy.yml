@@ -67,10 +67,12 @@ jobs:
     # GitHub Environment gives main an approval gate (configure required
     # reviewers on the `production` environment in repo settings) and lets
     # DOMAIN_NAME / HOSTED_ZONE_ID / IVS ARNs / ALARM_EMAILS be defined as
-    # per-environment variables. Note the Environment selects variables and
-    # gating only — both branches target the same VirtualMeetup-dev-* stacks
-    # (see "Determine environment" below).
-    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
+    # per-environment variables. The Environment selects variables and
+    # gating only — the workflow is main-only and always targets the
+    # VirtualMeetup-dev-* stacks (see "Determine environment" below). It is
+    # also what the deploy role's OIDC trust requires: only the
+    # environment:production subject is trusted.
+    environment: production
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
 
@@ -227,6 +229,10 @@ jobs:
   smoke-test:
     needs: [deploy]
     runs-on: ubuntu-latest
+    # Must be bound to the Environment: the deploy role trusts ONLY the
+    # environment:production OIDC subject (ref subjects are deliberately
+    # untrusted — see cdk/lib/github-deploy-stack.js).
+    environment: production
 
     steps:
       - name: Checkout code

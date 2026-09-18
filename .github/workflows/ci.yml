@@ -44,10 +44,12 @@ jobs:
         working-directory: cdk
 
       - name: CDK synth (validate templates)
-        # DnsStack fail-fasts without domainName/hostedZoneId context (#147).
-        # These are throwaway placeholders for template validation only — synth
-        # does not contact Route53, so any well-formed values suffice.
-        run: npx cdk synth --quiet -c domainName=example.com -c hostedZoneId=Z00000000000000000000
+        # DnsStack fail-fasts without domainName/hostedZoneId context (#147),
+        # and protectData (default-on in cdk.json) makes the observability
+        # stack refuse to synth without an alarm subscriber. These are
+        # throwaway placeholders for template validation only — synth does
+        # not contact Route53 or SNS, so any well-formed values suffice.
+        run: npx cdk synth --quiet -c domainName=example.com -c hostedZoneId=Z00000000000000000000 -c alarmEmails=ci-placeholder@example.invalid
         working-directory: cdk
         env:
           AWS_DEFAULT_REGION: us-east-1

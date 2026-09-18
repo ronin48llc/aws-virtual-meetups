@@ -11,9 +11,13 @@ const { withEnv, envName } = require('./env-config');
  * aws-actions/configure-aws-credentials. The role ARN output is what goes in
  * the AWS_DEPLOY_ROLE_ARN repository secret.
  *
- * Trust is restricted to this repo's `production` GitHub Environment and to
- * pushes to refs/heads/main — no wildcard subjects, so a workflow on any
- * other repo, branch, or environment cannot assume the role.
+ * Trust is restricted to this repo's `production` GitHub Environment ONLY.
+ * A ref-based subject (refs/heads/main) is deliberately NOT trusted: GitHub
+ * runs `delete`-event (and some other) workflows in default-branch context,
+ * so a ref subject would let ANY workflow in the repo assume this role — the
+ * since-removed destroy-on-branch-delete workflow actually obtained
+ * credentials that way. Environment subjects are only issued to jobs bound
+ * to the `production` Environment, which deploy.yml's deploy/smoke jobs are.
  *
  * The role itself carries almost no direct power: `cdk deploy` works by
  * assuming the CDK bootstrap roles (cdk-hnb659fds-*), so the deploy role only
@@ -46,10 +50,8 @@ class GitHubDeployStack extends Stack {
 
     // -------------------------------------------------------
     // Deploy role assumed by deploy.yml via OIDC (no long-lived keys).
-    // sub claims: deploys run from the `production` GitHub Environment on
-    // refs/heads/main, so both subject formats are trusted — GitHub emits
-    // `environment:` subjects for jobs bound to an Environment and `ref:`
-    // subjects otherwise.
+    // sub claim: ONLY the `production` Environment subject. See the header
+    // for why a ref subject must never be added here.
     // -------------------------------------------------------
     this.deployRole = new iam.Role(this, 'GitHubActionsDeployRole', {
       roleName: withEnv(this, 'GitHubActionsDeployRole'),
@@ -61,7 +63,6 @@ class GitHubDeployStack extends Stack {
         StringLike: {
           'token.actions.githubusercontent.com:sub': [
             'repo:ronin48llc/aws-virtual-meetups:environment:production',
-            'repo:ronin48llc/aws-virtual-meetups:ref:refs/heads/main',
           ],
         },
       }),
