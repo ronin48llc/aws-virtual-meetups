@@ -12,18 +12,36 @@ const { RemovalPolicy } = require('aws-cdk-lib');
  * withEnv() so each environment gets its own namespace.
  *
  * Stateful resources (DynamoDB tables, the Cognito user pool, the recordings
- * bucket) also switch to RETAIN in prod via dataRemovalPolicy(): a stack
- * delete or a CloudFormation replacement must never take user accounts,
- * events, or recordings with it. Dev keeps DESTROY so `cdk destroy` stays a
- * clean teardown.
+ * bucket) also switch to RETAIN in protected environments via
+ * dataRemovalPolicy(): a stack delete or a CloudFormation replacement must
+ * never take user accounts, events, or recordings with it. Unprotected dev
+ * keeps DESTROY so `cdk destroy` stays a clean teardown.
  */
 
 function envName(scope) {
   return scope.node.tryGetContext('env') || 'dev';
 }
 
+/**
+ * True when this environment's data must get production-grade protection.
+ *
+ * The single AWS account this platform lives in has exactly one deployment:
+ * the VirtualMeetup-dev-* stacks ARE production (awsvirtualmeetups.com, real
+ * users, events, and recordings). The env name can never be flipped to
+ * 'prod' because it drives physical resource names via withEnv() — renaming
+ * would replace the tables and the Cognito user pool, destroying the data
+ * this function exists to protect. Instead, production-grade behavior
+ * (RETAIN, deletion protection, no auto-delete, required alarm subscribers)
+ * is opted into with the `protectData` context flag while the 'dev' names
+ * stay put. cdk.json defaults it to true so EVERY deploy — CI, manual, any
+ * branch — is protected unless explicitly disabled with
+ * `-c protectData=false` (only sensible for a scratch env that must
+ * `cdk destroy` cleanly). Only the literal false/'false' disables it, so a
+ * typo can never silently drop protection.
+ */
 function isProd(scope) {
-  return envName(scope) === 'prod';
+  const protect = scope.node.tryGetContext('protectData');
+  return envName(scope) === 'prod' || (protect !== undefined && protect !== false && protect !== 'false');
 }
 
 /** Suffix a physical resource name with the environment. */
@@ -32,7 +50,8 @@ function withEnv(scope, baseName) {
 }
 
 /**
- * Removal policy for stateful resources: RETAIN in prod, DESTROY elsewhere.
+ * Removal policy for stateful resources: RETAIN when isProd() (env 'prod'
+ * or -c protectData=true), DESTROY elsewhere.
  */
 function dataRemovalPolicy(scope) {
   return isProd(scope) ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;

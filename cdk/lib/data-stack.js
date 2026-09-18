@@ -1,14 +1,18 @@
 const { Stack, CfnOutput } = require('aws-cdk-lib');
 const dynamodb = require('aws-cdk-lib/aws-dynamodb');
-const { withEnv, dataRemovalPolicy } = require('./env-config');
+const { withEnv, isProd, dataRemovalPolicy } = require('./env-config');
 
 class DataStack extends Stack {
   constructor(scope, id, props) {
     super(scope, id, props);
 
-    // Tables are RETAIN'd in prod (see env-config.js) — a stack delete or a
-    // CloudFormation replacement must never destroy event/user data.
+    // Tables are RETAIN'd in protected envs (see isProd in env-config.js) —
+    // a stack delete or a CloudFormation replacement must never destroy
+    // event/user data. DynamoDB deletion protection additionally blocks
+    // DeleteTable at the API level, catching console/CLI mistakes that
+    // RemovalPolicy (a CloudFormation-only guard) cannot.
     const removalPolicy = dataRemovalPolicy(this);
+    const deletionProtection = isProd(this);
 
     // Main single-table: VirtualMeetupTable
     const mainTable = new dynamodb.Table(this, 'VirtualMeetupTable', {
@@ -18,6 +22,7 @@ class DataStack extends Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
       removalPolicy,
+      deletionProtection,
     });
 
     // GSI1: List upcoming events sorted by start time
@@ -45,6 +50,7 @@ class DataStack extends Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
       removalPolicy,
+      deletionProtection,
       timeToLiveAttribute: 'ttl',
     });
 

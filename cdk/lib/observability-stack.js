@@ -11,7 +11,7 @@ const lambda = require('aws-cdk-lib/aws-lambda');
 const events = require('aws-cdk-lib/aws-events');
 const targets = require('aws-cdk-lib/aws-events-targets');
 const { CfnQueryDefinition } = require('aws-cdk-lib/aws-logs');
-const { withEnv } = require('./env-config');
+const { withEnv, isProd } = require('./env-config');
 
 /**
  * Observability Stack for the Virtual Meetup Platform.
@@ -28,19 +28,21 @@ class ObservabilityStack extends Stack {
     const envName = this.node.tryGetContext('env') || 'dev';
 
     // Alarm subscribers. Accepts an array (cdk.context.json) or a comma-
-    // separated string (-c alarmEmails=a@x.com,b@y.com from CI). Prod
-    // refuses to deploy without at least one subscriber — an alarm topic
-    // nobody is subscribed to is indistinguishable from no alarms at all.
+    // separated string (-c alarmEmails=a@x.com,b@y.com from CI). Protected
+    // environments (env 'prod' or -c protectData=true — see isProd in
+    // env-config.js) refuse to deploy without at least one subscriber — an
+    // alarm topic nobody is subscribed to is indistinguishable from no
+    // alarms at all.
     const rawAlarmEmails = this.node.tryGetContext('alarmEmails') || [];
     const alarmEmails = (Array.isArray(rawAlarmEmails)
       ? rawAlarmEmails
       : String(rawAlarmEmails).split(','))
       .map((email) => email.trim())
       .filter(Boolean);
-    if (envName === 'prod' && alarmEmails.length === 0) {
+    if (isProd(this) && alarmEmails.length === 0) {
       throw new Error(
         'ObservabilityStack: -c alarmEmails=<email[,email...]> is required for prod '
-        + 'so CloudWatch alarms actually notify someone.'
+        + 'or protectData environments so CloudWatch alarms actually notify someone.'
       );
     }
 

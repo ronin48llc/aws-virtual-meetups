@@ -3,8 +3,10 @@ name: CD - Deploy on Merge
 on:
   push:
     branches:
+      # main only: the single deployment in this account IS production, so
+      # there is no develop environment to deploy to — a develop push would
+      # have targeted the SAME stacks (and its OIDC sub isn't trusted).
       - main
-      - develop
 
 permissions:
   id-token: write
@@ -62,10 +64,12 @@ jobs:
     needs: [test, check-deploy-secrets]
     if: ${{ needs.check-deploy-secrets.outputs.configured == 'true' }}
     runs-on: ubuntu-latest
-    # GitHub Environment gives prod an approval gate (configure required
+    # GitHub Environment gives main an approval gate (configure required
     # reviewers on the `production` environment in repo settings) and lets
     # DOMAIN_NAME / HOSTED_ZONE_ID / IVS ARNs / ALARM_EMAILS be defined as
-    # per-environment variables so dev and prod deploy with different values.
+    # per-environment variables. Note the Environment selects variables and
+    # gating only — both branches target the same VirtualMeetup-dev-* stacks
+    # (see "Determine environment" below).
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
@@ -74,18 +78,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ONE-ACCOUNT REALITY: this AWS account has a single stack set,
+      # VirtualMeetup-dev-*, and it IS production (awsvirtualmeetups.com —
+      # real users, events, recordings). The env name must stay 'dev' because
+      # it drives physical resource names; introducing 'prod' would create a
+      # phantom parallel stack set and replace the tables and the Cognito
+      # user pool. So main also deploys env=dev, and production-grade
+      # behavior comes from the protectData context flag instead (see "Build
+      # CDK context flags"). The GitHub Environment above stays 'production'
+      # for main so its variables and required-reviewer gating still apply.
       - name: Determine environment
         id: set-env
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
-          else
-            echo "environment=dev" >> $GITHUB_OUTPUT
-          fi
+        run: echo "environment=dev" >> "$GITHUB_OUTPUT"
 
-      # DnsStack fail-fasts without domainName/hostedZoneId (#147), and prod
-      # refuses to synth without alarmEmails. Catch missing configuration here
-      # with an actionable message instead of a stack trace mid-deploy.
+      # DnsStack fail-fasts without domainName/hostedZoneId (#147), and a
+      # protected synth (protectData=true) refuses without alarmEmails. Catch
+      # missing configuration here with an actionable message instead of a
+      # stack trace mid-deploy.
       - name: Validate deployment configuration
         env:
           DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
@@ -95,7 +104,10 @@ jobs:
           missing=()
           [ -z "$DOMAIN_NAME" ] && missing+=("DOMAIN_NAME")
           [ -z "$HOSTED_ZONE_ID" ] && missing+=("HOSTED_ZONE_ID")
-          if [ "${{ steps.set-env.outputs.environment }}" = "prod" ] && [ -z "$ALARM_EMAILS" ]; then
+          # Keyed on the branch, not the env name: the env name is always
+          # 'dev' now, but main deploys the production workload and must
+          # never go out without alarm emails wired up.
+          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ -z "$ALARM_EMAILS" ]; then
             missing+=("ALARM_EMAILS")
           fi
           if [ ${#missing[@]} -gt 0 ]; then
@@ -129,6 +141,13 @@ jobs:
           [ -n "${{ vars.IVS_STORAGE_CONFIG_ARN }}" ] && CTX="$CTX -c ivsStorageConfigArn=${{ vars.IVS_STORAGE_CONFIG_ARN }}"
           [ -n "${{ vars.IVS_ENCODER_CONFIG_ARN }}" ] && CTX="$CTX -c ivsEncoderConfigArn=${{ vars.IVS_ENCODER_CONFIG_ARN }}"
           [ -n "${{ vars.ALARM_EMAILS }}" ] && CTX="$CTX -c alarmEmails=${{ vars.ALARM_EMAILS }}"
+          # main deploys the production workload (the dev-named stacks are
+          # production — see "Determine environment"), so turn on
+          # production-grade behavior (RETAIN removal policies etc.) via
+          # protectData rather than the env name.
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            CTX="$CTX -c protectData=true"
+          fi
           # Set SES_EMAIL_ENABLED=true once SES production access is granted
           # (see docs/RUNBOOK.md) so Cognito sends via the SES domain identity.
           [ -n "${{ vars.SES_EMAIL_ENABLED }}" ] && CTX="$CTX -c sesEmailEnabled=${{ vars.SES_EMAIL_ENABLED }}"
@@ -179,7 +198,7 @@ jobs:
           aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
 
       # Scope output collection to this env's stacks — a bare
-      # `describe-stacks` across the account mixes dev and prod outputs.
+      # `describe-stacks` across the account would sweep in unrelated stacks.
       - name: Export stack outputs to smoke-config.json
         env:
           DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}

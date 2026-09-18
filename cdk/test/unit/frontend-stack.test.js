@@ -167,3 +167,53 @@ describe('FrontendStack — security headers (#105)', () => {
     });
   });
 });
+
+describe('FrontendStack — CSP connect-src derived from domainNames', () => {
+  // The custom-domain branch of the CSP used to hardcode
+  // *.awsvirtualmeetups.com; it must derive from props.domainNames so any
+  // domain works.
+
+  function extractCsp(template) {
+    const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    const policy = Object.values(policies)[0];
+    return policy.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.ContentSecurityPolicy;
+  }
+
+  function synthWithDomains(domainNames) {
+    const app = new App();
+    const stack = new FrontendStack(app, 'TestFrontendCsp', {
+      env: { account: '123456789012', region: 'us-east-1' },
+      domainNames,
+    });
+    return Template.fromStack(stack);
+  }
+
+  test('connect-src whitelists wildcards over the configured domain, not a hardcoded one', () => {
+    const csp = extractCsp(synthWithDomains(['example.invalid']));
+    const connectSrc = csp.split(';').find((d) => d.trim().startsWith('connect-src'));
+    expect(connectSrc).toContain('https://*.example.invalid');
+    expect(connectSrc).toContain('wss://*.example.invalid');
+    expect(csp).not.toContain('awsvirtualmeetups.com');
+  });
+
+  test('drops domainNames covered by another entry (www.<apex> alongside <apex>)', () => {
+    const csp = extractCsp(synthWithDomains(['example.invalid', 'www.example.invalid']));
+    expect(csp).toContain('https://*.example.invalid');
+    expect(csp).toContain('wss://*.example.invalid');
+    // *.example.invalid already covers www.example.invalid — a
+    // *.www.example.invalid wildcard would be redundant noise.
+    expect(csp).not.toContain('*.www.example.invalid');
+  });
+
+  test('omits custom-domain sources entirely when no domainNames are passed', () => {
+    const app = new App();
+    const stack = new FrontendStack(app, 'TestFrontendCspNoDomain', {
+      env: { account: '123456789012', region: 'us-east-1' },
+    });
+    const csp = extractCsp(Template.fromStack(stack));
+    const connectSrc = csp.split(';').find((d) => d.trim().startsWith('connect-src'));
+    expect(connectSrc).toBeDefined();
+    expect(connectSrc).not.toContain('awsvirtualmeetups.com');
+    expect(connectSrc).toContain('https://*.amazonaws.com');
+  });
+});

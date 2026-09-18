@@ -15,6 +15,12 @@ class PublicationStack extends Stack {
 
     const { recordingBucket, emailSenderFunction, recordingCloudfrontDomain } = props;
 
+    // Publication target repo — CDK context parameters so switching the
+    // GitHub Pages destination is a `-c publishOwner=... -c publishRepo=...`
+    // change, not a code edit. Defaults preserve the original target.
+    const publishOwner = this.node.tryGetContext('publishOwner') || 'aws-community';
+    const publishRepo = this.node.tryGetContext('publishRepo') || 'aws-community-meetup-recordings';
+
     // -------------------------------------------------------
     // Secrets Manager — GitHub Token
     // -------------------------------------------------------
@@ -49,8 +55,8 @@ class PublicationStack extends Stack {
       environment: {
         RECORDING_BUCKET_NAME: recordingBucket.bucketName,
         GITHUB_TOKEN_SECRET_ARN: githubTokenSecret.secretArn,
-        GITHUB_REPO: 'aws-community-meetup-recordings',
-        GITHUB_OWNER: 'aws-community',
+        GITHUB_REPO: publishRepo,
+        GITHUB_OWNER: publishOwner,
         // Issue #107: the publisher builds hls_url as
         //   https://${CLOUDFRONT_DOMAIN}/recordings/${eventId}/media/master.m3u8
         // and embeds the same URL in the Jekyll post's <script>. Leaving this

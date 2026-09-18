@@ -73,6 +73,19 @@ class FrontendStack extends Stack {
     // - frame-ancestors 'none' blocks clickjacking. X-Frame-Options DENY is
     //   set in parallel for older browsers.
     // -------------------------------------------------------
+    // Derive the custom-domain CSP sources from the distribution's alternate
+    // domain names so any domain works (previously hardcoded to
+    // awsvirtualmeetups.com). Entries that are subdomains of another entry
+    // (e.g. www.<apex> alongside <apex>) are dropped — the apex wildcard
+    // already covers them.
+    const cspBaseDomains = (props.domainNames || []).filter(
+      (domain, _, all) =>
+        !all.some((other) => other !== domain && domain.endsWith(`.${other}`))
+    );
+    const cspCustomDomainSources = cspBaseDomains
+      .map((domain) => `https://*.${domain} wss://*.${domain}`)
+      .join(' ');
+
     const cspDirectives = [
       "default-src 'self'",
       "script-src 'self' https://cdn.jsdelivr.net https://web-broadcast.live-video.net",
@@ -85,8 +98,8 @@ class FrontendStack extends Stack {
       // would hardcode a region and break deploys outside us-east-1.
       // The custom API domain (api.<domainName>) must be explicitly listed
       // because it doesn't match *.amazonaws.com.
-      ...(props.domainNames && props.domainNames.length > 0
-        ? [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://*.awsvirtualmeetups.com wss://*.awsvirtualmeetups.com https://cdn.jsdelivr.net https://*.cloudfront.net`]
+      ...(cspBaseDomains.length > 0
+        ? [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net ${cspCustomDomainSources} https://cdn.jsdelivr.net https://*.cloudfront.net`]
         : [`connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.live-video.net wss://*.live-video.net https://cdn.jsdelivr.net https://*.cloudfront.net`]),
       "worker-src 'self' blob:",
       "frame-ancestors 'none'",

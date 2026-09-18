@@ -5,7 +5,7 @@ const lambda = require('aws-cdk-lib/aws-lambda');
 const logs = require('aws-cdk-lib/aws-logs');
 const iam = require('aws-cdk-lib/aws-iam');
 const { IdentityPool, UserPoolAuthenticationProvider } = require('aws-cdk-lib/aws-cognito-identitypool');
-const { withEnv, dataRemovalPolicy } = require('./env-config');
+const { withEnv, isProd, dataRemovalPolicy } = require('./env-config');
 
 class AuthStack extends Stack {
   constructor(scope, id, props) {
@@ -62,8 +62,11 @@ class AuthStack extends Stack {
         requireSymbols: false,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      // RETAIN in prod — deleting the pool deletes every user account.
+      // RETAIN in protected envs — deleting the pool deletes every user
+      // account. Deletion protection additionally blocks DeleteUserPool at
+      // the API level (console/CLI), which RemovalPolicy alone cannot.
       removalPolicy: dataRemovalPolicy(this),
+      deletionProtection: isProd(this),
       // Default Cognito email (sandbox-safe) unless sesEmailEnabled — see
       // the context gate at the top of this constructor.
       email: sesEmailEnabled
