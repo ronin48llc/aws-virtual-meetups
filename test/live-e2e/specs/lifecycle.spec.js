@@ -548,5 +548,17 @@ test.describe('Event lifecycle — presenter / attendee / anonymous', () => {
     const attendeeRecord = (signups.body.signups || []).find((s) => s.email === personas.attendee.email);
     expect(attendeeRecord, 'attendee should be on the list').toBeTruthy();
     expect(attendeeRecord.attendedAt, 'attendee who joined should be marked attended').toBeTruthy();
+
+    // Engagement metrics: the stop path computed the summary, including the
+    // count of DISTINCT anonymous fingerprints with a live session. The
+    // anonymous persona watched the live session earlier in the suite, so
+    // the persisted METRICS item must have caught it — a 0 or a missing
+    // field here means the stop-time anon count regressed.
+    const evt = await presenter.publicGet('/events/' + shared.eventId);
+    expect(evt.status).toBe(200);
+    const metrics = (evt.body && evt.body.metrics) || {};
+    expect(typeof metrics.anonymousViewers, 'metrics.anonymousViewers should be a number').toBe('number');
+    expect(metrics.anonymousViewers, 'anonymous persona watched live → counted at stop')
+      .toBeGreaterThanOrEqual(1);
   });
 });

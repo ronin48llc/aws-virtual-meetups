@@ -64,6 +64,86 @@ const SESSION_MANAGER_ARN = process.env.SESSION_MANAGER_ARN;
 const SCHEDULER_ROLE_ARN = process.env.SCHEDULER_ROLE_ARN;
 
 /**
+ * Count DISTINCT anonymous viewer fingerprints for an event's live sessions.
+ * Anonymous session rows are PK=EVENT#{id}, SK=ANON#{fingerprint}#{sessionId}
+ * (24h TTL, so they still exist at stop time). Select:'COUNT' can't dedupe,
+ * so this pages through the real SKs (projecting only SK + sessionType),
+ * keeps sessionType 'live' rows (playback rows are excluded), and collects
+ * distinct fingerprints — the SK segment between 'ANON#' and the next '#'.
+ *
+ * @param {string} eventId - The event identifier.
+ * @returns {Promise<number>} Count of distinct live anonymous fingerprints.
+ */
+async function countAnonymousViewers(eventId) {
+  const fingerprints = new Set();
+  let exclusiveStartKey;
+  do {
+    const queryParams = {
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
+      ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'ANON#' },
+      ProjectionExpression: 'SK, sessionType',
+    };
+    if (exclusiveStartKey) {
+      queryParams.ExclusiveStartKey = exclusiveStartKey;
+    }
+    const result = await docClient.send(new QueryCommand(queryParams));
+    for (const item of result.Items || []) {
+      if (item.sessionType !== 'live') {
+        continue;
+      }
+      const fingerprint = (item.SK || '').slice('ANON#'.length).split('#')[0];
+      if (fingerprint) {
+        fingerprints.add(fingerprint);
+      }
+    }
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return fingerprints.size;
+}
+
+/**
+ * Compute the engagement summary at event stop and persist it via
+ * storeEngagementSummary (the single METRICS writer). Shared by the manual
+ * stop route and handleAutoStop so both paths store the same summary:
+ * totalAttendees, totalQuestions, durationSeconds, anonymousViewers.
+ * storeEngagementSummary's finalizedAt guard makes the first writer win when
+ * the two paths race — neither clobbers a summary the other already stored.
+ *
+ * @param {string} eventId - The event identifier.
+ * @param {string|undefined} startedAt - The event's startedAt ISO timestamp.
+ * @param {string} endedAt - The stop-time ISO timestamp.
+ */
+async function computeAndStoreEngagementSummary(eventId, startedAt, endedAt) {
+  const durationSeconds = startedAt ? Math.floor((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000) : 0;
+
+  // Sum Count across all pages. DDB's Select:COUNT still respects the
+  // 1 MB page cap — without this loop, totalAttendees / totalQuestions
+  // get the first-page count, not the true total, for any event with
+  // ~1500+ items in the partition. See issue #64.
+  const totalAttendees = await sumPaginatedCount({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
+    ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'SIGNUP#' },
+  });
+
+  const totalQuestions = await sumPaginatedCount({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
+    ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'QUESTION#' },
+  });
+
+  const anonymousViewers = await countAnonymousViewers(eventId);
+
+  await storeEngagementSummary(TABLE_NAME, eventId, {
+    totalAttendees,
+    totalQuestions,
+    durationSeconds,
+    anonymousViewers,
+  });
+}
+
+/**
  * Extract authenticated user claims from the request context.
  * @param {Object} event - API Gateway event.
  * @returns {Object|null} User claims or null if unauthenticated.
@@ -529,30 +609,7 @@ async function stopEvent(event, eventId) {
 
   // Compute and store engagement summary metrics
   try {
-    const startedAt = existing.Item.startedAt;
-    const durationSeconds = startedAt ? Math.floor((new Date(now).getTime() - new Date(startedAt).getTime()) / 1000) : 0;
-
-    // Sum Count across all pages. DDB's Select:COUNT still respects the
-    // 1 MB page cap — without this loop, totalAttendees / totalQuestions
-    // get the first-page count, not the true total, for any event with
-    // ~1500+ items in the partition. See issue #64.
-    const totalAttendees = await sumPaginatedCount({
-      TableName: TABLE_NAME,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
-      ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'SIGNUP#' },
-    });
-
-    const totalQuestions = await sumPaginatedCount({
-      TableName: TABLE_NAME,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :skPrefix)',
-      ExpressionAttributeValues: { ':pk': buildEventPK(eventId), ':skPrefix': 'QUESTION#' },
-    });
-
-    await storeEngagementSummary(TABLE_NAME, eventId, {
-      totalAttendees,
-      totalQuestions,
-      durationSeconds,
-    });
+    await computeAndStoreEngagementSummary(eventId, existing.Item.startedAt, now);
   } catch (err) {
     console.error('Failed to store engagement summary:', { eventId, error: err.message });
   }
@@ -740,6 +797,16 @@ async function handleAutoStop(schedulerEvent) {
     eventId,
     endedAt: now,
   });
+
+  // Compute and store engagement summary metrics — same summary as the
+  // manual stop route (durationSeconds derives from the event's startedAt).
+  // storeEngagementSummary's finalizedAt guard means a summary already
+  // stored by a racing manual stop is never clobbered (first writer wins).
+  try {
+    await computeAndStoreEngagementSummary(eventId, existing.Item.startedAt, now);
+  } catch (err) {
+    console.error('Auto-stop: failed to store engagement summary:', { eventId, error: err.message });
+  }
 
   console.info('Auto-stop: event ended successfully', { eventId, endedAt: now });
   return { status: 'stopped', eventId, endedAt: now };

@@ -201,7 +201,8 @@ async function getMetrics(tableName, eventId) {
 
 /**
  * Store an engagement summary for an event.
- * Writes totalAttendees, totalQuestions, and duration to the METRICS record.
+ * Writes totalAttendees, totalQuestions, duration, and anonymousViewers
+ * to the METRICS record.
  *
  * @param {string} tableName - DynamoDB table name.
  * @param {string} eventId - The event identifier.
@@ -209,6 +210,7 @@ async function getMetrics(tableName, eventId) {
  * @param {number} [metrics.totalAttendees] - Total attendee count.
  * @param {number} [metrics.totalQuestions] - Total questions asked.
  * @param {number} [metrics.durationSeconds] - Event duration in seconds.
+ * @param {number} [metrics.anonymousViewers] - Distinct anonymous live-viewer fingerprints.
  * @returns {Promise<Object>} Updated attributes.
  */
 async function storeEngagementSummary(tableName, eventId, metrics = {}) {
@@ -238,6 +240,12 @@ async function storeEngagementSummary(tableName, eventId, metrics = {}) {
     updateParts.push('#durationSeconds = :durationSeconds');
     names['#durationSeconds'] = 'durationSeconds';
     values[':durationSeconds'] = metrics.durationSeconds;
+  }
+
+  if (metrics.anonymousViewers !== undefined) {
+    updateParts.push('#anonymousViewers = :anonymousViewers');
+    names['#anonymousViewers'] = 'anonymousViewers';
+    values[':anonymousViewers'] = metrics.anonymousViewers;
   }
 
   try {

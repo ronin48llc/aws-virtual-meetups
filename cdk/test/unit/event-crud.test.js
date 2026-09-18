@@ -608,6 +608,87 @@ describe('Event CRUD Lambda handler', () => {
       expect(body.recordingUrl).toBe('https://cdn.example.com/recordings/evt_recorded/master.m3u8');
     });
 
+    it('includes anonymousViewers in metrics when present on the METRICS item', async () => {
+      mockSend.mockResolvedValueOnce({
+        Item: {
+          eventId: 'evt_ended',
+          title: 'Ended Event',
+          description: 'This event has ended',
+          scheduledStart: '2025-01-01T10:00:00Z',
+          status: 'ended',
+          url: '/events/evt_ended',
+          ownerUserId: 'user-123',
+          createdAt: '2025-01-01T00:00:00Z',
+          updatedAt: '2025-01-01T12:00:00Z',
+        },
+      });
+      mockSend.mockResolvedValueOnce({
+        Item: {
+          totalAttendees: 12,
+          totalQuestions: 4,
+          durationSeconds: 3600,
+          anonymousViewers: 7,
+        },
+      }); // metrics Get
+
+      const event = buildEvent({
+        method: 'GET',
+        resource: '/events/{id}',
+        pathParameters: { id: 'evt_ended' },
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+
+      const body = JSON.parse(result.body);
+      expect(body.metrics).toEqual({
+        totalAttendees: 12,
+        totalQuestions: 4,
+        durationSeconds: 3600,
+        anonymousViewers: 7,
+      });
+    });
+
+    it('omits anonymousViewers from metrics for legacy events without it', async () => {
+      mockSend.mockResolvedValueOnce({
+        Item: {
+          eventId: 'evt_legacy',
+          title: 'Legacy Ended Event',
+          description: 'Ended before anonymous-viewer tracking',
+          scheduledStart: '2025-01-01T10:00:00Z',
+          status: 'ended',
+          url: '/events/evt_legacy',
+          ownerUserId: 'user-123',
+          createdAt: '2025-01-01T00:00:00Z',
+          updatedAt: '2025-01-01T12:00:00Z',
+        },
+      });
+      mockSend.mockResolvedValueOnce({
+        Item: {
+          totalAttendees: 12,
+          totalQuestions: 4,
+          durationSeconds: 3600,
+        },
+      }); // metrics Get — no anonymousViewers
+
+      const event = buildEvent({
+        method: 'GET',
+        resource: '/events/{id}',
+        pathParameters: { id: 'evt_legacy' },
+      });
+
+      const result = await handler(event);
+      expect(result.statusCode).toBe(200);
+
+      const body = JSON.parse(result.body);
+      expect(body.metrics).toEqual({
+        totalAttendees: 12,
+        totalQuestions: 4,
+        durationSeconds: 3600,
+      });
+      expect(body.metrics).not.toHaveProperty('anonymousViewers');
+    });
+
     it('returns displayMode "cancelled" for cancelled events', async () => {
       mockSend.mockResolvedValueOnce({
         Item: {
