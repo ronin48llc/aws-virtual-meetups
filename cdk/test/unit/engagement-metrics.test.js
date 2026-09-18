@@ -90,6 +90,33 @@ describe('engagement-metrics idempotent finalize (issue #24)', () => {
       expect(params.UpdateExpression).toContain('#totalAttendees = :totalAttendees');
       expect(params.UpdateExpression).not.toContain('#totalQuestions');
       expect(params.UpdateExpression).not.toContain('#durationSeconds');
+      expect(params.UpdateExpression).not.toContain('#anonymousViewers');
+    });
+
+    it('persists anonymousViewers when provided', async () => {
+      mockSend.mockResolvedValueOnce({ Attributes: {} });
+
+      await storeEngagementSummary('T', 'evt_1', {
+        totalAttendees: 7,
+        totalQuestions: 2,
+        durationSeconds: 3600,
+        anonymousViewers: 4,
+      });
+
+      const params = lastUpdateParams();
+      expect(params.UpdateExpression).toContain('#anonymousViewers = :anonymousViewers');
+      expect(params.ExpressionAttributeNames['#anonymousViewers']).toBe('anonymousViewers');
+      expect(params.ExpressionAttributeValues[':anonymousViewers']).toBe(4);
+    });
+
+    it('persists an explicit anonymousViewers of 0 (a real zero, not an omission)', async () => {
+      mockSend.mockResolvedValueOnce({ Attributes: {} });
+
+      await storeEngagementSummary('T', 'evt_1', { anonymousViewers: 0 });
+
+      const params = lastUpdateParams();
+      expect(params.UpdateExpression).toContain('#anonymousViewers = :anonymousViewers');
+      expect(params.ExpressionAttributeValues[':anonymousViewers']).toBe(0);
     });
   });
 

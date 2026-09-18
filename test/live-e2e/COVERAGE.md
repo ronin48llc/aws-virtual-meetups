@@ -79,7 +79,7 @@ E2E, **S** = smoke.
 | Recap email with recording link | — | *excluded* (SES sandbox) | U (email templates) |
 | Sign-up stats + RSVP show rate | Presenter | `presenter reviews sign-up stats` | U (signup listing) |
 | Attendance marking (attendedAt) | Presenter | same (API assertion) | U (token-generator attendance) |
-| Engagement metrics (attendees/questions/duration) | — | *partial* — stats strip asserted; exact counts via API | U (engagement-metrics) |
+| Engagement metrics (attendees/questions/duration/anonymous viewers) | Presenter | `presenter reviews sign-up stats` (GET `/events/{id}` asserts `metrics.anonymousViewers` ≥ 1 — the anonymous persona's live watch must survive to the stop-time summary) | U (engagement-metrics) |
 
 ## Deliberate exclusions (and why)
 
@@ -129,6 +129,18 @@ covered live:
   `grantSpeak` action) now mints a PUBLISH token the same way and delivers it
   to the target via `SPEAK_PERMISSION_CHANGED`; the frontend shows the A/V
   controls and rejoins with the publish token. `revokeSpeak` reverses it.
+
+- **Anonymous viewers excluded from engagement metrics** — the audit
+  finding that the stop-time summary counted no anonymous viewers (and
+  that auto-stop stored no metrics at all) is **fixed**: both the manual
+  stop route and auto-stop now compute one shared summary
+  (totalAttendees, totalQuestions, durationSeconds, `anonymousViewers` =
+  distinct live-session fingerprints among the event's ANON rows),
+  persisted via the single metrics writer, returned in the GET
+  `/events/{id}` metrics block when present (older events omit it, never
+  0-faked), and shown in the Event Stats strip. Verified live by the
+  `anonymousViewers` ≥ 1 assertion in `presenter reviews sign-up stats
+  and attendance`.
 
 Two related ROLE_CHANGED bugs were FIXED earlier and are guarded by the
 promote test above: (1) the handler read `msg.data.role` but the backend

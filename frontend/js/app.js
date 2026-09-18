@@ -618,6 +618,9 @@ const App = (() => {
         metricsHtml += '<div style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: #57606a;">';
         metricsHtml += '<span>👥 ' + (evt.metrics.totalAttendees || 0) + ' attendees</span>';
         metricsHtml += '<span>❓ ' + (evt.metrics.totalQuestions || 0) + ' questions asked</span>';
+        if (typeof evt.metrics.anonymousViewers === 'number') {
+          metricsHtml += '<span>👤 ' + evt.metrics.anonymousViewers + ' anonymous viewers</span>';
+        }
         if (evt.metrics.durationSeconds) {
           var durH = Math.floor(evt.metrics.durationSeconds / 3600);
           var durM = Math.floor((evt.metrics.durationSeconds % 3600) / 60);

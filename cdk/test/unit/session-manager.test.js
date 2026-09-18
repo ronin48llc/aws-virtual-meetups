@@ -374,6 +374,8 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Count: 5 });
       // QueryCommand: questions count for engagement metrics
       mockDdbSend.mockResolvedValueOnce({ Count: 2 });
+      // QueryCommand: anonymous viewer sessions
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
       // PutCommand: store engagement summary
       mockDdbSend.mockResolvedValueOnce({});
 
@@ -411,9 +413,10 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Items: [] });
       // DeleteStage
       mockIvsRealTimeSend.mockResolvedValueOnce({});
-      // Engagement metrics queries + put
+      // Engagement metrics queries (signups, questions, anon sessions) + put
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
       mockDdbSend.mockResolvedValueOnce({});
 
       const event = buildEvent({
@@ -460,9 +463,10 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Items: [] });
       // DeleteStage
       mockIvsRealTimeSend.mockResolvedValueOnce({});
-      // Engagement metrics
+      // Engagement metrics (signups, questions, anon sessions, put)
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
       mockDdbSend.mockResolvedValueOnce({});
 
       const event = buildEvent({
@@ -498,6 +502,7 @@ describe('Session Manager Lambda handler', () => {
       mockIvsRealTimeSend.mockResolvedValueOnce({});
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
       mockDdbSend.mockResolvedValueOnce({});
 
       const event = buildEvent({
@@ -535,6 +540,8 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
       // QueryCommand: questions count
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      // QueryCommand: anonymous viewer sessions
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
       // PutCommand: store engagement summary
       mockDdbSend.mockResolvedValueOnce({});
 
@@ -627,6 +634,8 @@ describe('Session Manager Lambda handler', () => {
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
       // QueryCommand: questions count
       mockDdbSend.mockResolvedValueOnce({ Count: 0 });
+      // QueryCommand: anonymous viewer sessions
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });
       // PutCommand: store engagement summary
       mockDdbSend.mockResolvedValueOnce({});
 
@@ -683,6 +692,9 @@ describe('Session Manager Lambda handler', () => {
         // questions COUNT page 2 (terminates)
         mockDdbSend.mockResolvedValueOnce({ Count: 50 });
 
+        // anonymous viewer sessions (none)
+        mockDdbSend.mockResolvedValueOnce({ Items: [] });
+
         // storeEngagementSummary's UpdateCommand
         mockDdbSend.mockResolvedValueOnce({ Attributes: {} });
 
@@ -710,6 +722,133 @@ describe('Session Manager Lambda handler', () => {
         expect(finalUpdate.params.ExpressionAttributeValues[':totalAttendees']).toBe(3200);
         expect(finalUpdate.params.ExpressionAttributeValues[':totalQuestions']).toBe(850);
       });
+    });
+
+    describe('anonymous viewer metrics (distinct fingerprints)', () => {
+      it('counts distinct live fingerprints across pages, excludes playback rows, stores anonymousViewers', async () => {
+        mockDdbSend.mockResolvedValueOnce({ Item: liveEvent });           // get event
+        mockIvsRealTimeSend.mockResolvedValueOnce({});                     // stop composition
+        mockIvsRealTimeSend.mockResolvedValueOnce({                        // get composition (recording prefix)
+          composition: { destinations: [{ detail: { s3: { recordingPrefix: 'ivs/v1/abc' } } }] },
+        });
+        mockDdbSend.mockResolvedValueOnce({});                             // set hlsPlaybackUrl
+        mockDdbSend.mockResolvedValueOnce({});                             // update status
+        mockDdbSend.mockResolvedValueOnce({ Items: [] });                  // broadcast connections
+        mockIvsRealTimeSend.mockResolvedValueOnce({});                     // delete stage
+
+        // signups + questions counts
+        mockDdbSend.mockResolvedValueOnce({ Count: 10 });
+        mockDdbSend.mockResolvedValueOnce({ Count: 3 });
+
+        // ANON# page 1: fp1 with two live sessions (counts once) + a playback row
+        mockDdbSend.mockResolvedValueOnce({
+          Items: [
+            { SK: 'ANON#fp1#sess-1', sessionType: 'live' },
+            { SK: 'ANON#fp1#sess-2', sessionType: 'live' },
+            { SK: 'ANON#fp2#sess-3', sessionType: 'playback' },
+          ],
+          LastEvaluatedKey: { k: 'anon-1' },
+        });
+        // ANON# page 2 (terminates): a second live fingerprint
+        mockDdbSend.mockResolvedValueOnce({
+          Items: [{ SK: 'ANON#fp3#sess-4', sessionType: 'live' }],
+        });
+
+        // storeEngagementSummary's UpdateCommand
+        mockDdbSend.mockResolvedValueOnce({ Attributes: {} });
+
+        const event = buildEvent({
+          method: 'POST',
+          resource: '/events/{id}/stop',
+          pathParameters: { id: 'evt_abc' },
+          claims: validClaims,
+        });
+
+        const result = await handler(event);
+        expect(result.statusCode).toBe(200);
+
+        // The anon query pages over real SKs (no Select:COUNT — COUNT can't dedupe)
+        const anonQueries = mockDdbSend.mock.calls
+          .map((c) => c[0])
+          .filter((cmd) => cmd && cmd.type === 'Query' && cmd.params.ExpressionAttributeValues
+            && cmd.params.ExpressionAttributeValues[':skPrefix'] === 'ANON#');
+        expect(anonQueries).toHaveLength(2);
+        expect(anonQueries[0].params.Select).toBeUndefined();
+        expect(anonQueries[0].params.ProjectionExpression).toBe('SK, sessionType');
+        expect(anonQueries[1].params.ExclusiveStartKey).toEqual({ k: 'anon-1' });
+
+        const finalUpdate = mockDdbSend.mock.calls
+          .map((c) => c[0])
+          .find((cmd) => cmd && cmd.params && cmd.params.ExpressionAttributeValues
+            && cmd.params.ExpressionAttributeValues[':anonymousViewers'] !== undefined);
+        expect(finalUpdate).toBeDefined();
+        // fp1 (deduped across two sessions) + fp3; fp2's playback-only row is excluded
+        expect(finalUpdate.params.ExpressionAttributeValues[':anonymousViewers']).toBe(2);
+        expect(finalUpdate.params.ExpressionAttributeValues[':totalAttendees']).toBe(10);
+        expect(finalUpdate.params.ExpressionAttributeValues[':totalQuestions']).toBe(3);
+        // The summary write keeps the first-writer-wins guard
+        expect(finalUpdate.params.ConditionExpression).toBe('attribute_not_exists(#finalizedAt)');
+      });
+    });
+  });
+
+  describe('Direct invocation - auto-stop engagement summary', () => {
+    it('ends the event and stores all four summary fields via storeEngagementSummary', async () => {
+      const startedAt = new Date(Date.now() - 3600 * 1000).toISOString();
+      mockDdbSend.mockResolvedValueOnce({ Item: { ...liveEvent, startedAt } }); // get event
+      mockDdbSend.mockResolvedValueOnce({});                                    // update status
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });                         // broadcast connections
+      mockDdbSend.mockResolvedValueOnce({ Count: 4 });                          // signups count
+      mockDdbSend.mockResolvedValueOnce({ Count: 1 });                          // questions count
+      mockDdbSend.mockResolvedValueOnce({                                       // anon sessions
+        Items: [
+          { SK: 'ANON#fpA#s1', sessionType: 'live' },
+          { SK: 'ANON#fpB#s2', sessionType: 'playback' },
+        ],
+      });
+      mockDdbSend.mockResolvedValueOnce({ Attributes: {} });                    // store summary
+
+      const result = await handler({ action: 'auto-stop', eventId: 'evt_abc' });
+      expect(result.status).toBe('stopped');
+
+      const summaryUpdate = mockDdbSend.mock.calls
+        .map((c) => c[0])
+        .find((cmd) => cmd && cmd.params && cmd.params.ExpressionAttributeValues
+          && cmd.params.ExpressionAttributeValues[':totalAttendees'] !== undefined);
+      expect(summaryUpdate).toBeDefined();
+      const values = summaryUpdate.params.ExpressionAttributeValues;
+      expect(values[':totalAttendees']).toBe(4);
+      expect(values[':totalQuestions']).toBe(1);
+      expect(values[':anonymousViewers']).toBe(1);
+      // durationSeconds derives from the event's startedAt (about 1 hour ago)
+      expect(values[':durationSeconds']).toBeGreaterThanOrEqual(3600);
+      expect(values[':durationSeconds']).toBeLessThanOrEqual(3602);
+      expect(summaryUpdate.params.ConditionExpression).toBe('attribute_not_exists(#finalizedAt)');
+    });
+
+    it('still returns stopped when a manual stop already finalized the summary (first writer wins)', async () => {
+      const startedAt = new Date(Date.now() - 60 * 1000).toISOString();
+      mockDdbSend.mockResolvedValueOnce({ Item: { ...liveEvent, startedAt } }); // get event
+      mockDdbSend.mockResolvedValueOnce({});                                    // update status
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });                         // broadcast connections
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });                          // signups count
+      mockDdbSend.mockResolvedValueOnce({ Count: 0 });                          // questions count
+      mockDdbSend.mockResolvedValueOnce({ Items: [] });                         // anon sessions
+      const guardErr = new Error('The conditional request failed');
+      guardErr.name = 'ConditionalCheckFailedException';
+      mockDdbSend.mockRejectedValueOnce(guardErr);                              // summary already finalized
+
+      const result = await handler({ action: 'auto-stop', eventId: 'evt_abc' });
+      expect(result.status).toBe('stopped');
+    });
+
+    it('does no metrics work on a stale trigger (event no longer live)', async () => {
+      mockDdbSend.mockResolvedValueOnce({ Item: { ...liveEvent, status: 'ended' } });
+
+      const result = await handler({ action: 'auto-stop', eventId: 'evt_abc' });
+      expect(result).toEqual({ status: 'skipped', reason: 'not_live' });
+      // Only the initial GetCommand — no status update, no counting, no summary write
+      expect(mockDdbSend).toHaveBeenCalledTimes(1);
     });
   });
 

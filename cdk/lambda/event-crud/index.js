@@ -509,6 +509,11 @@ async function getEvent(eventId) {
           totalQuestions: metrics.totalQuestions || 0,
           durationSeconds: metrics.durationSeconds || 0,
         };
+        // Events that ended before anonymous-viewer tracking existed have no
+        // anonymousViewers on their METRICS item — omit it rather than fake a 0.
+        if (typeof metrics.anonymousViewers === 'number') {
+          response.metrics.anonymousViewers = metrics.anonymousViewers;
+        }
       }
     } catch (err) {
       // Non-blocking — metrics are optional
