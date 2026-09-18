@@ -9,15 +9,17 @@ const { GitHubDeployStack } = require('../../lib/github-deploy-stack');
 
 // GitHubDeployStack holds the account's GitHub Actions OIDC provider and the
 // deploy role deploy.yml assumes. The trust policy is the security boundary:
-// only ronin48llc/aws-virtual-meetups, and only the `production` GitHub
-// Environment or refs/heads/main — a wildcard-only sub would let any repo's
-// workflow deploy into the production account.
+// only ronin48llc/aws-virtual-meetups, and ONLY the `production` GitHub
+// Environment subject. A ref subject (refs/heads/main) must never be
+// trusted: GitHub runs delete-event workflows in default-branch context, so
+// a ref subject hands the deploy role to ANY workflow in the repo — the
+// since-removed destroy-on-branch-delete workflow actually obtained
+// credentials that way before the trust was tightened.
 
 const TEST_ENV = { account: '123456789012', region: 'us-east-1' };
 
 const EXPECTED_SUBS = [
   'repo:ronin48llc/aws-virtual-meetups:environment:production',
-  'repo:ronin48llc/aws-virtual-meetups:ref:refs/heads/main',
 ];
 
 function buildTemplate() {
@@ -69,6 +71,9 @@ describe('GitHubDeployStack — GitHub Actions OIDC deploy role', () => {
       },
     });
     EXPECTED_SUBS.forEach((sub) => expect(sub).not.toContain('*'));
+    // Regression guard: a ref subject must never come back (delete-event
+    // workflows run in default-branch context and would inherit the role).
+    expect(JSON.stringify(statements[0].Condition)).not.toContain('refs/heads');
   });
 
   test('deploy role can assume the CDK bootstrap roles (qualifier hnb659fds)', () => {
